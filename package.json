@@ -1,6 +1,6 @@
 {
   "name": "smart-account-kit",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "TypeScript SDK for deploying and managing OpenZeppelin Smart Account contracts on Stellar/Soroban with WebAuthn passkey authentication",
   "type": "module",
   "main": "dist/index.js",
