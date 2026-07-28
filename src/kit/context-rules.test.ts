@@ -1,4 +1,4 @@
-import { Address, Keypair, xdr } from "@stellar/stellar-sdk";
+import { Address, Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import type { ContextRule, ContextRuleType, Signer } from "smart-account-kit-bindings";
 import { Client as SmartAccountClient } from "smart-account-kit-bindings";
@@ -438,5 +438,60 @@ describe("context-rules", () => {
 
     expect(rule.policy_ids).toEqual([41]);
     expect(rule.signer_ids).toEqual([29]);
+  });
+});
+
+describe("direct token transfer entries", () => {
+  it("resolves a direct transfer entry to the token-scoped rule", async () => {
+    const token = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
+    const account = makeAccount(3);
+    const recipient = makeAccount(4);
+
+    // Entry shaped exactly like the auth produced for buildDirectTokenTransfer:
+    // root invocation is transfer(from, to, amount) on the token contract,
+    // authorized by the smart account's address credentials.
+    const invocation = new xdr.SorobanAuthorizedInvocation({
+      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+        new xdr.InvokeContractArgs({
+          contractAddress: Address.fromString(token).toScAddress(),
+          functionName: "transfer",
+          args: [
+            Address.fromString(account).toScVal(),
+            Address.fromString(recipient).toScVal(),
+            nativeToScVal(15_000_000n, { type: "i128" }),
+          ],
+        })
+      ),
+      subInvocations: [],
+    });
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+        new xdr.SorobanAddressCredentials({
+          address: Address.fromString(account).toScAddress(),
+          nonce: xdr.Int64.fromString("1"),
+          signatureExpirationLedger: 1,
+          signature: xdr.ScVal.scvVoid(),
+        })
+      ),
+      rootInvocation: invocation,
+    });
+
+    expect(buildInvocationContextTypes(entry)).toEqual([
+      { tag: "CallContract", values: [token] },
+    ]);
+
+    const signer: Signer = {
+      tag: "Delegated",
+      values: ["GDQP2KPQGKIHYJGXNUIYOMHARUARCA6E6KGUWKZ4S6T7ZTZ4Q7SMX5VA"],
+    };
+    // Token-scoped rule and an account-scoped rule: the transfer entry must
+    // resolve to the token-scoped one.
+    const tokenRule = makeRule(2, { tag: "CallContract", values: [token] }, [signer]);
+    const accountRule = makeRule(3, { tag: "CallContract", values: [account] }, [signer]);
+    const wallet = makeWallet({ 2: tokenRule, 3: accountRule });
+
+    await expect(
+      resolveContextRuleIdsForEntry(wallet, entry, [signer], undefined, [tokenRule, accountRule])
+    ).resolves.toEqual([2]);
   });
 });

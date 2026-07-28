@@ -2,19 +2,13 @@
 
 ## Unreleased
 
-- **Token transfers are signed as direct token invocations** instead of being
-  wrapped in the smart account's `execute` entry point (`kit.transfer` and
-  `multiSigners.transfer`). The signed authorization context is now the
-  `transfer` call on the token itself — Soroban's canonical nested-call
-  authorization — so `CallContract` rules scoped to the token match transfers,
-  and policies attached to those rules (e.g. the spending-limit policy)
-  enforce on them. Previously no rule/policy configuration could make the
-  spending-limit policy apply to kit-driven transfers. `execute` keeps its
-  intended role for account-mediated calls such as policy configuration
-  setters. New `buildDirectTokenTransfer` export for clients that build
-  transfer authorizations themselves (e.g. multi-party proposal flows).
-  **Behavior note:** rules scoped to the smart account's own address no longer
-  match transfers; Default rules match as before.
+- **Token transfers are signed as direct token invocations** (`transfer` and
+  `multiSigners.transfer`) instead of being wrapped in the account's
+  `execute`, so `CallContract` rules scoped to the token (and their policies,
+  e.g. spending limits) now match and enforce on transfers. Rules scoped to
+  the account's own address no longer match transfers; `Default` rules are
+  unaffected. New `buildDirectTokenTransfer` export for clients that build
+  transfer authorizations themselves.
 
 ## 0.4.2 — 2026-07-11
 
