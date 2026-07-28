@@ -259,11 +259,11 @@ describe("SmartAccountKit top-level surface", () => {
     expect(detailsResult).toEqual({ contractId: "C3" });
   });
 
-  it("transfer routes through execute plus signAndSubmit with context resolution", async () => {
+  it("transfer builds a direct token invocation plus signAndSubmit with context resolution", async () => {
     const contractId = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
     const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 6)).publicKey();
     const transaction = { built: {} };
-    const execute = vi.fn(async () => transaction);
+    const buildTokenTransfer = vi.fn(async () => transaction);
     const signAndSubmit = vi.fn(async () => ({ success: true, hash: "transfer-hash" }));
     const resolveConnectedContextRuleIds = vi.fn(async () => [7]);
 
@@ -271,7 +271,7 @@ describe("SmartAccountKit top-level surface", () => {
       {
         _contractId: contractId,
         requireWallet: vi.fn(() => ({ wallet: {} })),
-        execute,
+        buildTokenTransfer,
         signAndSubmit,
         resolveConnectedContextRuleIds,
       } as unknown as SmartAccountKit,
@@ -280,22 +280,13 @@ describe("SmartAccountKit top-level surface", () => {
       1.5,
     );
 
-    expect(execute).toHaveBeenCalledWith(
+    // Direct invocation: token contract, from = smart account, recipient, stroops.
+    expect(buildTokenTransfer).toHaveBeenCalledWith(
       "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y",
-      "transfer",
-      expect.arrayContaining([
-        expect.objectContaining({ switch: expect.any(Function) }),
-        expect.objectContaining({ switch: expect.any(Function) }),
-        expect.objectContaining({ switch: expect.any(Function) }),
-      ])
+      contractId,
+      recipient,
+      15_000_000n
     );
-    const [, , targetArgs] = execute.mock.calls[0];
-    expect(targetArgs).toHaveLength(3);
-    expect(targetArgs[0].switch().name).toBe("scvAddress");
-    expect(Address.fromScAddress(targetArgs[0].address()).toString()).toBe(contractId);
-    expect(targetArgs[1].switch().name).toBe("scvAddress");
-    expect(Address.fromScAddress(targetArgs[1].address()).toString()).toBe(recipient);
-    expect(targetArgs[2].switch().name).toBe("scvI128");
     expect(signAndSubmit).toHaveBeenCalledWith(
       transaction,
       expect.objectContaining({
@@ -314,7 +305,7 @@ describe("SmartAccountKit top-level surface", () => {
     const contractId = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
     const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 8)).publicKey();
     const transaction = { built: {} };
-    const execute = vi.fn(async () => transaction);
+    const buildTokenTransfer = vi.fn(async () => transaction);
     const signAndSubmit = vi.fn(async () => ({ success: true, hash: "transfer-hash" }));
     const resolveConnectedContextRuleIds = vi.fn(async () => [11]);
 
@@ -322,7 +313,7 @@ describe("SmartAccountKit top-level surface", () => {
       {
         _contractId: contractId,
         requireWallet: vi.fn(() => ({ wallet: {} })),
-        execute,
+        buildTokenTransfer,
         signAndSubmit,
         resolveConnectedContextRuleIds,
       } as unknown as SmartAccountKit,

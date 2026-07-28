@@ -193,6 +193,43 @@ export function buildTokenTransferHostFunction(
   );
 }
 
+/**
+ * Build a direct token `transfer` invocation authorized by the smart account.
+ *
+ * Transfers are signed as direct nested-call authorizations — the canonical
+ * Soroban model — so the auth entry's context is the token-contract call
+ * itself. Context rules scoped to the token (and policies attached to them,
+ * such as spending limits) therefore match and enforce on transfers. The
+ * smart account's `execute` entry point is not involved; it stays reserved
+ * for account-mediated calls such as policy configuration.
+ *
+ * Simulation runs against the token contract with the default (null) source;
+ * the returned AssembledTransaction carries the auth entries requiring the
+ * smart account's authorization, ready for the standard signing pipeline.
+ */
+export async function buildDirectTokenTransfer(
+  deps: { rpcUrl: string; networkPassphrase: string; timeoutInSeconds: number },
+  tokenContract: string,
+  fromAddress: string,
+  toAddress: string,
+  amountInStroops: bigint
+): Promise<contract.AssembledTransaction<unknown>> {
+  return contract.AssembledTransaction.buildWithOp(
+    Operation.invokeHostFunction({
+      func: buildTokenTransferHostFunction(tokenContract, fromAddress, toAddress, amountInStroops),
+      auth: [],
+    }),
+    {
+      contractId: tokenContract,
+      networkPassphrase: deps.networkPassphrase,
+      rpcUrl: deps.rpcUrl,
+      timeoutInSeconds: deps.timeoutInSeconds,
+      method: "transfer",
+      parseResultXdr: (value: xdr.ScVal) => value,
+    }
+  );
+}
+
 export function buildTokenTransferTargetArgs(
   wallet: SmartAccountClient | { spec?: { nativeToScVal?: (val: unknown, type: xdr.ScSpecTypeDef) => xdr.ScVal } },
   fromAddress: string,

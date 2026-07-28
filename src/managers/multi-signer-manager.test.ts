@@ -75,6 +75,7 @@ function makeDeps() {
     sendAndPoll: vi.fn(),
     hasSourceAccountAuth: vi.fn().mockReturnValue(false),
     shouldUseFeeSponsoring: vi.fn().mockReturnValue(false),
+    buildTokenTransfer: vi.fn(),
   };
 
   return deps;
@@ -237,15 +238,12 @@ describe("MultiSignerManager", () => {
     });
   });
 
-  it("routes multi-signer transfers through wallet.execute", async () => {
+  it("builds multi-signer transfers as direct token invocations", async () => {
     const deps = makeDeps();
     const assembledTx = {
       built: makeBuiltTransaction([makeAddressAuthEntry(makeContract(99))]),
     } as any;
-    const execute = vi.fn(async () => assembledTx);
-    deps.requireWallet.mockReturnValue({
-      wallet: { execute },
-    });
+    deps.buildTokenTransfer.mockResolvedValue(assembledTx);
     const manager = new MultiSignerManager(deps);
     const selectedSigners = [makeDelegatedSigner(1)];
     const operation = vi
@@ -260,22 +258,13 @@ describe("MultiSignerManager", () => {
       { onLog: vi.fn() }
     );
 
-    expect(execute).toHaveBeenCalledWith({
-      target: makeContract(11),
-      target_fn: "transfer",
-      target_args: expect.arrayContaining([
-        expect.objectContaining({ switch: expect.any(Function) }),
-        expect.objectContaining({ switch: expect.any(Function) }),
-        expect.objectContaining({ switch: expect.any(Function) }),
-      ]),
-    });
-    const [{ target_args: targetArgs }] = execute.mock.calls[0];
-    expect(targetArgs).toHaveLength(3);
-    expect(targetArgs[0].switch().name).toBe("scvAddress");
-    expect(Address.fromScAddress(targetArgs[0].address()).toString()).toBe(makeContract(99));
-    expect(targetArgs[1].switch().name).toBe("scvAddress");
-    expect(Address.fromScAddress(targetArgs[1].address()).toString()).toBe(makeAccount(2));
-    expect(targetArgs[2].switch().name).toBe("scvI128");
+    // Direct invocation: token contract, from = smart account, recipient, stroops.
+    expect(deps.buildTokenTransfer).toHaveBeenCalledWith(
+      makeContract(11),
+      makeContract(99),
+      makeAccount(2),
+      50_000_000n
+    );
     expect(operation).toHaveBeenCalledTimes(1);
     expect(operation).toHaveBeenCalledWith(
       assembledTx,
