@@ -16,7 +16,6 @@ import type {
   TransactionResult,
 } from "../types.js";
 import type { RelayerClient } from "../relayer.js";
-import type { Client as SmartAccountClient } from "smart-account-kit-bindings";
 import {
   SimulationError,
   SmartAccountErrorCode,
@@ -167,8 +166,8 @@ export function hasSourceAccountAuth(transaction: Transaction): boolean {
 /**
  * Build an `scvI128` ScVal from a bigint stroop amount.
  *
- * Typed convenience wrapper over the SDK's `nativeToScVal`, used by both the
- * raw host-function transfer builder and the spec-fallback target-args builder.
+ * Typed convenience wrapper over the SDK's `nativeToScVal`, used by the
+ * raw host-function transfer builder.
  */
 export function buildI128ScVal(amount: bigint): xdr.ScVal {
   return nativeToScVal(amount, { type: "i128" });
@@ -228,28 +227,6 @@ export async function buildDirectTokenTransfer(
       parseResultXdr: (value: xdr.ScVal) => value,
     }
   );
-}
-
-export function buildTokenTransferTargetArgs(
-  wallet: SmartAccountClient | { spec?: { nativeToScVal?: (val: unknown, type: xdr.ScSpecTypeDef) => xdr.ScVal } },
-  fromAddress: string,
-  toAddress: string,
-  amountInStroops: bigint
-): xdr.ScVal[] {
-  const spec = wallet?.spec;
-  if (spec && typeof spec.nativeToScVal === "function") {
-    return [
-      spec.nativeToScVal(fromAddress, xdr.ScSpecTypeDef.scSpecTypeAddress()),
-      spec.nativeToScVal(toAddress, xdr.ScSpecTypeDef.scSpecTypeAddress()),
-      spec.nativeToScVal(amountInStroops, xdr.ScSpecTypeDef.scSpecTypeI128()),
-    ];
-  }
-
-  return [
-    xdr.ScVal.scvAddress(Address.fromString(fromAddress).toScAddress()),
-    xdr.ScVal.scvAddress(Address.fromString(toAddress).toScAddress()),
-    buildI128ScVal(amountInStroops),
-  ];
 }
 
 /**

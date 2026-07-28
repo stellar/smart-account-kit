@@ -179,7 +179,7 @@ import { SmartAccountKit } from 'smart-account-kit';
 | `executeAndSubmit(target, targetFn, targetArgs, options?)` | Build + sign + submit a smart-account-mediated call |
 | `upgrade(newWasmHash)` | Build an upgrade transaction (32-byte hex string or `Buffer`) |
 | `fundWallet(nativeTokenContract, options?)` | Fund the wallet via Friendbot (testnet only) |
-| `transfer(tokenContract, recipient, amount, options?)` | Passkey token transfer |
+| `transfer(tokenContract, recipient, amount, options?)` | Passkey token transfer (signed as a direct token invocation, so token-scoped context rules and their policies apply) |
 | `getContractDetailsFromIndexer(contractId)` | Get contract details from the indexer |
 | `convertPolicyParams(policyType, params)` | Convert native policy params to an `xdr.ScVal` |
 | `buildPoliciesScVal(policies, policyTypes)` | Build a sorted policies `Map` as an `xdr.ScVal` |
@@ -556,7 +556,7 @@ const data = await spending.getSpendingLimitData(ruleId);  // SpendingLimitData
 await kit.signAndSubmit(await spending.setSpendingLimit(2_000_000_000n, rule));
 ```
 
-> ⚠️ **Signer-set divergence caveat.** Threshold and weighted-threshold policies are **not** auto-notified when a context rule's signer set changes. After adding or removing signers on a rule, call `setThreshold` / `setSignerWeight` to keep the policy consistent with the rule — otherwise authorization for that rule may break. The spending-limit policy only applies to `CallContract` rules and enforces on `transfer` calls (`amount = args[2]`).
+> ⚠️ **Signer-set divergence caveat.** Threshold and weighted-threshold policies are **not** auto-notified when a context rule's signer set changes. After adding or removing signers on a rule, call `setThreshold` / `setSignerWeight` to keep the policy consistent with the rule — otherwise authorization for that rule may break. The spending-limit policy only applies to `CallContract` rules and enforces on `transfer` calls (`amount = args[2]`) — attach it to a rule scoped to the token contract; since transfers are signed as direct token invocations, that rule matches them.
 
 > ⚠️ **Weighted-threshold ordering caveat.** The weighted-threshold contract enforces `threshold <= total signer weight` on **every individual** `set_threshold` / `set_signer_weight` call ([stellar-contracts#761](https://github.com/OpenZeppelin/stellar-contracts/issues/761)). When adding weight and raising the threshold, call `setSignerWeight` first; when removing a signer or reducing weight, call `setThreshold` first to lower the threshold. Calls in the wrong order revert with `InvalidThreshold`.
 
