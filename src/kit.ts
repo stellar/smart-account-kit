@@ -1336,17 +1336,6 @@ export class SmartAccountKit {
   }
 
   /**
-   * Sign auth entries with WebAuthn, re-simulate, and prepare transaction for submission.
-   *
-   * This is the core helper that handles the WebAuthn-specific flow:
-   * 1. Sign each auth entry with the passkey
-   * 2. Rebuild transaction with signed auth
-   * 3. Re-simulate to get accurate resource costs (WebAuthn signatures are large)
-   * 4. Assemble transaction with correct fees and soroban data
-   *
-   * @returns Prepared transaction ready for fee payer signature and submission
-   */
-  /**
    * Build a direct token `transfer` invocation authorized by the connected
    * smart account. See {@link buildDirectTokenTransfer} for the authorization
    * model.
@@ -1371,6 +1360,17 @@ export class SmartAccountKit {
     );
   }
 
+  /**
+   * Sign auth entries with WebAuthn, re-simulate, and prepare transaction for submission.
+   *
+   * This is the core helper that handles the WebAuthn-specific flow:
+   * 1. Sign each auth entry with the passkey
+   * 2. Rebuild transaction with signed auth
+   * 3. Re-simulate to get accurate resource costs (WebAuthn signatures are large)
+   * 4. Assemble transaction with correct fees and soroban data
+   *
+   * @returns Prepared transaction ready for fee payer signature and submission
+   */
   private async signResimulateAndPrepare(
     hostFunc: xdr.HostFunction,
     authEntries: xdr.SorobanAuthorizationEntry[],

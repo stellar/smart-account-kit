@@ -445,7 +445,7 @@ Multi-signer transaction flows, coordinating passkeys, Ed25519 keys, and delegat
 | `needsMultiSigner(signers)` | Whether a signer set requires the multi-signer path |
 | `buildSelectedSigners(signers, activeCredentialId?)` | Build a `SelectedSigner[]` from on-chain signers you can sign for |
 | `operation(assembledTx, selectedSigners, options?)` | Submit any assembled transaction with the selected signers |
-| `transfer(tokenContract, recipient, amount, selectedSigners, options?)` | Multi-signer token transfer |
+| `transfer(tokenContract, recipient, amount, selectedSigners, options?)` | Multi-signer token transfer (signed as a direct token invocation, so token-scoped context rules and their policies apply) |
 
 ```typescript
 // Collect the account's signers and pick the ones we can sign for
