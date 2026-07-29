@@ -8,17 +8,13 @@
   e.g. spending limits) now match and enforce on transfers. Rules scoped to
   the account's own address no longer match transfers; `Default` rules are
   unaffected. New `buildDirectTokenTransfer` export for clients that build
-  transfer authorizations themselves.
-- **Context-rule resolution prefers exact-context rules over `Default`
-  fallbacks.** When both a rule scoped to the invoked contract and a `Default`
-  rule match the selected signers, the scoped rule is selected — the resolved
-  rule id is committed into the signed digest, so selecting the `Default` rule
-  would have skipped the scoped rule's policies (e.g. spending limits).
-- `transfer` now accepts a `resolveContextRuleIds` override (like
-  `multiSigners.transfer`) for wallets where automatic resolution is
-  ambiguous — e.g. rules scoped to the account's own address.
-- `buildDirectTokenTransfer` reuses the kit's RPC server and throws a decoded
-  contract error when the build-time simulation fails.
+  transfer authorizations themselves, and `transfer` now accepts a
+  `resolveContextRuleIds` override like `multiSigners.transfer`.
+- **Context-rule auto-resolution prefers a rule scoped to the invoked contract
+  over a `Default` fallback** when both match the selected signers. Before
+  this change, automatic resolution could select the `Default` rule instead,
+  which bypassed the scoped rule's policies (e.g. a spending limit), because
+  the account only enforces the rule selected at signing time.
 
 ## 0.4.2 — 2026-07-11
 
