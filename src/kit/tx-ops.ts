@@ -205,15 +205,18 @@ export function buildTokenTransferHostFunction(
  * Simulation runs against the token contract with the default (null) source;
  * the returned AssembledTransaction carries the auth entries requiring the
  * smart account's authorization, ready for the standard signing pipeline.
+ * Throws a decoded {@link ContractError} (or {@link SimulationError}) when the
+ * build-time simulation fails, so callers surface the on-chain reason instead
+ * of submitting an unassembled transaction.
  */
 export async function buildDirectTokenTransfer(
-  deps: { rpcUrl: string; networkPassphrase: string; timeoutInSeconds: number },
+  deps: { rpc: rpc.Server; networkPassphrase: string; timeoutInSeconds: number },
   tokenContract: string,
   fromAddress: string,
   toAddress: string,
   amountInStroops: bigint
 ): Promise<contract.AssembledTransaction<unknown>> {
-  return contract.AssembledTransaction.buildWithOp(
+  const transaction = await contract.AssembledTransaction.buildWithOp(
     Operation.invokeHostFunction({
       func: buildTokenTransferHostFunction(tokenContract, fromAddress, toAddress, amountInStroops),
       auth: [],
@@ -221,12 +224,23 @@ export async function buildDirectTokenTransfer(
     {
       contractId: tokenContract,
       networkPassphrase: deps.networkPassphrase,
-      rpcUrl: deps.rpcUrl,
+      rpcUrl: deps.rpc.serverURL.toString(),
+      server: deps.rpc,
       timeoutInSeconds: deps.timeoutInSeconds,
       method: "transfer",
       parseResultXdr: (value: xdr.ScVal) => value,
     }
   );
+
+  const simulation = transaction.simulation;
+  if (simulation && rpc.Api.isSimulationError(simulation)) {
+    throw (
+      decodeContractError(simulation.error) ??
+      new SimulationError(`Transaction simulation failed: ${simulation.error}`)
+    );
+  }
+
+  return transaction;
 }
 
 /**

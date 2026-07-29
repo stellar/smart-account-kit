@@ -489,6 +489,15 @@ export async function resolveContextRuleIdsForEntry(
   const rules = rulesSnapshot ?? (await listContextRules(wallet, deps));
   const contexts = buildInvocationContextTypes(entry);
 
+  // The resolved rule id is committed into the signed digest, and the contract
+  // validates only the selected rule — so when a rule scoped to the exact
+  // context matches alongside a Default fallback, the specific rule must win,
+  // otherwise its policies (e.g. spending limits) would be silently skipped.
+  const preferSpecific = (matches: ContextRule[]): ContextRule[] => {
+    const specific = matches.filter((rule) => rule.context_type.tag !== "Default");
+    return specific.length > 0 ? specific : matches;
+  };
+
   return contexts.map((contextType) => {
     const candidates = rules.filter((rule) => {
       if (!contextRuleTypeMatches(rule.context_type, contextType)) {
@@ -502,34 +511,38 @@ export async function resolveContextRuleIdsForEntry(
       return candidates[0].id;
     }
 
-    const exactSignerMatches = candidates.filter((rule) => {
-      if (rule.signers.length !== selectedSigners.length) {
-        return false;
-      }
+    const exactSignerMatches = preferSpecific(
+      candidates.filter((rule) => {
+        if (rule.signers.length !== selectedSigners.length) {
+          return false;
+        }
 
-      return (
-        selectedSigners.every((selectedSigner) =>
-          rule.signers.some((ruleSigner) => signersEqual(ruleSigner, selectedSigner))
-        ) &&
-        rule.signers.every((ruleSigner) =>
-          selectedSigners.some((selectedSigner) => signersEqual(ruleSigner, selectedSigner))
-        )
-      );
-    });
+        return (
+          selectedSigners.every((selectedSigner) =>
+            rule.signers.some((ruleSigner) => signersEqual(ruleSigner, selectedSigner))
+          ) &&
+          rule.signers.every((ruleSigner) =>
+            selectedSigners.some((selectedSigner) => signersEqual(ruleSigner, selectedSigner))
+          )
+        );
+      })
+    );
 
     if (exactSignerMatches.length === 1) {
       return exactSignerMatches[0].id;
     }
 
-    const signerSubsetMatches = candidates.filter((rule) => {
-      if (rule.policies.length > 0) {
-        return false;
-      }
+    const signerSubsetMatches = preferSpecific(
+      candidates.filter((rule) => {
+        if (rule.policies.length > 0) {
+          return false;
+        }
 
-      return rule.signers.every((ruleSigner) =>
-        selectedSigners.some((selectedSigner) => signersEqual(ruleSigner, selectedSigner))
-      );
-    });
+        return rule.signers.every((ruleSigner) =>
+          selectedSigners.some((selectedSigner) => signersEqual(ruleSigner, selectedSigner))
+        );
+      })
+    );
 
     if (signerSubsetMatches.length === 1) {
       return signerSubsetMatches[0].id;

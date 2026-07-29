@@ -41,6 +41,7 @@ import {
 } from "../kit/auth-payload.js";
 import { resolveContextRuleIdsForEntry } from "../kit/context-rules.js";
 import {
+  buildDirectTokenTransfer,
   resimulateAndAssemble,
   signFeePayer,
 } from "../kit/tx-ops.js";
@@ -75,13 +76,6 @@ export interface MultiSignerManagerDeps {
   rpc: rpc.Server;
   networkPassphrase: string;
   timeoutInSeconds: number;
-  /** Build a direct token transfer authorized by the smart account (see tx-ops buildDirectTokenTransfer). */
-  buildTokenTransfer: (
-    tokenContract: string,
-    fromAddress: string,
-    toAddress: string,
-    amountInStroops: bigint
-  ) => Promise<AssembledTransaction<unknown>>;
   deployerKeypair: Keypair;
   deployerPublicKey: string;
   signAuthEntry: (
@@ -553,11 +547,11 @@ export class MultiSignerManager {
 
     const amountInStroops = xlmToStroops(amount);
     try {
-      this.deps.requireWallet();
       // Direct token invocation authorized by the smart account (not wrapped
       // in the account's `execute`), so token-scoped context rules and their
       // policies match the transfer. See buildDirectTokenTransfer.
-      const assembledTx = await this.deps.buildTokenTransfer(
+      const assembledTx = await buildDirectTokenTransfer(
+        this.deps,
         tokenContract,
         contractId,
         recipient,

@@ -438,13 +438,14 @@ describe("buildDirectTokenTransfer", () => {
       .spyOn(contract.AssembledTransaction, "buildWithOp")
       .mockResolvedValue({ built: {} } as never);
 
+    const server = new rpc.Server("https://rpc.example");
     const token = StrKey.encodeContract(Buffer.alloc(32, 7));
     const account = StrKey.encodeContract(Buffer.alloc(32, 8));
     const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 9)).publicKey();
 
     await buildDirectTokenTransfer(
       {
-        rpcUrl: "https://rpc.example",
+        rpc: server,
         networkPassphrase: "Test SDF Network ; September 2015",
         timeoutInSeconds: 30,
       },
@@ -471,10 +472,42 @@ describe("buildDirectTokenTransfer", () => {
 
     expect(options).toMatchObject({
       contractId: token,
-      rpcUrl: "https://rpc.example",
       networkPassphrase: "Test SDF Network ; September 2015",
       timeoutInSeconds: 30,
       method: "transfer",
     });
+    // The kit's rpc server is reused instead of constructing a throwaway one.
+    expect((options as { server?: rpc.Server }).server).toBe(server);
+  });
+
+  it("surfaces a failed build-time simulation as a decoded contract error", async () => {
+    const { contract } = await import("@stellar/stellar-sdk");
+    vi.spyOn(contract.AssembledTransaction, "buildWithOp").mockResolvedValue({
+      built: {},
+      simulation: {
+        error: "host invocation failed: Error(Contract, #3221)",
+        latestLedger: 1,
+        events: [],
+        _parsed: true,
+      },
+    } as never);
+
+    const token = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const account = StrKey.encodeContract(Buffer.alloc(32, 8));
+    const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 9)).publicKey();
+
+    await expect(
+      buildDirectTokenTransfer(
+        {
+          rpc: new rpc.Server("https://rpc.example"),
+          networkPassphrase: "Test SDF Network ; September 2015",
+          timeoutInSeconds: 30,
+        },
+        token,
+        account,
+        recipient,
+        15_000_000n
+      )
+    ).rejects.toThrow(/spending limit/i);
   });
 });

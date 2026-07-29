@@ -5,6 +5,9 @@ const { assembleTransactionMock } = vi.hoisted(() => ({
 const { resolveContextRuleIdsForEntryMock } = vi.hoisted(() => ({
   resolveContextRuleIdsForEntryMock: vi.fn(),
 }));
+const { buildDirectTokenTransferMock } = vi.hoisted(() => ({
+  buildDirectTokenTransferMock: vi.fn(),
+}));
 
 vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
@@ -22,6 +25,14 @@ vi.mock("../kit/context-rules", async (importOriginal) => {
   return {
     ...actual,
     resolveContextRuleIdsForEntry: resolveContextRuleIdsForEntryMock,
+  };
+});
+
+vi.mock("../kit/tx-ops", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../kit/tx-ops")>();
+  return {
+    ...actual,
+    buildDirectTokenTransfer: buildDirectTokenTransferMock,
   };
 });
 
@@ -75,7 +86,6 @@ function makeDeps() {
     sendAndPoll: vi.fn(),
     hasSourceAccountAuth: vi.fn().mockReturnValue(false),
     shouldUseFeeSponsoring: vi.fn().mockReturnValue(false),
-    buildTokenTransfer: vi.fn(),
   };
 
   return deps;
@@ -243,7 +253,7 @@ describe("MultiSignerManager", () => {
     const assembledTx = {
       built: makeBuiltTransaction([makeAddressAuthEntry(makeContract(99))]),
     } as any;
-    deps.buildTokenTransfer.mockResolvedValue(assembledTx);
+    buildDirectTokenTransferMock.mockResolvedValue(assembledTx);
     const manager = new MultiSignerManager(deps);
     const selectedSigners = [makeDelegatedSigner(1)];
     const operation = vi
@@ -259,7 +269,8 @@ describe("MultiSignerManager", () => {
     );
 
     // Direct invocation: token contract, from = smart account, recipient, stroops.
-    expect(deps.buildTokenTransfer).toHaveBeenCalledWith(
+    expect(buildDirectTokenTransferMock).toHaveBeenCalledWith(
+      deps,
       makeContract(11),
       makeContract(99),
       makeAccount(2),

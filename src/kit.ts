@@ -538,8 +538,6 @@ export class SmartAccountKit {
       rpc: this.rpc,
       networkPassphrase: this.networkPassphrase,
       timeoutInSeconds: this.timeoutInSeconds,
-      buildTokenTransfer: (tokenContract, fromAddress, toAddress, amountInStroops) =>
-        this.buildTokenTransfer(tokenContract, fromAddress, toAddress, amountInStroops),
       deployerKeypair: this.deployerKeypair,
       deployerPublicKey: this.deployerPublicKey,
       signAuthEntry: (entry, options) => this.signAuthEntry(entry, options),
@@ -1155,7 +1153,7 @@ export class SmartAccountKit {
     tokenContract: string,
     recipient: string,
     amount: number,
-    options?: Pick<SignAndSubmitOptions, "credentialId" | "forceMethod">
+    options?: Pick<SignAndSubmitOptions, "credentialId" | "forceMethod" | "resolveContextRuleIds">
   ): Promise<TransactionResult> {
     const contractId = this._contractId;
     if (!contractId) {
@@ -1176,7 +1174,6 @@ export class SmartAccountKit {
 
     try {
       const amountInStroops = xlmToStroops(amount);
-      this.requireWallet();
       const transaction = await this.buildTokenTransfer(
         tokenContract,
         contractId,
@@ -1186,8 +1183,10 @@ export class SmartAccountKit {
       const ctxRuleCache: ConnectedContextRuleCache = {};
       return this.signAndSubmit(transaction, {
         credentialId: options?.credentialId,
-        resolveContextRuleIds: (entry) =>
-          this.resolveConnectedContextRuleIds(entry, options?.credentialId, ctxRuleCache),
+        resolveContextRuleIds:
+          options?.resolveContextRuleIds ??
+          ((entry) =>
+            this.resolveConnectedContextRuleIds(entry, options?.credentialId, ctxRuleCache)),
         forceMethod: options?.forceMethod,
       });
     } catch (err) {
@@ -1349,7 +1348,7 @@ export class SmartAccountKit {
   ): Promise<contract.AssembledTransaction<unknown>> {
     return buildDirectTokenTransfer(
       {
-        rpcUrl: this.rpcUrl,
+        rpc: this.rpc,
         networkPassphrase: this.networkPassphrase,
         timeoutInSeconds: this.timeoutInSeconds,
       },
