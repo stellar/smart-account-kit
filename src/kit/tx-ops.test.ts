@@ -18,6 +18,7 @@ import { Account, Address, Keypair, StrKey, hash, rpc, scValToNative, xdr } from
 import type { Transaction } from "@stellar/stellar-sdk";
 import { FRIENDBOT_RESERVE_XLM } from "../constants";
 import {
+  buildDirectTokenTransfer,
   buildI128ScVal,
   getSubmissionMethod,
   hasSourceAccountAuth,
@@ -423,5 +424,90 @@ describe("signFeePayer", () => {
       hasSourceAccountAuth: () => false,
     });
     expect(tx.sign).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildDirectTokenTransfer", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("builds a direct token.transfer invocation authorized by the smart account", async () => {
+    const { contract } = await import("@stellar/stellar-sdk");
+    const buildWithOp = vi
+      .spyOn(contract.AssembledTransaction, "buildWithOp")
+      .mockResolvedValue({ built: {} } as never);
+
+    const server = new rpc.Server("https://rpc.example");
+    const token = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const account = StrKey.encodeContract(Buffer.alloc(32, 8));
+    const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 9)).publicKey();
+
+    await buildDirectTokenTransfer(
+      {
+        rpc: server,
+        networkPassphrase: "Test SDF Network ; September 2015",
+        timeoutInSeconds: 30,
+      },
+      token,
+      account,
+      recipient,
+      15_000_000n
+    );
+
+    expect(buildWithOp).toHaveBeenCalledTimes(1);
+    const [operation, options] = buildWithOp.mock.calls[0];
+
+    // The operation invokes the token contract's transfer directly; the smart
+    // account's execute entry point is not involved.
+    const invokeOp = operation.body().invokeHostFunctionOp();
+    const contractFn = invokeOp.hostFunction().invokeContract();
+    expect(Address.fromScAddress(contractFn.contractAddress()).toString()).toBe(token);
+    expect(contractFn.functionName().toString()).toBe("transfer");
+    const args = contractFn.args();
+    expect(args).toHaveLength(3);
+    expect(Address.fromScAddress(args[0].address()).toString()).toBe(account);
+    expect(Address.fromScAddress(args[1].address()).toString()).toBe(recipient);
+    expect(scValToNative(args[2])).toBe(15_000_000n);
+
+    expect(options).toMatchObject({
+      contractId: token,
+      networkPassphrase: "Test SDF Network ; September 2015",
+      timeoutInSeconds: 30,
+      method: "transfer",
+    });
+    // The kit's rpc server is reused instead of constructing a throwaway one.
+    expect((options as { server?: rpc.Server }).server).toBe(server);
+  });
+
+  it("surfaces a failed build-time simulation as a decoded contract error", async () => {
+    const { contract } = await import("@stellar/stellar-sdk");
+    vi.spyOn(contract.AssembledTransaction, "buildWithOp").mockResolvedValue({
+      built: {},
+      simulation: {
+        error: "host invocation failed: Error(Contract, #3221)",
+        latestLedger: 1,
+        events: [],
+        _parsed: true,
+      },
+    } as never);
+
+    const token = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const account = StrKey.encodeContract(Buffer.alloc(32, 8));
+    const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 9)).publicKey();
+
+    await expect(
+      buildDirectTokenTransfer(
+        {
+          rpc: new rpc.Server("https://rpc.example"),
+          networkPassphrase: "Test SDF Network ; September 2015",
+          timeoutInSeconds: 30,
+        },
+        token,
+        account,
+        recipient,
+        15_000_000n
+      )
+    ).rejects.toThrow(/spending limit/i);
   });
 });

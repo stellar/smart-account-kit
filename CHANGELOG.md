@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **Token transfers are signed as direct token invocations** (`transfer` and
+  `multiSigners.transfer`) instead of being wrapped in the account's
+  `execute`, so `CallContract` rules scoped to the token (and their policies,
+  e.g. spending limits) now match and enforce on transfers. Rules scoped to
+  the account's own address no longer match transfers; `Default` rules are
+  unaffected. New `buildDirectTokenTransfer` export for clients that build
+  transfer authorizations themselves, and `transfer` now accepts a
+  `resolveContextRuleIds` override like `multiSigners.transfer`.
+- **Context-rule auto-resolution prefers a rule scoped to the invoked contract
+  over a `Default` fallback** when both match the selected signers. Before
+  this change, automatic resolution could select the `Default` rule instead,
+  which bypassed the scoped rule's policies (e.g. a spending limit), because
+  the account only enforces the rule selected at signing time.
+
 ## 0.4.2 — 2026-07-11
 
 SDK-usage audit: the kit now leans on `@stellar/stellar-sdk` primitives where

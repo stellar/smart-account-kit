@@ -9,6 +9,7 @@ import {
   listContextRules,
   resolveContextRuleIdsForEntry,
 } from "./context-rules";
+import { buildTokenTransferHostFunction } from "./tx-ops";
 import { buildKeyData } from "../utils";
 
 /** The generated contract spec, used by the RPC read path to decode rules. */
@@ -438,5 +439,80 @@ describe("context-rules", () => {
 
     expect(rule.policy_ids).toEqual([41]);
     expect(rule.signer_ids).toEqual([29]);
+  });
+});
+
+describe("direct token transfer entries", () => {
+  const token = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
+  const account = makeAccount(3);
+  const recipient = makeAccount(4);
+
+  // Entry shaped exactly like the auth produced for buildDirectTokenTransfer:
+  // root invocation is transfer(from, to, amount) on the token contract,
+  // authorized by the smart account's address credentials. Built from the real
+  // host-function builder so encoder drift shows up here.
+  function makeDirectTransferEntry(): xdr.SorobanAuthorizationEntry {
+    const invocation = new xdr.SorobanAuthorizedInvocation({
+      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+        buildTokenTransferHostFunction(token, account, recipient, 15_000_000n).invokeContract()
+      ),
+      subInvocations: [],
+    });
+    return new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+        new xdr.SorobanAddressCredentials({
+          address: Address.fromString(account).toScAddress(),
+          nonce: xdr.Int64.fromString("1"),
+          signatureExpirationLedger: 1,
+          signature: xdr.ScVal.scvVoid(),
+        })
+      ),
+      rootInvocation: invocation,
+    });
+  }
+
+  const signer: Signer = {
+    tag: "Delegated",
+    values: ["GDQP2KPQGKIHYJGXNUIYOMHARUARCA6E6KGUWKZ4S6T7ZTZ4Q7SMX5VA"],
+  };
+
+  it("resolves a direct transfer entry to the token-scoped rule", async () => {
+    const entry = makeDirectTransferEntry();
+
+    expect(buildInvocationContextTypes(entry)).toEqual([
+      { tag: "CallContract", values: [token] },
+    ]);
+
+    // Token-scoped rule and an account-scoped rule: the transfer entry must
+    // resolve to the token-scoped one.
+    const tokenRule = makeRule(2, { tag: "CallContract", values: [token] }, [signer]);
+    const accountRule = makeRule(3, { tag: "CallContract", values: [account] }, [signer]);
+    const wallet = makeWallet({ 2: tokenRule, 3: accountRule });
+
+    await expect(
+      resolveContextRuleIdsForEntry(wallet, entry, [signer], undefined, [tokenRule, accountRule])
+    ).resolves.toEqual([2]);
+  });
+
+  it("prefers the token-scoped policy rule over the Default rule with the same signer", async () => {
+    const entry = makeDirectTransferEntry();
+
+    // The standard deployed-wallet shape: a Default rule holding the connected
+    // signer (created by the contract constructor) plus a token-scoped rule
+    // carrying a spending-limit policy. The transfer must resolve to the
+    // token-scoped rule — the resolved id is committed into the signed digest,
+    // so selecting the Default rule would skip the spending limit entirely.
+    const defaultRule = makeRule(0, { tag: "Default", values: undefined }, [signer]);
+    const tokenRule = makeRule(
+      2,
+      { tag: "CallContract", values: [token] },
+      [signer],
+      ["spending-limit-policy"]
+    );
+    const wallet = makeWallet({ 0: defaultRule, 2: tokenRule });
+
+    await expect(
+      resolveContextRuleIdsForEntry(wallet, entry, [signer], undefined, [defaultRule, tokenRule])
+    ).resolves.toEqual([2]);
   });
 });

@@ -16,7 +16,6 @@ import type {
   TransactionResult,
 } from "../types.js";
 import type { RelayerClient } from "../relayer.js";
-import type { Client as SmartAccountClient } from "smart-account-kit-bindings";
 import {
   SimulationError,
   SmartAccountErrorCode,
@@ -167,8 +166,8 @@ export function hasSourceAccountAuth(transaction: Transaction): boolean {
 /**
  * Build an `scvI128` ScVal from a bigint stroop amount.
  *
- * Typed convenience wrapper over the SDK's `nativeToScVal`, used by both the
- * raw host-function transfer builder and the spec-fallback target-args builder.
+ * Typed convenience wrapper over the SDK's `nativeToScVal`, used by the
+ * raw host-function transfer builder.
  */
 export function buildI128ScVal(amount: bigint): xdr.ScVal {
   return nativeToScVal(amount, { type: "i128" });
@@ -193,26 +192,55 @@ export function buildTokenTransferHostFunction(
   );
 }
 
-export function buildTokenTransferTargetArgs(
-  wallet: SmartAccountClient | { spec?: { nativeToScVal?: (val: unknown, type: xdr.ScSpecTypeDef) => xdr.ScVal } },
+/**
+ * Build a direct token `transfer` invocation authorized by the smart account.
+ *
+ * Transfers are signed as direct nested-call authorizations — the canonical
+ * Soroban model — so the auth entry's context is the token-contract call
+ * itself. Context rules scoped to the token (and policies attached to them,
+ * such as spending limits) therefore match and enforce on transfers. The
+ * smart account's `execute` entry point is not involved; it stays reserved
+ * for account-mediated calls such as policy configuration.
+ *
+ * Simulation runs against the token contract with the default (null) source;
+ * the returned AssembledTransaction carries the auth entries requiring the
+ * smart account's authorization, ready for the standard signing pipeline.
+ * Throws a decoded {@link ContractError} (or {@link SimulationError}) when the
+ * build-time simulation fails, so callers surface the on-chain reason instead
+ * of submitting an unassembled transaction.
+ */
+export async function buildDirectTokenTransfer(
+  deps: { rpc: rpc.Server; networkPassphrase: string; timeoutInSeconds: number },
+  tokenContract: string,
   fromAddress: string,
   toAddress: string,
   amountInStroops: bigint
-): xdr.ScVal[] {
-  const spec = wallet?.spec;
-  if (spec && typeof spec.nativeToScVal === "function") {
-    return [
-      spec.nativeToScVal(fromAddress, xdr.ScSpecTypeDef.scSpecTypeAddress()),
-      spec.nativeToScVal(toAddress, xdr.ScSpecTypeDef.scSpecTypeAddress()),
-      spec.nativeToScVal(amountInStroops, xdr.ScSpecTypeDef.scSpecTypeI128()),
-    ];
+): Promise<contract.AssembledTransaction<unknown>> {
+  const transaction = await contract.AssembledTransaction.buildWithOp(
+    Operation.invokeHostFunction({
+      func: buildTokenTransferHostFunction(tokenContract, fromAddress, toAddress, amountInStroops),
+      auth: [],
+    }),
+    {
+      contractId: tokenContract,
+      networkPassphrase: deps.networkPassphrase,
+      rpcUrl: deps.rpc.serverURL.toString(),
+      server: deps.rpc,
+      timeoutInSeconds: deps.timeoutInSeconds,
+      method: "transfer",
+      parseResultXdr: (value: xdr.ScVal) => value,
+    }
+  );
+
+  const simulation = transaction.simulation;
+  if (simulation && rpc.Api.isSimulationError(simulation)) {
+    throw (
+      decodeContractError(simulation.error) ??
+      new SimulationError(`Transaction simulation failed: ${simulation.error}`)
+    );
   }
 
-  return [
-    xdr.ScVal.scvAddress(Address.fromString(fromAddress).toScAddress()),
-    xdr.ScVal.scvAddress(Address.fromString(toAddress).toScAddress()),
-    buildI128ScVal(amountInStroops),
-  ];
+  return transaction;
 }
 
 /**

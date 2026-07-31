@@ -41,7 +41,7 @@ import {
 } from "../kit/auth-payload.js";
 import { resolveContextRuleIdsForEntry } from "../kit/context-rules.js";
 import {
-  buildTokenTransferTargetArgs,
+  buildDirectTokenTransfer,
   resimulateAndAssemble,
   signFeePayer,
 } from "../kit/tx-ops.js";
@@ -547,12 +547,16 @@ export class MultiSignerManager {
 
     const amountInStroops = xlmToStroops(amount);
     try {
-      const { wallet } = this.deps.requireWallet();
-      const assembledTx = await wallet.execute({
-        target: tokenContract,
-        target_fn: "transfer",
-        target_args: buildTokenTransferTargetArgs(wallet, contractId, recipient, amountInStroops),
-      } as Parameters<SmartAccountClient["execute"]>[0]);
+      // Direct token invocation authorized by the smart account (not wrapped
+      // in the account's `execute`), so token-scoped context rules and their
+      // policies match the transfer. See buildDirectTokenTransfer.
+      const assembledTx = await buildDirectTokenTransfer(
+        this.deps,
+        tokenContract,
+        contractId,
+        recipient,
+        amountInStroops
+      );
 
       return this.operation(
         assembledTx,

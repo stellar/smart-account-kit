@@ -191,6 +191,7 @@ export type { AuthDigestSigner } from "./signers.js";
 // Advanced flows: auth-payload signer encoding + transaction helpers
 export { signerToScVal, parseSignerScVal } from "./kit/auth-payload.js";
 export {
+  buildDirectTokenTransfer,
   buildI128ScVal,
   signFeePayer,
   resimulateAndAssemble,

@@ -134,7 +134,7 @@ import {
 import {
   sign,
   signAndSubmit,
-  buildTokenTransferTargetArgs,
+  buildDirectTokenTransfer,
   hasSourceAccountAuth,
   signResimulateAndPrepare,
   shouldUseFeeSponsoring,
@@ -1134,6 +1134,13 @@ export class SmartAccountKit {
    * This handles the full flow: build transaction, simulate, sign auth entries
    * with passkey, re-simulate for accurate resources, and submit.
    *
+   * The transfer is built as a direct token-contract invocation authorized by
+   * the smart account (a nested-call authorization, Soroban's canonical
+   * model) rather than being wrapped in the account's `execute` entry point.
+   * The signed context is therefore the token call itself, so context rules
+   * scoped to the token — and policies attached to them, such as spending
+   * limits — match and enforce on transfers.
+   *
    * The deployer keypair is used as the fee payer (transaction source).
    *
    * @param tokenContract - Token contract address (SAC address for native assets)
@@ -1146,7 +1153,7 @@ export class SmartAccountKit {
     tokenContract: string,
     recipient: string,
     amount: number,
-    options?: Pick<SignAndSubmitOptions, "credentialId" | "forceMethod">
+    options?: Pick<SignAndSubmitOptions, "credentialId" | "forceMethod" | "resolveContextRuleIds">
   ): Promise<TransactionResult> {
     const contractId = this._contractId;
     if (!contractId) {
@@ -1167,15 +1174,19 @@ export class SmartAccountKit {
 
     try {
       const amountInStroops = xlmToStroops(amount);
-      const { wallet } = this.requireWallet();
-      const transaction = await this.execute(tokenContract, "transfer", [
-        ...buildTokenTransferTargetArgs(wallet, contractId, recipient, amountInStroops),
-      ]);
+      const transaction = await this.buildTokenTransfer(
+        tokenContract,
+        contractId,
+        recipient,
+        amountInStroops
+      );
       const ctxRuleCache: ConnectedContextRuleCache = {};
       return this.signAndSubmit(transaction, {
         credentialId: options?.credentialId,
-        resolveContextRuleIds: (entry) =>
-          this.resolveConnectedContextRuleIds(entry, options?.credentialId, ctxRuleCache),
+        resolveContextRuleIds:
+          options?.resolveContextRuleIds ??
+          ((entry) =>
+            this.resolveConnectedContextRuleIds(entry, options?.credentialId, ctxRuleCache)),
         forceMethod: options?.forceMethod,
       });
     } catch (err) {
@@ -1321,6 +1332,31 @@ export class SmartAccountKit {
    */
   private hasSourceAccountAuth(transaction: Transaction): boolean {
     return hasSourceAccountAuth(transaction);
+  }
+
+  /**
+   * Build a direct token `transfer` invocation authorized by the connected
+   * smart account. See {@link buildDirectTokenTransfer} for the authorization
+   * model.
+   * @internal
+   */
+  private buildTokenTransfer(
+    tokenContract: string,
+    fromAddress: string,
+    toAddress: string,
+    amountInStroops: bigint
+  ): Promise<contract.AssembledTransaction<unknown>> {
+    return buildDirectTokenTransfer(
+      {
+        rpc: this.rpc,
+        networkPassphrase: this.networkPassphrase,
+        timeoutInSeconds: this.timeoutInSeconds,
+      },
+      tokenContract,
+      fromAddress,
+      toAddress,
+      amountInStroops
+    );
   }
 
   /**
