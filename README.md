@@ -997,7 +997,7 @@ import type { AssembledTransaction } from 'smart-account-kit';
 ### Setup
 
 ```bash
-git clone https://github.com/kalepail/smart-account-kit
+git clone https://github.com/stellar/smart-account-kit
 cd smart-account-kit
 
 # Configure demo environment (has testnet defaults)

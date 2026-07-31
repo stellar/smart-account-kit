@@ -53,7 +53,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kalepail/smart-account-kit"
+    "url": "https://github.com/stellar/smart-account-kit"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",

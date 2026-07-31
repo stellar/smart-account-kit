@@ -167,7 +167,7 @@ pkg.types = 'dist/index.d.ts';
 pkg.files = ['dist'];
 pkg.author = 'OpenZeppelin';
 pkg.license = 'MIT';
-pkg.repository = { type: 'git', url: 'https://github.com/kalepail/smart-account-kit' };
+pkg.repository = { type: 'git', url: 'https://github.com/stellar/smart-account-kit' };
 pkg.peerDependencies = { '@stellar/stellar-sdk': '$STELLAR_SDK_PEER' };
 pkg.devDependencies = {
   ...(pkg.devDependencies || {}),
