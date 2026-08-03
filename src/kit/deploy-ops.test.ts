@@ -255,24 +255,31 @@ describe("buildDeployTransaction", () => {
   const credentialId = Buffer.from("credential-id");
   const publicKey = new Uint8Array(65).fill(7);
 
-  it("refuses to build a shared deploy without a relayer", async () => {
+  it("BUILDS a shared deploy without a relayer (submit is what's guarded)", async () => {
+    // Producing the {func, auth} payload only signs an auth entry — it spends
+    // nothing and the signature confers no privilege (the key is public). An
+    // integrator running their own submission infrastructure must be able to
+    // build here and source/pay from a funded account of their choosing.
     const deployerKeypair = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 2));
-    await expect(
-      buildDeployTransaction(
-        {
-          accountWasmHash: "11".repeat(32),
-          webauthnVerifierAddress: verifier,
-          networkPassphrase,
-          rpcUrl: "https://rpc.example",
-          deployerKeypair,
-          usingSharedDeployer: true,
-          relayerConfigured: false,
-          timeoutInSeconds: 30,
-        },
-        credentialId,
-        publicKey
-      )
-    ).rejects.toThrow(/sign-only/);
+    const salt = hash(credentialId);
+    const { assembled } = makeCreateSimulation(deployerKeypair.publicKey(), salt);
+    vi.spyOn(SmartAccountClient, "deploy").mockResolvedValue(assembled as never);
+
+    const result = await buildDeployTransaction(
+      {
+        accountWasmHash: "11".repeat(32),
+        webauthnVerifierAddress: verifier,
+        networkPassphrase,
+        rpcUrl: "https://rpc.example",
+        deployerKeypair,
+        usingSharedDeployer: true,
+        timeoutInSeconds: 30,
+      },
+      credentialId,
+      publicKey
+    );
+
+    expect(isAuthEntryDeployment(result)).toBe(true);
   });
 
   it("builds and signs an auth-entry deploy for the shared deployer without sourcing from it", async () => {
@@ -291,7 +298,6 @@ describe("buildDeployTransaction", () => {
         rpcUrl: "https://rpc.example",
         deployerKeypair,
         usingSharedDeployer: true,
-        relayerConfigured: true,
         timeoutInSeconds: 30,
       },
       credentialId,
@@ -372,7 +378,6 @@ describe("buildDeployTransaction", () => {
         rpcUrl: "https://rpc.example",
         deployerKeypair,
         usingSharedDeployer: false,
-        relayerConfigured: false,
         timeoutInSeconds: 30,
       },
       credentialId,

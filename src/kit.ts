@@ -805,16 +805,22 @@ export class SmartAccountKit {
       policies?: PolicyConfig[];
     }
   ): Promise<CreateWalletResult & { submitResult?: TransactionResult; fundResult?: TransactionResult & { amount?: number } }> {
-    // Fast-fail BEFORE the passkey ceremony when the only submission path would
-    // fund the deploy from the shared default deployer over RPC. This mirrors
-    // the hard guard in submitDeploymentTx but fires up front, so a misconfig
-    // does not orphan a freshly-created passkey or hand back a shared-deployer-
-    // signed deploy XDR. (The relayer-failure→RPC fallback can't be predicted
-    // here; it stays guarded at submit time.)
-    const method = getSubmissionMethod(this.relayer, { forceMethod: options?.forceMethod });
-    const willSubmitViaRpc = method === "rpc" || (method === "relayer" && !this.relayer);
-    if (willSubmitViaRpc && this.usingSharedDeployer) {
-      throw sharedDeployerFeeError(this.deployerKeypair.publicKey());
+    // Fast-fail BEFORE the passkey ceremony when we are going to auto-submit and
+    // the only submission path would fund the deploy from the shared default
+    // deployer over RPC — so a misconfig does not orphan a freshly-created
+    // passkey. (The relayer-failure→RPC fallback can't be predicted here; it
+    // stays guarded at submit time.)
+    //
+    // With `autoSubmit: false` there is deliberately NO relayer requirement: the
+    // caller just wants the `{func, auth}` payload, which costs nothing to
+    // produce, and may submit it through their own funded source. Submission
+    // remains guarded in submitDeploymentTx.
+    if (options?.autoSubmit) {
+      const method = getSubmissionMethod(this.relayer, { forceMethod: options?.forceMethod });
+      const willSubmitViaRpc = method === "rpc" || (method === "relayer" && !this.relayer);
+      if (willSubmitViaRpc && this.usingSharedDeployer) {
+        throw sharedDeployerFeeError(this.deployerKeypair.publicKey());
+      }
     }
 
     const constructorPolicies = options?.policies ?? this.defaultPolicies;
@@ -1508,7 +1514,6 @@ export class SmartAccountKit {
         rpcUrl: this.rpcUrl,
         deployerKeypair: this.deployerKeypair,
         usingSharedDeployer: this.usingSharedDeployer,
-        relayerConfigured: !!this.relayer,
         timeoutInSeconds: this.timeoutInSeconds,
       },
       credentialId,

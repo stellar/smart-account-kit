@@ -13,11 +13,19 @@ The current SDK enforces this invariant for the shared default deployer:
 > Soroban authorization entry. It never supplies a transaction-envelope source,
 > sequence, or fee and never signs the transaction envelope.
 
-Shared deployments therefore require a relayer. `createWallet()` and
-`credentials.deploy()` return `relayerPayload: { func, auth }`; a missing
-relayer, direct RPC, and relayer-to-RPC fallback are refused. A custom
-`deployerSecret` remains a separate, self-sourced path and may return
-`signedTransaction`.
+`createWallet()` and `credentials.deploy()` return
+`relayerPayload: { func, auth }`. **Building** that payload requires nothing —
+it only signs an authorization entry, spends no balance, consumes no sequence,
+and confers no privilege (the deployer's key is public, so anyone can produce
+the same signature). Callers running their own submission infrastructure can
+therefore build with `autoSubmit: false` and submit through any funded source
+they control.
+
+**Submission** is what is constrained: the SDK's own auto-submit path goes
+through the relayer, and a missing relayer, direct RPC, and relayer-to-RPC
+fallback are all refused — because those would source or fund from the shared
+deployer. A custom `deployerSecret` remains a separate, self-sourced path and
+may return `signedTransaction`.
 
 This path is implemented and testnet-verified:
 

@@ -6,9 +6,11 @@ The deployed contract surface is unchanged from `0.3.0` (the bindings were regen
 
 ## Unreleased: shared-deployer deployment
 
-Shared-default-deployer deployments are now sign-only and require a relayer.
-The deployer signs the CreateContractV2 Soroban authorization entry; the
-relayer supplies the transaction envelope source, sequence, and fees.
+Shared-default-deployer deployments are now sign-only. The deployer signs the
+CreateContractV2 Soroban authorization entry; a separate account supplies the
+transaction envelope source, sequence, and fees. The SDK's auto-submit path uses
+the relayer for that, but building the payload requires no relayer at all — see
+below.
 
 This changes the manual-submission result from `createWallet()` and
 `credentials.deploy()`:
@@ -31,8 +33,12 @@ if (result.relayerPayload) {
 - `relayerPayload: { func, auth }` is returned for the shared deployer.
 - `signedTransaction` is now optional and is present only for a custom
   `deployerSecret` that still self-sources its deployment envelope.
-- Shared deploys fail when no relayer is configured. They never use direct RPC
-  or fall back to it after relayer failure.
+- Shared deploys with `autoSubmit: true` fail when no relayer is configured.
+  They never use direct RPC or fall back to it after relayer failure.
+- With `autoSubmit: false` **no relayer is required**: you get
+  `relayerPayload: { func, auth }` and may submit it yourself, sourcing and
+  paying from any funded account. Signing the auth entry costs nothing and the
+  shared deployer is never the source.
 - Remove `forceMethod: "rpc"` from shared deployment calls — there is no config
   that re-enables a direct-RPC shared deployment.
 

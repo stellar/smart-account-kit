@@ -206,17 +206,19 @@ export async function buildDeployTransaction(
     rpcUrl: string;
     deployerKeypair: Keypair;
     usingSharedDeployer: boolean;
-    relayerConfigured: boolean;
     timeoutInSeconds: number;
   },
   credentialId: Buffer,
   publicKey: Uint8Array,
   policies?: PolicyConfig[]
 ): Promise<DeployTransaction> {
-  if (deps.usingSharedDeployer && !deps.relayerConfigured) {
-    throw sharedDeployerFeeError(deps.deployerKeypair.publicKey());
-  }
-
+  // Building deliberately does NOT require a relayer. Producing the shared
+  // deployer's `{func, auth}` payload only signs an authorization entry — it
+  // spends nothing and consumes no sequence, and the signature confers no
+  // privilege (the key is public, so anyone can produce it). Integrators who
+  // run their own submission infrastructure can therefore build here and
+  // source/pay from any funded account of their choosing. Only SUBMISSION is
+  // constrained, and that is enforced in submitDeploymentTx.
   const keyData = buildKeyData(publicKey, credentialId);
   const signer: ContractSigner = {
     tag: "External",
