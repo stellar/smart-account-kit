@@ -139,7 +139,8 @@ export interface SmartAccountConfig {
   storage?: StorageAdapter;
 
   /**
-   * Optional secret key (S...) for the fee-paying deployer account.
+   * Optional secret key (S...) for a deployer account you control, which then
+   * sources and pays for its own deployments.
    *
    * Defaults to a deterministic keypair derived from a fixed, well-known seed
    * (`DEFAULT_DEPLOYER_SEED`), which makes smart-account addresses reproducible

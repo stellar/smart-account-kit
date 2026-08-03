@@ -1,14 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-08-03
 
-- **Breaking: shared-deployer wallet creation is relayer-only.**
-  `createWallet()` and `credentials.deploy()` now return
-  `relayerPayload: { func, auth }` for the shared default deployer;
-  `signedTransaction` is optional and is returned only for custom
-  `deployerSecret` deployments. Shared deployments require a configured
-  relayer and never fall back to RPC. Remove `forceMethod: "rpc"` from
-  shared-deployer flows; no config re-enables a direct-RPC shared deployment.
+- **Breaking: the shared deployer is sign-only.** `createWallet()` and
+  `credentials.deploy()` now return `relayerPayload: { func, auth }` for the
+  shared default deployer; `signedTransaction` is optional and is returned only
+  for custom `deployerSecret` deployments. The shared deployer signs the
+  CreateContractV2 authorization entry and never supplies a transaction source,
+  sequence, or fee. *Building* that payload requires no relayer — with
+  `autoSubmit: false` you get `{ func, auth }` and may submit it through any
+  funded source you control. *Submitting* through the SDK's own auto-submit path
+  requires a configured relayer and never falls back to RPC. Remove
+  `forceMethod: "rpc"` from shared-deployer flows; no config re-enables a
+  direct-RPC shared deployment.
 - **Token transfers are signed as direct token invocations** (`transfer` and
   `multiSigners.transfer`) instead of being wrapped in the account's
   `execute`, so `CallContract` rules scoped to the token (and their policies,

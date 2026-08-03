@@ -96,7 +96,7 @@ The current Protocol 27 testnet/mainnet deployed contract IDs and WASM hashes ar
 | `timeoutInSeconds` | `number` | No | Transaction timeout (default: 30) |
 | `signatureExpirationLedgers` | `number` | No | Signature lifetime from the current ledger (default: 720, ~1 hour) |
 | `storage` | `StorageAdapter` | No | Credential storage adapter (default: in-memory) |
-| `deployerSecret` | `string` | No | Secret key (`S...`) of the fee-paying deployer. Defaults to a deterministic well-known keypair whose secret is **publicly derivable** — see below |
+| `deployerSecret` | `string` | No | Secret key (`S...`) of a deployer you control, which then sources and pays for its own deployments. Defaults to a deterministic well-known keypair whose secret is **publicly derivable** and which is sign-only — see below |
 | `externalSignerStorage` | `WalletStorage` | No | Persistence store for external-wallet connections (default: `localStorage` when available) |
 | `rpId` | `string` | No | WebAuthn relying party ID (domain) |
 | `rpName` | `string` | No | WebAuthn relying party name (default: `"Smart Account"`) |
@@ -116,6 +116,7 @@ The deployer salts wallet deployment (the contract address is derived from it). 
 >
 > Because of this, the shared deployer is **sign-only**: it signs the CreateContractV2 authorization entry, while a relayer/channel account supplies the transaction source, sequence, and fees. Choose one of:
 > - **Fee sponsoring:** set `relayerUrl`. The SDK submits `{ func, auth }`; the shared deployer never signs an envelope or supplies sequence/fees.
+> - **Submit it yourself:** call `createWallet(..., { autoSubmit: false })` and submit the returned `relayerPayload: { func, auth }` through any funded source you control. Building it needs no relayer — signing an auth entry spends nothing and confers no privilege, since the deployer's key is public.
 > - **Dedicated deployer:** set `deployerSecret` to a key you control. It becomes the fee payer. *Note: a custom deployer changes the derived contract addresses, so a wallet created with one deployer cannot be re-derived with another.*
 
 The shared default deployer accounts are, by design, **on-chain hardened** on mainnet: `auth_immutable` is set and thresholds/weights prevent `accountMerge` and signer changes. This bounds takeover, not balance: any XLM held by the sponsored-reserve account remains sweepable. A third party can also set its sequence to `INT64_MAX`, but the current SDK never uses the shared account as an envelope source, so that no longer blocks deployments. **Do not fund it.** See [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md) for the exact guarantees and residual risks.

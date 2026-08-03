@@ -39,7 +39,11 @@ function makeAuthEntryDeployment() {
   };
 }
 
-function makeCreateSimulation(deployer: string, salt: Buffer) {
+function makeCreateSimulation(
+  deployer: string,
+  salt: Buffer,
+  subInvocations: xdr.SorobanAuthorizedInvocation[] = []
+) {
   const operation = Operation.createCustomContract({
     address: Address.fromString(deployer),
     wasmHash: Buffer.alloc(32, 2),
@@ -53,7 +57,7 @@ function makeCreateSimulation(deployer: string, salt: Buffer) {
       xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
         func.createContractV2()
       ),
-    subInvocations: [],
+    subInvocations,
   });
   const discoveredAuth = new xdr.SorobanAuthorizationEntry({
     credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
@@ -361,6 +365,42 @@ describe("buildDeployTransaction", () => {
         signature
       )
     ).toBe(true);
+  });
+
+  it("refuses to sign a deploy auth entry carrying sub-invocations", async () => {
+    const deployerKeypair = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 3));
+    const salt = hash(credentialId);
+    // A hostile simulation RPC returns the correct create-contract root with an
+    // extra child hanging off it. The deployer signs the whole tree, so the
+    // child would be authorized under its address credentials too.
+    const child = new xdr.SorobanAuthorizedInvocation({
+      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+        new xdr.InvokeContractArgs({
+          contractAddress: Address.fromString(verifier).toScAddress(),
+          functionName: "transfer",
+          args: [],
+        })
+      ),
+      subInvocations: [],
+    });
+    const { assembled } = makeCreateSimulation(deployerKeypair.publicKey(), salt, [child]);
+    vi.spyOn(SmartAccountClient, "deploy").mockResolvedValue(assembled as never);
+
+    await expect(
+      buildDeployTransaction(
+        {
+          accountWasmHash: "11".repeat(32),
+          webauthnVerifierAddress: verifier,
+          networkPassphrase,
+          rpcUrl: "https://rpc.example",
+          deployerKeypair,
+          usingSharedDeployer: true,
+          timeoutInSeconds: 30,
+        },
+        credentialId,
+        publicKey
+      )
+    ).rejects.toThrow(/wrong deployer/);
   });
 
   it("keeps a custom deployer on the existing self-source route", async () => {

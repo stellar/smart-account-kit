@@ -467,6 +467,7 @@ export class SmartAccountKit {
 
     // Deployer keypair - a custom fee payer (config.deployerSecret) or the
     // deterministic default derived from a fixed seed (see DEFAULT_DEPLOYER_SEED).
+    // The default is sign-only: it authorizes the deploy but never pays for it.
     this.deployerKeypair = config.deployerSecret
       ? Keypair.fromSecret(config.deployerSecret)
       : Keypair.fromRawEd25519Seed(hash(Buffer.from(DEFAULT_DEPLOYER_SEED)));
@@ -1183,7 +1184,8 @@ export class SmartAccountKit {
    * scoped to the token — and policies attached to them, such as spending
    * limits — match and enforce on transfers.
    *
-   * The deployer keypair is used as the fee payer (transaction source).
+   * A custom `deployerSecret` sources and pays for the transaction. The shared
+   * default deployer never does — a relayer/channel account supplies both.
    *
    * @param tokenContract - Token contract address (SAC address for native assets)
    * @param recipient - Recipient address (G... or C...)

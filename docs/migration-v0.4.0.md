@@ -4,7 +4,7 @@ This release is an OpenZeppelin-parity overhaul of the SDK. It has **no backward
 
 The deployed contract surface is unchanged from `0.3.0` (the bindings were regenerated from the same canonical Protocol 27 testnet WASM hash `1b5f4534…785a` and verified byte-identical to the `0.3.0` checked-in copy). All the changes below are on the SDK side.
 
-## Unreleased: shared-deployer deployment
+## 0.5.0: shared-deployer deployment
 
 Shared-default-deployer deployments are now sign-only. The deployer signs the
 CreateContractV2 Soroban authorization entry; a separate account supplies the
@@ -19,7 +19,8 @@ This changes the manual-submission result from `createWallet()` and
 const result = await kit.createWallet(appName, userName, { autoSubmit: false });
 
 if (result.relayerPayload) {
-  // Shared default deployer: relayer is required.
+  // Shared default deployer. A relayer is one way to submit this; any funded
+  // source you control works, because the payload is just a signed auth entry.
   await kit.relayer!.send(
     result.relayerPayload.func,
     result.relayerPayload.auth

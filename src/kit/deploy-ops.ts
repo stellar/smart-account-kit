@@ -287,7 +287,10 @@ export async function buildDeployTransaction(
     !Buffer.from(authorizedCreate.toXDR()).equals(operationCreate.toXDR()) ||
     !fromAddress ||
     Address.fromScAddress(fromAddress.address()).toString() !== deployerPublicKey ||
-    !Buffer.from(fromAddress.salt()).equals(salt)
+    !Buffer.from(fromAddress.salt()).equals(salt) ||
+    // The deployer signs the whole tree, so anything hanging off the root would
+    // be authorized too. A deployment needs no sub-invocations; refuse any.
+    discoveredAuth[0].rootInvocation().subInvocations().length !== 0
   ) {
     throw new SubmissionError(
       "Shared deploy simulation returned authorization for the wrong deployer"
