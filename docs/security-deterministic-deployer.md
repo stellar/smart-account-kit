@@ -110,3 +110,17 @@ policy state against that trusted code.
 Changing a deployer changes the address preimage for every wallet derived from
 it. Keep legacy identities in discovery/migration logic; do not rotate a
 deployer as a fee-management shortcut.
+
+## Operational follow-ups (outside this change)
+
+Open ops tasks, not SDK defects. The sign-only SDK works without them; they
+reduce operational risk on testnet and on shared infrastructure.
+
+- Harden the testnet deployers (`0/0/0` today) and make post-reset provisioning
+  fail closed, so a network reset cannot recreate an unhardened `AccountEntry`
+  that address authorization then depends on. The relayer proxy already refuses
+  to Friendbot-fund a shared deployer.
+- Sweep or retire the legacy passkey-kit testnet deployer listed above — its key
+  is publicly derivable, so anyone can move its balance today.
+- Source shared infrastructure deploys (verifier, policy, WASM upload) from a
+  dedicated funded account rather than a shared deployer.
