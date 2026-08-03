@@ -151,24 +151,12 @@ describe("auth-payload", () => {
     expect(Address.fromScAddress(credentials.address()).toString()).toBe(account);
   });
 
-  it("creates ADDRESS_V2 credentials only with explicit opt-in", () => {
+  it("always builds V1 ADDRESS credentials (classic G-account authorizers)", () => {
     const credentials = getAddressCredentials(makeAuthEntry(makeAccount(5)).credentials());
-    const legacyCredentials = createAddressCredentials(credentials);
-    const addressV2Credentials = createAddressCredentials(credentials, {
-      version: "address_v2",
-    });
 
-    expect(legacyCredentials.switch().name).toBe("sorobanCredentialsAddress");
-    expect(addressV2Credentials.switch().name).toBe("sorobanCredentialsAddressV2");
-    expect(getAddressCredentials(addressV2Credentials).nonce().toString()).toBe("7");
-  });
-
-  it("rejects unsupported address credential versions", () => {
-    const credentials = getAddressCredentials(makeAuthEntry(makeAccount(6)).credentials());
-
-    expect(() =>
-      createAddressCredentials(credentials, { version: "bogus" as never })
-    ).toThrow("Unsupported Soroban address credential version: bogus");
+    expect(createAddressCredentials(credentials).switch().name).toBe(
+      "sorobanCredentialsAddress"
+    );
   });
 
   it("matches the SDK auth preimage helper for legacy ADDRESS credentials", () => {
@@ -186,10 +174,13 @@ describe("auth-payload", () => {
   it("matches the SDK auth preimage helper for ADDRESS_V2 credentials", () => {
     const networkPassphrase = "Test SDF Network ; September 2015";
     const baseEntry = makeAuthEntry(makeAccount(8));
+    // V2 credentials are never built by the SDK — they come back from
+    // simulation for smart-account (contract) authorizers — so construct one
+    // directly to pin that the preimage helper still handles them.
     const entry = new xdr.SorobanAuthorizationEntry({
-      credentials: createAddressCredentials(getAddressCredentials(baseEntry.credentials()), {
-        version: "address_v2",
-      }),
+      credentials: xdr.SorobanCredentials.sorobanCredentialsAddressV2(
+        getAddressCredentials(baseEntry.credentials())
+      ),
       rootInvocation: baseEntry.rootInvocation(),
     });
     const expectedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());

@@ -7,10 +7,15 @@
 
 import base64url from "../base64url.js";
 import { xdr } from "@stellar/stellar-sdk";
-import type { rpc } from "@stellar/stellar-sdk";
+import type { contract, rpc } from "@stellar/stellar-sdk";
 import type { AuthenticatorTransportFuture } from "@simplewebauthn/browser";
 import type { SmartAccountEventEmitter } from "../events.js";
 import type { PolicyConfig, StorageAdapter, StoredCredential, SubmissionMethod, SubmissionOptions, TransactionResult } from "../types.js";
+import {
+  prepareDeploymentArtifacts,
+  type DeployTransaction,
+  type RelayerDeploymentPayload,
+} from "../kit/deploy-ops.js";
 
 /** Dependencies required by CredentialManager */
 export interface CredentialManagerDeps {
@@ -43,11 +48,11 @@ export interface CredentialManagerDeps {
     credentialIdBuffer: Buffer,
     publicKey: Uint8Array,
     policies?: PolicyConfig[]
-  ) => Promise<{ built?: { toXDR: () => string }; signed?: { toXDR: () => string } }>;
-  /** Sign deploy transaction with deployer keypair (envelope signature) */
-  signWithDeployer: (tx: unknown) => Promise<void>;
+  ) => Promise<DeployTransaction>;
+  /** Sign a custom-deployer transaction envelope. */
+  signWithDeployer: (tx: contract.AssembledTransaction<null>) => Promise<void>;
   /** Submit deployment transaction */
-  submitDeploymentTx: (tx: unknown, credentialId: string, options?: SubmissionOptions) => Promise<TransactionResult>;
+  submitDeploymentTx: (tx: DeployTransaction, credentialId: string, options?: SubmissionOptions) => Promise<TransactionResult>;
   /** Derive contract address from credential ID */
   deriveContractAddress: (credentialIdBuffer: Buffer) => string;
 }
@@ -151,7 +156,8 @@ export class CredentialManager {
     options?: { autoSubmit?: boolean; forceMethod?: SubmissionMethod; policies?: PolicyConfig[] }
   ): Promise<{
     contractId: string;
-    signedTransaction: string;
+    signedTransaction?: string;
+    relayerPayload?: RelayerDeploymentPayload;
     submitResult?: TransactionResult;
   }> {
     const credential = await this.deps.storage.get(credentialId);
@@ -168,15 +174,11 @@ export class CredentialManager {
       options?.policies
     );
 
-    // Sign the deployment transaction with the deployer keypair
-    // Deployment uses source_account auth which requires envelope signature
-    // When using Relayer, the signed XDR is fee-bumped (inner signature preserved)
     const submissionOpts = { forceMethod: options?.forceMethod };
-    await this.deps.signWithDeployer(deployTx);
-    if (!deployTx.signed) {
-      throw new Error("Failed to sign deployment transaction");
-    }
-    const signedTransaction = deployTx.signed.toXDR();
+    const deploymentArtifacts = await prepareDeploymentArtifacts(
+      deployTx,
+      this.deps.signWithDeployer
+    );
 
     this.deps.setConnectedState(contractId, credentialId);
     this.deps.initializeWallet(contractId);
@@ -188,7 +190,7 @@ export class CredentialManager {
 
     return {
       contractId,
-      signedTransaction,
+      ...deploymentArtifacts,
       submitResult,
     };
   }

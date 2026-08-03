@@ -74,7 +74,7 @@ import {
 } from "./policy-clients.js";
 
 // Utility functions
-import { deriveContractAddress } from "./utils.js";
+import { deriveContractAddress, isDefaultDeployer } from "./utils.js";
 
 // Event emitter
 import { SmartAccountEventEmitter } from "./events.js";
@@ -130,6 +130,8 @@ import {
 import {
   buildDeployTransaction,
   submitDeploymentTx,
+  sharedDeployerFeeError,
+  type DeployTransaction,
 } from "./kit/deploy-ops.js";
 import {
   sign,
@@ -139,6 +141,7 @@ import {
   signResimulateAndPrepare,
   shouldUseFeeSponsoring,
   sendAndPoll,
+  getSubmissionMethod,
 } from "./kit/tx-ops.js";
 import { fundWallet } from "./kit/fund-ops.js";
 import { convertPolicyParams, buildPoliciesScVal, buildConstructorPolicies } from "./kit/policies-ops.js";
@@ -195,10 +198,11 @@ type ConnectedContextRuleCache = {
  *   networkPassphrase: 'Test SDF Network ; September 2015',
  *   accountWasmHash: '...',
  *   webauthnVerifierAddress: 'C...',
+ *   relayerUrl: 'https://my-relayer-proxy.example.com',
  * });
  *
  * // Create a new wallet
- * const { credentialId, contractId, signedTransaction } = await kit.createWallet('MyApp', 'user@example.com');
+ * const { credentialId, contractId, relayerPayload } = await kit.createWallet('MyApp', 'user@example.com');
  *
  * // Connect to existing wallet
  * const { contractId } = await kit.connectWallet({ credentialId: 'savedCredentialId' });
@@ -251,8 +255,13 @@ export class SmartAccountKit {
   /** Smart account contract client (after connection) */
   public wallet?: SmartAccountClient;
 
-  // Deployer keypair (used as source account for contract deployment)
+  // Contract-address identity and deploy authorizer; only custom deployers source.
   private readonly deployerKeypair: Keypair;
+
+  // True when the deployer resolves to the shared, publicly-derivable default
+  // keypair (by identity — see isDefaultDeployer — so supplying the known-public
+  // secret explicitly still counts). Used to refuse using it as source/fee.
+  private readonly usingSharedDeployer: boolean;
 
   // ==========================================================================
   // Sub-managers for organized access to contract methods
@@ -380,9 +389,9 @@ export class SmartAccountKit {
    *   relayerUrl: 'https://my-relayer-proxy.example.com',
    * });
    *
-   * // Submit a signed transaction via Relayer (fee-bump)
-   * if (kit.relayer) {
-   *   const result = await kit.relayer.sendXdr(signedTransaction);
+   * const { relayerPayload } = await kit.createWallet('MyApp', 'user@example.com');
+   * if (kit.relayer && relayerPayload) {
+   *   const result = await kit.relayer.send(relayerPayload.func, relayerPayload.auth);
    *   console.log('Hash:', result.hash);
    * }
    * ```
@@ -458,10 +467,17 @@ export class SmartAccountKit {
 
     // Deployer keypair - a custom fee payer (config.deployerSecret) or the
     // deterministic default derived from a fixed seed (see DEFAULT_DEPLOYER_SEED).
+    // The default is sign-only: it authorizes the deploy but never pays for it.
     this.deployerKeypair = config.deployerSecret
       ? Keypair.fromSecret(config.deployerSecret)
       : Keypair.fromRawEd25519Seed(hash(Buffer.from(DEFAULT_DEPLOYER_SEED)));
 
+    // The deployer is "shared" when it resolves to the publicly-derivable
+    // default keypair — whether via the default (no deployerSecret) OR because a
+    // caller passed the shared secret explicitly. Identity compare (not presence
+    // of deployerSecret) so the guards can't be disabled by supplying the
+    // known-public secret.
+    this.usingSharedDeployer = isDefaultDeployer(this.deployerKeypair.publicKey());
     // Event emitter (initialized first as other managers may use it)
     this.events = new SmartAccountEventEmitter();
     this.probeRuleIds = config.contextRuleProbe?.enabled === false
@@ -521,9 +537,9 @@ export class SmartAccountKit {
       createPasskey: (appName, userName) => this.createPasskey(appName, userName),
       buildDeployTransaction: (credentialIdBuffer, publicKey, policies) =>
         this.buildDeployTransaction(credentialIdBuffer, publicKey, policies ?? this.defaultPolicies),
-      signWithDeployer: (tx) => this.signWithDeployer(tx as contract.AssembledTransaction<null>),
+      signWithDeployer: (tx) => this.signWithDeployer(tx),
       submitDeploymentTx: (tx, credentialId, options) =>
-        this.submitDeploymentTx(tx as contract.AssembledTransaction<null>, credentialId, options),
+        this.submitDeploymentTx(tx, credentialId, options),
       deriveContractAddress: (credentialIdBuffer) =>
         deriveContractAddress(credentialIdBuffer, this.deployerKeypair.publicKey(), this.networkPassphrase),
     });
@@ -567,10 +583,13 @@ export class SmartAccountKit {
   }
 
   /**
-   * Get the deployer public key (used as fee payer for transactions)
+   * Get the deployer public key.
    *
-   * This is a deterministic keypair derived from the network passphrase,
-   * shared across all SDK instances on the same network.
+   * By default this is the shared, deterministic keypair derived from a fixed
+   * seed ({@link DEFAULT_DEPLOYER_SEED}). It is used to derive contract
+   * addresses (salt) and to sign authorization entries — it must NOT be used as
+   * a transaction source or fee payer (the SDK enforces this for the shared
+   * default). Override with a dedicated `deployerSecret` to change that.
    */
   get deployerPublicKey(): string {
     return this.deployerKeypair.publicKey();
@@ -726,18 +745,24 @@ export class SmartAccountKit {
    * On success, deletes the credential from storage.
    * On failure, marks it as failed for retry.
    *
-   * Deployment uses source_account auth (envelope signature). When using Relayer,
-   * the signed XDR is submitted for fee-bumping. The inner tx signature is preserved.
+   * Shared deployers submit signed address auth via `{func,auth}`; custom
+   * deployers keep the signed-envelope route.
    *
    * @internal
    */
-  private async submitDeploymentTx<T>(
-    tx: contract.AssembledTransaction<T>,
+  private async submitDeploymentTx(
+    tx: DeployTransaction,
     credentialId: string,
     options?: SubmissionOptions
   ): Promise<TransactionResult> {
     return submitDeploymentTx(
-      { storage: this.storage, rpc: this.rpc, relayer: this.relayer },
+      {
+        storage: this.storage,
+        rpc: this.rpc,
+        relayer: this.relayer,
+        deployerKeypair: this.deployerKeypair,
+        usingSharedDeployer: this.usingSharedDeployer,
+      },
       tx,
       credentialId,
       options
@@ -781,6 +806,24 @@ export class SmartAccountKit {
       policies?: PolicyConfig[];
     }
   ): Promise<CreateWalletResult & { submitResult?: TransactionResult; fundResult?: TransactionResult & { amount?: number } }> {
+    // Fast-fail BEFORE the passkey ceremony when we are going to auto-submit and
+    // the only submission path would fund the deploy from the shared default
+    // deployer over RPC — so a misconfig does not orphan a freshly-created
+    // passkey. (The relayer-failure→RPC fallback can't be predicted here; it
+    // stays guarded at submit time.)
+    //
+    // With `autoSubmit: false` there is deliberately NO relayer requirement: the
+    // caller just wants the `{func, auth}` payload, which costs nothing to
+    // produce, and may submit it through their own funded source. Submission
+    // remains guarded in submitDeploymentTx.
+    if (options?.autoSubmit) {
+      const method = getSubmissionMethod(this.relayer, { forceMethod: options?.forceMethod });
+      const willSubmitViaRpc = method === "rpc" || (method === "relayer" && !this.relayer);
+      if (willSubmitViaRpc && this.usingSharedDeployer) {
+        throw sharedDeployerFeeError(this.deployerKeypair.publicKey());
+      }
+    }
+
     const constructorPolicies = options?.policies ?? this.defaultPolicies;
     return createWallet(
       {
@@ -1141,7 +1184,8 @@ export class SmartAccountKit {
    * scoped to the token — and policies attached to them, such as spending
    * limits — match and enforce on transfers.
    *
-   * The deployer keypair is used as the fee payer (transaction source).
+   * A custom `deployerSecret` sources and pays for the transaction. The shared
+   * default deployer never does — a relayer/channel account supplies both.
    *
    * @param tokenContract - Token contract address (SAC address for native assets)
    * @param recipient - Recipient address (G... or C...)
@@ -1373,7 +1417,7 @@ export class SmartAccountKit {
   private async signResimulateAndPrepare(
     hostFunc: xdr.HostFunction,
     authEntries: xdr.SorobanAuthorizationEntry[],
-    options?: SignOptions
+    options?: SignOptions & { forceMethod?: SubmissionMethod }
   ): Promise<Transaction> {
     return signResimulateAndPrepare(
       {
@@ -1381,6 +1425,7 @@ export class SmartAccountKit {
         networkPassphrase: this.networkPassphrase,
         timeoutInSeconds: this.timeoutInSeconds,
         deployerKeypair: this.deployerKeypair,
+        shouldUseFeeSponsoring: (opts) => shouldUseFeeSponsoring(this.relayer, opts),
         signAuthEntry: (entry, signOptions) => this.signAuthEntry(entry, signOptions),
       },
       hostFunc,
@@ -1456,8 +1501,7 @@ export class SmartAccountKit {
   }
 
   /**
-   * Build a deployment transaction for the smart account contract
-   * Returns an AssembledTransaction that can be signed and sent
+   * Build either a shared-deployer auth payload or a custom-deployer transaction.
    */
   private async buildDeployTransaction(
     credentialId: Buffer,
@@ -1471,6 +1515,7 @@ export class SmartAccountKit {
         networkPassphrase: this.networkPassphrase,
         rpcUrl: this.rpcUrl,
         deployerKeypair: this.deployerKeypair,
+        usingSharedDeployer: this.usingSharedDeployer,
         timeoutInSeconds: this.timeoutInSeconds,
       },
       credentialId,

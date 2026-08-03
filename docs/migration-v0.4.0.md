@@ -4,6 +4,49 @@ This release is an OpenZeppelin-parity overhaul of the SDK. It has **no backward
 
 The deployed contract surface is unchanged from `0.3.0` (the bindings were regenerated from the same canonical Protocol 27 testnet WASM hash `1b5f4534…785a` and verified byte-identical to the `0.3.0` checked-in copy). All the changes below are on the SDK side.
 
+## 0.5.0: shared-deployer deployment
+
+Shared-default-deployer deployments are now sign-only. The deployer signs the
+CreateContractV2 Soroban authorization entry; a separate account supplies the
+transaction envelope source, sequence, and fees. The SDK's auto-submit path uses
+the relayer for that, but building the payload requires no relayer at all — see
+below.
+
+This changes the manual-submission result from `createWallet()` and
+`credentials.deploy()`:
+
+```ts
+const result = await kit.createWallet(appName, userName, { autoSubmit: false });
+
+if (result.relayerPayload) {
+  // Shared default deployer. A relayer is one way to submit this; any funded
+  // source you control works, because the payload is just a signed auth entry.
+  await kit.relayer!.send(
+    result.relayerPayload.func,
+    result.relayerPayload.auth
+  );
+} else {
+  // Custom deployerSecret only.
+  await kit.relayer!.sendXdr(result.signedTransaction!);
+}
+```
+
+- `relayerPayload: { func, auth }` is returned for the shared deployer.
+- `signedTransaction` is now optional and is present only for a custom
+  `deployerSecret` that still self-sources its deployment envelope.
+- Shared deploys with `autoSubmit: true` fail when no relayer is configured.
+  They never use direct RPC or fall back to it after relayer failure.
+- With `autoSubmit: false` **no relayer is required**: you get
+  `relayerPayload: { func, auth }` and may submit it yourself, sourcing and
+  paying from any funded account. Signing the auth entry costs nothing and the
+  shared deployer is never the source.
+- Remove `forceMethod: "rpc"` from shared deployment calls — there is no config
+  that re-enables a direct-RPC shared deployment.
+
+The deterministic address tuple is unchanged: the shared deployer remains the
+CreateContractV2 `FromAddress`, and the credential-derived salt is unchanged.
+Existing derived wallet addresses therefore do not move.
+
 ## Contents
 
 - [Results & error handling](#results--error-handling)

@@ -4,11 +4,23 @@
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/index");
+		durableNamespaces: "RequestRateLimiter";
 	}
 	interface Env {
 		API_KEYS: KVNamespace;
+		RATE_LIMIT_DO: DurableObjectNamespace<import("./src/index").RequestRateLimiter>;
 		NETWORK: "testnet" | "mainnet";
 		RELAYER_BASE_URL: "https://channels.openzeppelin.com/testnet" | "https://channels.openzeppelin.com";
+		STELLAR_RPC_URL: string;
+		ALLOWED_ORIGINS?: string;
+		ALLOWED_DEPLOYER_ADDRESSES?: string;
+		ALLOWED_ACCOUNT_WASM_HASHES?: string;
+		ALLOWED_WALLET_CONTRACT_IDS?: string;
+		ALLOWED_WALLET_FUNCTIONS?: string;
+		MAX_RESOURCE_FEE_STROOPS?: string;
+		RATE_LIMIT_WINDOW_SECONDS?: string;
+		RATE_LIMIT_PER_IP?: string;
+		RATE_LIMIT_GLOBAL?: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

@@ -69,19 +69,19 @@ export function getAuthEntryAddress(entry: xdr.SorobanAuthorizationEntry): strin
   return Address.fromScAddress(getAddressCredentials(entry.credentials()).address()).toString();
 }
 
+/**
+ * Wrap address credentials as V1 `SorobanCredentials`.
+ *
+ * V1 — not CAP-0071-02 V2 — is the correct and only shape here: every caller
+ * authorizes with a classic `G…` account (the deployer, a wallet signer, or the
+ * temporary funding key), whose signature the host validates against the
+ * account's signer set rather than an address-bound payload. Smart-account
+ * (contract) authorizations use V2, but those credentials come back from
+ * simulation and are never built here.
+ */
 export function createAddressCredentials(
-  credentials: xdr.SorobanAddressCredentials,
-  options?: { version?: "legacy" | "address_v2" }
+  credentials: xdr.SorobanAddressCredentials
 ): xdr.SorobanCredentials {
-  const version = (options?.version ?? "legacy") as string;
-  if (version === "address_v2") {
-    return xdr.SorobanCredentials.sorobanCredentialsAddressV2(credentials);
-  }
-
-  if (version !== "legacy") {
-    throw new Error(`Unsupported Soroban address credential version: ${version}`);
-  }
-
   return xdr.SorobanCredentials.sorobanCredentialsAddress(credentials);
 }
 

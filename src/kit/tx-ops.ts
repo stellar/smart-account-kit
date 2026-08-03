@@ -28,6 +28,24 @@ import {
   failedTransaction,
   submissionFailure,
 } from "../contract-errors.js";
+import { isDefaultDeployer } from "../utils.js";
+
+/**
+ * The shared default deployer is a sign-only / address-derivation identity: it
+ * must never be a transaction source (sequence) or fee payer. Thrown wherever a
+ * code path would otherwise use it that way.
+ */
+function assertNotSharedDeployerSource(publicKey: string): void {
+  if (isDefaultDeployer(publicKey)) {
+    throw new SubmissionError(
+      `The shared default deployer ${publicKey} must never be a transaction ` +
+        `source or fee payer — its secret key is publicly derivable and its ` +
+        `sequence/balance can be drained or bricked by anyone. Use a relayer ` +
+        `(the relayer/channel account sources and pays) or configure a ` +
+        `dedicated \`deployerSecret\` you control for this path.`
+    );
+  }
+}
 
 type ResolveContextRuleIds = (
   entry: xdr.SorobanAuthorizationEntry,
@@ -261,6 +279,8 @@ export function signFeePayer(
   options?: SubmissionOptions
 ): void {
   if (!deps.shouldUseFeeSponsoring(options) || deps.hasSourceAccountAuth(transaction)) {
+    // The deployer must never sign as fee payer when it is the shared default.
+    assertNotSharedDeployerSource(keypair.publicKey());
     transaction.sign(keypair);
   }
 }
@@ -311,12 +331,44 @@ export async function resimulateAndAssemble(
   return rpc.assembleTransaction(normalizedTx as Transaction, resimResult).build() as Transaction;
 }
 
+/**
+ * Pick the source account for a re-simulation, honouring the sign-only
+ * invariant for the shared default deployer.
+ *
+ * On the fee-sponsored (relayer) path the built envelope is DISCARDED —
+ * `sendAndPoll` submits only `func` + `auth`, and the relayer/channel account
+ * sources and pays. So we must NOT read the deployer's real sequence there: a
+ * `bumpSequence`-bricked shared deployer would otherwise overflow the sequence
+ * increment and break re-simulation even though its sequence is never used. A
+ * placeholder sequence is correct and safe.
+ *
+ * On the direct-RPC path the envelope IS submitted, so its source's real
+ * sequence is required — and the shared default deployer must never be that
+ * source (refused here; a dedicated `deployerSecret` you control is fine).
+ */
+export async function resolveResimSource(
+  deps: {
+    rpc: rpc.Server;
+    deployerKeypair: Keypair;
+    shouldUseFeeSponsoring: (options?: SubmissionOptions) => boolean;
+  },
+  options?: SubmissionOptions
+): Promise<Account> {
+  const publicKey = deps.deployerKeypair.publicKey();
+  if (deps.shouldUseFeeSponsoring(options)) {
+    return new Account(publicKey, "0");
+  }
+  assertNotSharedDeployerSource(publicKey);
+  return deps.rpc.getAccount(publicKey);
+}
+
 export async function signResimulateAndPrepare(
   deps: {
     rpc: rpc.Server;
     networkPassphrase: string;
     timeoutInSeconds: number;
     deployerKeypair: Keypair;
+    shouldUseFeeSponsoring: (options?: SubmissionOptions) => boolean;
     signAuthEntry: (
       entry: xdr.SorobanAuthorizationEntry,
       options?: {
@@ -331,6 +383,7 @@ export async function signResimulateAndPrepare(
   options?: {
     credentialId?: string;
     expiration?: number;
+    forceMethod?: SubmissionMethod;
     resolveContextRuleIds?: ResolveContextRuleIds;
   }
 ): Promise<Transaction> {
@@ -346,13 +399,19 @@ export async function signResimulateAndPrepare(
     signedAuthEntries.push(signedEntry);
   }
 
-  let sourceAccount;
+  // Source selection honours the sign-only invariant: dummy source on the
+  // relayer path (envelope discarded), real source only on direct RPC where the
+  // shared deployer is refused. See resolveResimSource.
+  let sourceAccount: Account;
   try {
-    sourceAccount = await deps.rpc.getAccount(deps.deployerKeypair.publicKey());
+    sourceAccount = await resolveResimSource(deps, { forceMethod: options?.forceMethod });
   } catch (error) {
+    if (error instanceof SubmissionError) throw error;
     throw new SubmissionError(
-      `Re-simulation requires the deployer account to exist on-chain. ` +
-      `Fund ${deps.deployerKeypair.publicKey()} before re-simulating transactions.`
+      `Re-simulation requires the fee-paying source account ` +
+      `${deps.deployerKeypair.publicKey()} to exist on-chain. Use a relayer ` +
+      `(fee sponsoring) so a sponsor account sources fees, or configure a ` +
+      `dedicated \`deployerSecret\` you control and fund that account.`
     );
   }
 
@@ -416,6 +475,7 @@ export async function signAndSubmit(
       options?: {
         credentialId?: string;
         expiration?: number;
+        forceMethod?: SubmissionMethod;
         resolveContextRuleIds?: ResolveContextRuleIds;
       }
     ) => Promise<Transaction>;
@@ -465,6 +525,7 @@ export async function signAndSubmit(
         {
           credentialId: options?.credentialId,
           expiration: options?.expiration,
+          forceMethod: options?.forceMethod,
           resolveContextRuleIds: options?.resolveContextRuleIds,
         }
       );

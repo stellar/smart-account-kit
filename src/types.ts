@@ -139,14 +139,21 @@ export interface SmartAccountConfig {
   storage?: StorageAdapter;
 
   /**
-   * Optional secret key (S...) for the fee-paying deployer account.
+   * Optional secret key (S...) for a deployer account you control, which then
+   * sources and pays for its own deployments.
    *
    * Defaults to a deterministic keypair derived from a fixed, well-known seed
    * (`DEFAULT_DEPLOYER_SEED`), which makes smart-account addresses reproducible
-   * across clients from a credential ID alone. The deployer only pays fees and
-   * salts the deploy — it never controls the smart account — but it IS a shared,
-   * publicly-known keypair. Provide your own `deployerSecret` for a dedicated
-   * fee payer (note: this changes the derived contract addresses).
+   * across clients from a credential ID alone. The deployer only salts the
+   * deploy. A custom deployer can source fees; the shared default cannot.
+   *
+   * ⚠️ The default deployer's secret key is **publicly derivable from this
+   * package's source** and is a *shared* account across every default-configured
+   * integrator. It MUST NOT be used as a fee source on a live network: anyone
+   * can spend its balance. The SDK uses it only to sign the deploy authorization
+   * entry; a relayer/channel account supplies the transaction source and fees.
+   * Configure a `relayerUrl`, or set your own `deployerSecret`
+   * (note: a custom deployer changes the derived contract addresses).
    */
   deployerSecret?: string;
 
@@ -362,8 +369,14 @@ export interface CreateWalletResult {
   /** Smart account contract address */
   contractId: string;
 
-  /** Signed deployment transaction (ready to submit) */
-  signedTransaction: string;
+  /** Signed deployment transaction for a custom deployer. */
+  signedTransaction?: string;
+
+  /** Signed auth-entry payload for the shared deployer's relayer-only route. */
+  relayerPayload?: {
+    func: string;
+    auth: string[];
+  };
 }
 
 /**

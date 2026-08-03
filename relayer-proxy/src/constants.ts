@@ -50,13 +50,36 @@ export const MISSING_ACCOUNT_PATTERN = /Account not found:\s*(G[A-Z0-9]{55})/;
 export const TESTNET_RETRY_DURATION_MS = 5 * 60 * 1000;
 
 // ============================================================================
+// Abuse Prevention
+// ============================================================================
+
+export const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60;
+export const DEFAULT_RATE_LIMIT_PER_IP = 10;
+export const DEFAULT_RATE_LIMIT_GLOBAL = 100;
+export const DEFAULT_MAX_RESOURCE_FEE_STROOPS = 1_000_000n;
+export const SIMULATION_SOURCE =
+  "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+export const DEFAULT_WALLET_FUNCTIONS = [
+  "execute",
+  "upgrade",
+  "add_policy",
+  "remove_policy",
+  "add_signer",
+  "remove_signer",
+  "add_context_rule",
+  "remove_context_rule",
+  "batch_add_signer",
+  "update_context_rule_name",
+  "update_context_rule_valid_until",
+] as const;
+
+// ============================================================================
 // HTTP Headers
 // ============================================================================
 
 export const IP_HEADERS = {
   CF_CONNECTING_IP: "CF-Connecting-IP",
-  X_FORWARDED_FOR: "X-Forwarded-For",
-  X_REAL_IP: "X-Real-IP",
 } as const;
 
 /** Default IP value when none can be determined */

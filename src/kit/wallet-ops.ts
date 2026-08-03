@@ -16,6 +16,10 @@ import { WEBAUTHN_TIMEOUT_MS, DEFAULT_SESSION_EXPIRY_MS } from "../constants.js"
 import { deriveContractAddress, generateChallenge } from "../utils.js";
 import { ValidationError } from "../errors.js";
 import { failedTransaction } from "../contract-errors.js";
+import {
+  prepareDeploymentArtifacts,
+  type DeployTransaction,
+} from "./deploy-ops.js";
 
 export async function createWallet(
   deps: {
@@ -42,10 +46,10 @@ export async function createWallet(
     buildDeployTransaction: (
       credentialIdBuffer: Buffer,
       publicKey: Uint8Array
-    ) => Promise<contract.AssembledTransaction<null>>;
+    ) => Promise<DeployTransaction>;
     signWithDeployer: (tx: contract.AssembledTransaction<null>) => Promise<void>;
     submitDeploymentTx: (
-      tx: contract.AssembledTransaction<null>,
+      tx: DeployTransaction,
       credentialId: string,
       options?: SubmissionOptions
     ) => Promise<TransactionResult>;
@@ -111,11 +115,10 @@ export async function createWallet(
   );
 
   const submissionOpts: SubmissionOptions = { forceMethod: options?.forceMethod };
-  await deps.signWithDeployer(deployTx);
-  if (!deployTx.signed) {
-    throw new Error("Failed to sign deployment transaction");
-  }
-  const signedTransaction = deployTx.signed.toXDR();
+  const deploymentArtifacts = await prepareDeploymentArtifacts(
+    deployTx,
+    deps.signWithDeployer
+  );
 
   deps.setConnectedState(contractId, credentialId);
 
@@ -149,7 +152,7 @@ export async function createWallet(
     credentialId,
     publicKey,
     contractId,
-    signedTransaction,
+    ...deploymentArtifacts,
     submitResult,
     fundResult,
   };

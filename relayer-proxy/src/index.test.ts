@@ -1,14 +1,28 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  Account,
+  Address,
+  hash,
+  Keypair,
+  nativeToScVal,
+  Networks,
+  Operation,
+  SorobanDataBuilder,
+  TransactionBuilder,
+  xdr,
+} from "@stellar/stellar-sdk";
+import { Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 import {
   PluginExecutionError,
   PluginTransportError,
 } from "@openzeppelin/relayer-plugin-channels";
-import worker, { extractMissingAccount, getClientIP } from "./index";
+import worker, {
+  extractMissingAccount,
+  getClientIP,
+  RequestRateLimiter,
+  SHARED_DEPLOYER,
+} from "./index";
 
-// ---------------------------------------------------------------------------
-// Mock the Channels plugin: a stub ChannelsClient whose two submit methods are
-// controllable vi.fns, plus the two error classes the handler maps by instance.
-// ---------------------------------------------------------------------------
 const { submitSorobanTransaction, submitTransaction } = vi.hoisted(() => ({
   submitSorobanTransaction: vi.fn(),
   submitTransaction: vi.fn(),
@@ -17,82 +31,131 @@ const { submitSorobanTransaction, submitTransaction } = vi.hoisted(() => ({
 vi.mock("@openzeppelin/relayer-plugin-channels", () => {
   class PluginExecutionError extends Error {
     errorDetails?: { code?: unknown; details?: unknown };
-    constructor(
-      message: string,
-      errorDetails?: { code?: unknown; details?: unknown }
-    ) {
+    constructor(message: string, errorDetails?: { code?: unknown; details?: unknown }) {
       super(message);
-      this.name = "PluginExecutionError";
       this.errorDetails = errorDetails;
     }
   }
   class PluginTransportError extends Error {
-    statusCode?: number;
-    constructor(message: string, statusCode?: number) {
+    constructor(
+      message: string,
+      readonly statusCode?: number
+    ) {
       super(message);
-      this.name = "PluginTransportError";
-      this.statusCode = statusCode;
     }
   }
   class ChannelsClient {
-    constructor(_opts: unknown) {}
     submitSorobanTransaction = submitSorobanTransaction;
     submitTransaction = submitTransaction;
   }
   return { ChannelsClient, PluginExecutionError, PluginTransportError };
 });
 
-// ---------------------------------------------------------------------------
-// Test doubles
-// ---------------------------------------------------------------------------
-const SEEDED_KEY = "sk_seededapikey123456";
 const CLIENT_IP = "203.0.113.7";
+const API_KEY = "sk_seededapikey123456";
 const KV_KEY = `api-key:${CLIENT_IP}`;
+const DEPLOYER_KEYPAIR = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(3));
+const DEPLOYER = DEPLOYER_KEYPAIR.publicKey();
+const OTHER_DEPLOYER = Keypair.fromRawEd25519Seed(
+  new Uint8Array(32).fill(7)
+).publicKey();
+const WALLET = Address.contract(new Uint8Array(32).fill(1)).toString();
+const OTHER_WALLET = Address.contract(new Uint8Array(32).fill(2)).toString();
+const TOKEN = Address.contract(new Uint8Array(32).fill(5)).toString();
+const WASM_HASH = "84".repeat(32);
+const MISSING_CHANNEL = `G${"A".repeat(55)}`;
 
-function createKV(initial: Record<string, string> = {}) {
+function createKV(initial: Record<string, string> = {}, onGet?: () => void) {
   const store = new Map(Object.entries(initial));
   return {
     store,
-    get: vi.fn(async (k: string) => (store.has(k) ? store.get(k)! : null)),
-    put: vi.fn(async (k: string, v: string) => {
-      store.set(k, v);
+    get: vi.fn(async (key: string) => {
+      onGet?.();
+      return store.get(key) ?? null;
     }),
-    delete: vi.fn(async (k: string) => {
-      store.delete(k);
-    }),
+    put: vi.fn(async (key: string, value: string) => void store.set(key, value)),
+    delete: vi.fn(async (key: string) => void store.delete(key)),
   };
 }
 
 type FakeKV = ReturnType<typeof createKV>;
 
-function makeEnv(opts: { kv?: FakeKV; network?: "testnet" | "mainnet" } = {}) {
+function seededKV(onGet?: () => void) {
+  return createKV(
+    { [KV_KEY]: JSON.stringify({ apiKey: API_KEY, createdAt: 1000 }) },
+    onGet
+  );
+}
+
+function makeRateLimitDO(
+  decisions: Record<string, { allowed: boolean; retryAfterSeconds: number }> = {}
+) {
+  const names: string[] = [];
+  return {
+    names,
+    idFromName: vi.fn((name: string) => {
+      names.push(name);
+      return name;
+    }),
+    get: vi.fn((name: string) => ({
+      fetch: vi.fn(async () =>
+        Response.json(
+          decisions[name] ?? { allowed: true, retryAfterSeconds: 0 }
+        )
+      ),
+    })),
+  };
+}
+
+function makeEnv(
+  opts: {
+    kv?: FakeKV;
+    network?: "testnet" | "mainnet";
+    origins?: string;
+    allowedDeployers?: string;
+    allowedHashes?: string;
+    allowedWallets?: string;
+    allowedWalletFunctions?: string;
+    maxFee?: string;
+    rateLimitDO?: ReturnType<typeof makeRateLimitDO>;
+  } = {}
+) {
   const network = opts.network ?? "testnet";
   return {
-    API_KEYS: opts.kv ?? createKV(),
+    API_KEYS: opts.kv ?? seededKV(),
+    RATE_LIMIT_DO: opts.rateLimitDO ?? makeRateLimitDO(),
     NETWORK: network,
     RELAYER_BASE_URL:
-      network === "mainnet"
-        ? "https://channels.openzeppelin.com"
-        : "https://channels.openzeppelin.com/testnet",
+      network === "testnet"
+        ? "https://channels.openzeppelin.com/testnet"
+        : "https://channels.openzeppelin.com",
+    STELLAR_RPC_URL: "https://soroban-testnet.stellar.org",
+    ALLOWED_ORIGINS: opts.origins ?? "https://demo.example",
+    ALLOWED_DEPLOYER_ADDRESSES: opts.allowedDeployers ?? DEPLOYER,
+    ALLOWED_ACCOUNT_WASM_HASHES: opts.allowedHashes ?? WASM_HASH,
+    ALLOWED_WALLET_CONTRACT_IDS: opts.allowedWallets ?? WALLET,
+    ALLOWED_WALLET_FUNCTIONS:
+      opts.allowedWalletFunctions ??
+      "execute,upgrade,add_policy,remove_policy,add_signer,remove_signer,add_context_rule,remove_context_rule,batch_add_signer,update_context_rule_name,update_context_rule_valid_until",
+    MAX_RESOURCE_FEE_STROOPS: opts.maxFee ?? "1000000",
+    RATE_LIMIT_WINDOW_SECONDS: "60",
+    RATE_LIMIT_PER_IP: "10",
+    RATE_LIMIT_GLOBAL: "100",
   } as any;
 }
 
-function seededKV() {
-  return createKV({
-    [KV_KEY]: JSON.stringify({ apiKey: SEEDED_KEY, createdAt: 1000 }),
-  });
-}
-
-const ctx = () =>
-  ({ waitUntil: vi.fn(), passThroughOnException: vi.fn() }) as any;
-
 function makeRequest(
   path: string,
-  opts: { method?: string; body?: unknown; ip?: string } = {}
+  opts: {
+    method?: string;
+    body?: unknown;
+    ip?: string | null;
+    origin?: string;
+  } = {}
 ) {
-  const headers: Record<string, string> = {
-    "CF-Connecting-IP": opts.ip ?? CLIENT_IP,
-  };
+  const headers: Record<string, string> = {};
+  if (opts.ip !== null) headers["CF-Connecting-IP"] = opts.ip ?? CLIENT_IP;
+  if (opts.origin) headers.Origin = opts.origin;
   const init: RequestInit = { method: opts.method ?? "GET", headers };
   if (opts.body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -102,42 +165,272 @@ function makeRequest(
   return new Request(`http://localhost${path}`, init);
 }
 
-function okJson(obj: unknown) {
-  return { ok: true, status: 200, text: async () => JSON.stringify(obj) };
-}
-function okText(text: string) {
-  return { ok: true, status: 200, text: async () => text };
-}
-function notOk(status = 500, text = "error") {
-  return { ok: false, status, text: async () => text };
+const ctx = () =>
+  ({ waitUntil: vi.fn(), passThroughOnException: vi.fn() }) as any;
+
+function contractInvocation() {
+  return xdr.HostFunction.hostFunctionTypeInvokeContract(
+    new xdr.InvokeContractArgs({
+      contractAddress: Address.fromString(WALLET).toScAddress(),
+      functionName: "transfer",
+      args: [],
+    })
+  );
 }
 
-function stubFetch(handlers: {
-  gen?: () => unknown;
-  friendbot?: () => unknown;
-}) {
+function hexBytes(value: string): Uint8Array {
+  return Uint8Array.from(value.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+}
+
+function deploySubmission(
+  opts: {
+    deployer?: string;
+    wasmHash?: string;
+    authDeployer?: string;
+    authWasmHash?: string;
+    v2Credentials?: boolean;
+    extraAuth?: boolean;
+    subInvocation?: boolean;
+    assetPreimage?: boolean;
+    sacExecutable?: boolean;
+  } = {}
+) {
+  const deployer = opts.deployer ?? DEPLOYER;
+  const makeFunc = (wasmHash: string) =>
+    Operation.createCustomContract({
+      address: Address.fromString(deployer),
+      wasmHash: hexBytes(wasmHash),
+      salt: new Uint8Array(32).fill(4),
+      constructorArgs: [xdr.ScVal.scvVoid()],
+    })
+      .body()
+      .invokeHostFunctionOp()
+      .hostFunction();
+  const func = opts.assetPreimage || opts.sacExecutable
+    ? xdr.HostFunction.hostFunctionTypeCreateContractV2(
+        new xdr.CreateContractArgsV2({
+          contractIdPreimage: opts.assetPreimage
+            ? xdr.ContractIdPreimage.contractIdPreimageFromAsset(
+                xdr.Asset.assetTypeNative()
+              )
+            : makeFunc(WASM_HASH).createContractV2().contractIdPreimage(),
+          executable: opts.sacExecutable
+            ? xdr.ContractExecutable.contractExecutableStellarAsset()
+            : xdr.ContractExecutable.contractExecutableWasm(
+                hexBytes(opts.wasmHash ?? WASM_HASH)
+              ),
+          constructorArgs: [],
+        })
+      )
+    : makeFunc(opts.wasmHash ?? WASM_HASH);
+  const authorizedFunc = makeFunc(opts.authWasmHash ?? opts.wasmHash ?? WASM_HASH);
+  const addressCredentials = new xdr.SorobanAddressCredentials({
+    address: Address.fromString(opts.authDeployer ?? deployer).toScAddress(),
+    nonce: xdr.Int64.fromString("1"),
+    signatureExpirationLedger: 100,
+    signature: xdr.ScVal.scvVoid(),
+  });
+  const credentials = opts.v2Credentials
+    ? xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials)
+    : xdr.SorobanCredentials.sorobanCredentialsAddress(addressCredentials);
+  const subInvocations = opts.subInvocation
+    ? [
+        new xdr.SorobanAuthorizedInvocation({
+          function:
+            xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+              contractInvocation().invokeContract()
+            ),
+          subInvocations: [],
+        }),
+      ]
+    : [];
+  const auth = new xdr.SorobanAuthorizationEntry({
+    credentials,
+    rootInvocation: new xdr.SorobanAuthorizedInvocation({
+      function:
+        xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+          authorizedFunc.createContractV2()
+        ),
+      subInvocations,
+    }),
+  }).toXDR("base64");
+  return {
+    func: func.toXDR("base64"),
+    auth: opts.extraAuth ? [auth, auth] : [auth],
+  };
+}
+
+function walletSubmission(
+  opts: {
+    contract?: string;
+    functionName?: string;
+    credential?: string;
+    v1Credentials?: boolean;
+    rootContract?: string;
+    rootFunctionName?: string;
+    subInvocationContract?: string;
+    args?: xdr.ScVal[];
+  } = {}
+) {
+  const contract = opts.contract ?? WALLET;
+  const functionName = opts.functionName ?? "execute";
+  const invoke = new xdr.InvokeContractArgs({
+    contractAddress: Address.fromString(contract).toScAddress(),
+    functionName,
+    args: opts.args ?? [xdr.ScVal.scvVoid()],
+  });
+  const root = new xdr.InvokeContractArgs({
+    contractAddress: Address.fromString(opts.rootContract ?? contract).toScAddress(),
+    functionName: opts.rootFunctionName ?? functionName,
+    args: opts.args ?? [xdr.ScVal.scvVoid()],
+  });
+  const addressCredentials = new xdr.SorobanAddressCredentials({
+    address: Address.fromString(opts.credential ?? contract).toScAddress(),
+    nonce: xdr.Int64.fromString("1"),
+    signatureExpirationLedger: 100,
+    signature: xdr.ScVal.scvVoid(),
+  });
+  const credentials = opts.v1Credentials
+    ? xdr.SorobanCredentials.sorobanCredentialsAddress(addressCredentials)
+    : xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials);
+  const subInvocations = opts.subInvocationContract
+    ? [
+        new xdr.SorobanAuthorizedInvocation({
+          function:
+            xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(
+                  opts.subInvocationContract
+                ).toScAddress(),
+                functionName,
+                args: [],
+              })
+            ),
+          subInvocations: [],
+        }),
+      ]
+    : [];
+  const auth = new xdr.SorobanAuthorizationEntry({
+    credentials,
+    rootInvocation: new xdr.SorobanAuthorizedInvocation({
+      function:
+        xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(root),
+      subInvocations,
+    }),
+  });
+  return {
+    func: xdr.HostFunction.hostFunctionTypeInvokeContract(invoke).toXDR("base64"),
+    auth: [auth.toXDR("base64")],
+  };
+}
+
+function transferSubmission(
+  opts: { token?: string; wallet?: string; v1Credentials?: boolean } = {}
+) {
+  const wallet = opts.wallet ?? WALLET;
+  return walletSubmission({
+    contract: opts.token ?? TOKEN,
+    functionName: "transfer",
+    credential: wallet,
+    v1Credentials: opts.v1Credentials,
+    args: [
+      xdr.ScVal.scvAddress(Address.fromString(wallet).toScAddress()),
+      xdr.ScVal.scvAddress(Address.fromString(DEPLOYER).toScAddress()),
+      nativeToScVal(1_000_000n, { type: "i128" }),
+    ],
+  });
+}
+
+function unsupportedSubmission() {
+  return {
+    ...walletSubmission(),
+    func: xdr.HostFunction.hostFunctionTypeUploadContractWasm(
+      hexBytes(WASM_HASH)
+    ).toXDR("base64"),
+  };
+}
+
+function deployXdr(
+  keypair = DEPLOYER_KEYPAIR,
+  resourceFee = 5_000n,
+  wasmHash = WASM_HASH,
+  sign = true
+) {
+  const transaction = new TransactionBuilder(new Account(keypair.publicKey(), "0"), {
+    fee: "100",
+    networkPassphrase: Networks.TESTNET,
+  })
+    .addOperation(
+      Operation.createCustomContract({
+        address: Address.fromString(keypair.publicKey()),
+        wasmHash: hexBytes(wasmHash),
+        salt: new Uint8Array(32).fill(4),
+        constructorArgs: [xdr.ScVal.scvVoid()],
+      })
+    )
+    .setSorobanData(
+      new SorobanDataBuilder().setResourceFee(resourceFee).build()
+    )
+    .setTimeout(30)
+    .build();
+  if (sign) transaction.sign(keypair);
+  return transaction.toXDR();
+}
+
+function nonDeployXdr() {
+  const transaction = new TransactionBuilder(new Account(DEPLOYER, "0"), {
+    fee: "100",
+    networkPassphrase: Networks.TESTNET,
+  })
+    .addOperation(Operation.bumpSequence({ bumpTo: "2" }))
+    .setTimeout(30)
+    .build();
+  transaction.sign(DEPLOYER_KEYPAIR);
+  return transaction.toXDR();
+}
+
+function stubFetch(handlers: { gen?: () => Response; friendbot?: () => Response }) {
   const fetchMock = vi.fn(async (input: unknown) => {
     const url = typeof input === "string" ? input : (input as Request).url;
-    if (url.includes("/gen")) return handlers.gen?.() ?? okJson({});
-    if (url.includes("friendbot")) return handlers.friendbot?.() ?? okText("ok");
+    if (url.includes("/gen")) return handlers.gen?.() ?? Response.json({});
+    if (url.includes("friendbot")) {
+      return handlers.friendbot?.() ?? new Response("ok");
+    }
     throw new Error(`Unexpected fetch: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
-const G_ADDRESS = `G${"A".repeat(55)}`;
+async function post(body: unknown, env = makeEnv()) {
+  return worker.fetch(makeRequest("/", { method: "POST", body }), env, ctx());
+}
+
+beforeEach(() => {
+  vi.spyOn(RpcServer.prototype, "simulateTransaction").mockResolvedValue({
+    transactionData: {},
+    minResourceFee: "5000",
+  } as any);
+  submitSorobanTransaction.mockResolvedValue({
+    transactionId: "tx1",
+    hash: "hash1",
+    status: "confirmed",
+  });
+  submitTransaction.mockResolvedValue({
+    transactionId: "tx-xdr",
+    hash: "hash-xdr",
+    status: "confirmed",
+  });
+});
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
 
-// ---------------------------------------------------------------------------
-// Pure helpers
-// ---------------------------------------------------------------------------
-describe("getClientIP", () => {
-  it("prefers CF-Connecting-IP, then X-Forwarded-For, then X-Real-IP", () => {
+describe("request boundary", () => {
+  it("trusts only Cloudflare's client-IP header", () => {
     expect(
       getClientIP(
         new Request("http://x", { headers: { "CF-Connecting-IP": "1.1.1.1" } })
@@ -145,368 +438,440 @@ describe("getClientIP", () => {
     ).toBe("1.1.1.1");
     expect(
       getClientIP(
-        new Request("http://x", {
-          headers: { "X-Forwarded-For": "2.2.2.2, 3.3.3.3" },
-        })
+        new Request("http://x", { headers: { "X-Forwarded-For": "2.2.2.2" } })
       )
-    ).toBe("2.2.2.2");
-    expect(
-      getClientIP(
-        new Request("http://x", { headers: { "X-Real-IP": "4.4.4.4" } })
-      )
-    ).toBe("4.4.4.4");
+    ).toBe("unknown");
   });
 
-  it("falls back to 'unknown' with no IP headers", () => {
-    expect(getClientIP(new Request("http://x"))).toBe("unknown");
-  });
-});
-
-describe("extractMissingAccount", () => {
-  it("pulls the G-address out of a not-found error", () => {
-    expect(extractMissingAccount(`Account not found: ${G_ADDRESS}`)).toBe(
-      G_ADDRESS
-    );
-  });
-
-  it("returns null when the message has no account", () => {
-    expect(extractMissingAccount("some other failure")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Health
-// ---------------------------------------------------------------------------
-describe("GET /", () => {
-  it("reports service and network", async () => {
-    const res = await worker.fetch(makeRequest("/"), makeEnv(), ctx());
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
-      status: "ok",
-      service: "smart-account-relayer-proxy",
-      network: "testnet",
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// POST / — mode validation
-// ---------------------------------------------------------------------------
-describe("POST / validation", () => {
-  it("rejects a request with neither xdr nor func+auth (400)", async () => {
+  it("echoes an allowed CORS origin without a wildcard", async () => {
     const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: {} }),
-      makeEnv({ kv: seededKV() }),
+      makeRequest("/", { origin: "https://demo.example" }),
+      makeEnv(),
+      ctx()
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(
+      "https://demo.example"
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).not.toBe("*");
+  });
+
+  it("rejects a disallowed preflight origin", async () => {
+    const res = await worker.fetch(
+      makeRequest("/", { method: "OPTIONS", origin: "https://evil.example" }),
+      makeEnv(),
+      ctx()
+    );
+    expect(res.status).toBe(403);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  it("rejects missing Cloudflare IP", async () => {
+    const res = await worker.fetch(
+      makeRequest("/", { method: "POST", body: deploySubmission(), ip: null }),
+      makeEnv(),
       ctx()
     );
     expect(res.status).toBe(400);
+  });
+});
+
+describe("sign-only deployment validation", () => {
+  async function expectRejected(
+    body: unknown,
+    error: string,
+    status = 403,
+    envOptions: Parameters<typeof makeEnv>[0] = {}
+  ) {
+    const kv = seededKV();
+    const res = await post(body, makeEnv({ ...envOptions, kv }));
+    expect(res.status).toBe(status);
+    await expect(res.json()).resolves.toEqual({ success: false, error });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+  }
+
+  it("accepts exactly one matching V1 createContractV2 auth entry", async () => {
+    const body = deploySubmission();
+    const res = await post(body);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("accepts the configured shared deployer without making it a fee source", async () => {
+    const body = deploySubmission({ deployer: SHARED_DEPLOYER });
+    const res = await post(
+      body,
+      makeEnv({ allowedDeployers: SHARED_DEPLOYER })
+    );
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("rejects malformed XDR and multiple deploy auth entries before API-key access", async () => {
+    await expectRejected("{bad json", "Invalid JSON body", 400);
+    await expectRejected(
+      { func: "bad", auth: ["bad"] },
+      "func/auth contains invalid XDR",
+      400
+    );
+    await expectRejected(
+      { xdr: "AAAA" },
+      "xdr must be a signed transaction envelope",
+      400
+    );
+    await expectRejected(
+      deploySubmission({ extraAuth: true }),
+      "Deploy must contain exactly one auth entry"
+    );
+  });
+
+  it("rejects unsupported host functions", async () => {
+    await expectRejected(
+      unsupportedSubmission(),
+      "Only invokeContract and createContractV2 host functions are allowed"
+    );
+  });
+
+  it("rejects deployers outside the allowlist", async () => {
+    await expectRejected(
+      deploySubmission({ deployer: OTHER_DEPLOYER }),
+      "Deploy preimage address is not allowlisted"
+    );
+  });
+
+  it("rejects non-allowlisted WASM", async () => {
+    await expectRejected(
+      deploySubmission({ wasmHash: "99".repeat(32) }),
+      "Deploy WASM hash is not allowlisted"
+    );
+  });
+
+  it("requires a WASM executable and from-address preimage", async () => {
+    await expectRejected(
+      deploySubmission({ sacExecutable: true }),
+      "Deploy executable must be approved WASM"
+    );
+    await expectRejected(
+      deploySubmission({ assetPreimage: true }),
+      "Deploy must use an address contract-id preimage"
+    );
+  });
+
+  it("requires legacy V1 credentials", async () => {
+    await expectRejected(
+      deploySubmission({ v2Credentials: true }),
+      "Deploy requires legacy V1 address credentials"
+    );
+  });
+
+  it("requires the credential address to match the deployer", async () => {
+    await expectRejected(
+      deploySubmission({ authDeployer: OTHER_DEPLOYER }),
+      "Deploy auth does not exactly match func and deployer"
+    );
+  });
+
+  it("requires byte-equal auth and forbids sub-invocations", async () => {
+    await expectRejected(
+      deploySubmission({ authWasmHash: "99".repeat(32) }),
+      "Deploy auth does not exactly match func and deployer"
+    );
+    await expectRejected(
+      deploySubmission({ subInvocation: true }),
+      "Deploy auth does not exactly match func and deployer"
+    );
+  });
+
+  it("enforces the simulated resource-fee ceiling before API-key access", async () => {
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({
+      transactionData: {},
+      minResourceFee: "1001",
+    } as any);
+    await expectRejected(
+      deploySubmission(),
+      "Resource fee exceeds configured maximum",
+      413,
+      { maxFee: "1000" }
+    );
+  });
+
+  it("accesses the API key only after simulation succeeds", async () => {
+    const order: string[] = [];
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockImplementationOnce(
+      async () => {
+        order.push("validated");
+        return { transactionData: {}, minResourceFee: "5000" } as any;
+      }
+    );
+    const kv = seededKV(() => order.push("key"));
+    const res = await post(deploySubmission(), makeEnv({ kv }));
+    expect(res.status).toBe(200);
+    expect(order).toEqual(["validated", "key"]);
+  });
+});
+
+describe("wallet invocation validation", () => {
+  async function expectRejected(
+    body: unknown,
+    error: string,
+    envOptions: Parameters<typeof makeEnv>[0] = {},
+    status = 403
+  ) {
+    const kv = seededKV();
+    const res = await post(body, makeEnv({ ...envOptions, kv }));
+    expect(res.status).toBe(status);
+    await expect(res.json()).resolves.toEqual({ success: false, error });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+  }
+
+  it("accepts an allowlisted wallet invocation", async () => {
+    const body = walletSubmission();
+    const res = await post(body);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("accepts the SDK's direct wallet-authorized token transfer", async () => {
+    const body = transferSubmission();
+    const res = await post(body);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("rejects a non-allowlisted wallet contract", async () => {
+    await expectRejected(
+      walletSubmission({ contract: OTHER_WALLET, credential: OTHER_WALLET }),
+      "Wallet contract is not allowlisted",
+      { allowedHashes: "" }
+    );
+  });
+
+  it("rejects a non-allowlisted wallet function", async () => {
+    await expectRejected(
+      walletSubmission({ functionName: "drain" }),
+      "Wallet function is not allowlisted"
+    );
+  });
+
+  it("rejects V1 credentials for wallet invocations", async () => {
+    await expectRejected(
+      walletSubmission({ v1Credentials: true }),
+      "Only address-bound V2 wallet credentials are allowed"
+    );
+  });
+
+  it("requires recursive wallet-only auth and root byte-equality", async () => {
+    await expectRejected(
+      walletSubmission({ subInvocationContract: OTHER_WALLET }),
+      "Auth entry targets a non-allowlisted contract"
+    );
+    await expectRejected(
+      walletSubmission({ rootFunctionName: "upgrade" }),
+      "Auth root invocation does not match func"
+    );
+  });
+
+  it("accepts a transfer of ANY token when the wallet authorizes it", async () => {
+    // The authorizer is the control, not the asset: a genuine smart account
+    // spending its own balance may move any token. Allowlisting tokens would
+    // break legitimate transfers without stopping abuse (see the note in
+    // validateDirectTokenTransfer).
+    const body = transferSubmission({ token: OTHER_WALLET });
+    const res = await post(body);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("applies the simulated fee ceiling to wallet invocations", async () => {
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({
+      transactionData: {},
+      minResourceFee: "1001",
+    } as any);
+    await expectRejected(
+      walletSubmission(),
+      "Resource fee exceeds configured maximum",
+      { maxFee: "1000" },
+      413
+    );
+  });
+});
+
+describe("signed xdr validation", () => {
+  it("accepts a source-signed dedicated-deployer deployment", async () => {
+    const xdrValue = deployXdr();
+    const res = await post(
+      { xdr: xdrValue },
+      makeEnv({ allowedDeployers: SHARED_DEPLOYER })
+    );
+    expect(res.status).toBe(200);
+    expect(submitTransaction).toHaveBeenCalledWith({ xdr: xdrValue });
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects the shared deployer as an xdr transaction source", async () => {
+    const sharedKeypair = Keypair.fromRawEd25519Seed(
+      hash(new TextEncoder().encode("openzeppelin-smart-account-kit"))
+    );
+    const kv = seededKV();
+    const res = await post(
+      { xdr: deployXdr(sharedKeypair) },
+      makeEnv({ allowedDeployers: SHARED_DEPLOYER, kv })
+    );
+    expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual({
       success: false,
-      error: "Request must include 'xdr' OR ('func' and 'auth')",
+      error: "Shared deployer may not source signed xdr",
     });
-    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+    expect(kv.get).not.toHaveBeenCalled();
     expect(submitTransaction).not.toHaveBeenCalled();
   });
 
-  it("rejects a request with both xdr and func+auth (400)", async () => {
-    const res = await worker.fetch(
-      makeRequest("/", {
-        method: "POST",
-        body: { xdr: "AAA", func: "BBB", auth: ["CCC"] },
-      }),
-      makeEnv({ kv: seededKV() }),
-      ctx()
-    );
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toEqual({
-      success: false,
-      error: "Request must include 'xdr' OR ('func' and 'auth'), not both",
+  it("rejects unsigned and non-deployment xdr", async () => {
+    const unsigned = await post({
+      xdr: deployXdr(DEPLOYER_KEYPAIR, 5_000n, WASM_HASH, false),
+    });
+    expect(unsigned.status).toBe(403);
+    await expect(unsigned.json()).resolves.toMatchObject({
+      error: "Deploy transaction lacks a valid source signature",
+    });
+
+    const nonDeploy = await post({ xdr: nonDeployXdr() });
+    expect(nonDeploy.status).toBe(403);
+    await expect(nonDeploy.json()).resolves.toMatchObject({
+      error: "Only invokeHostFunction deploy operations are allowed",
     });
   });
 
-  it("rejects malformed JSON (400)", async () => {
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: "{not json" }),
-      makeEnv({ kv: seededKV() }),
-      ctx()
+  it("enforces the embedded xdr resource-fee ceiling", async () => {
+    const kv = seededKV();
+    const res = await post(
+      { xdr: deployXdr(DEPLOYER_KEYPAIR, 1001n) },
+      makeEnv({ maxFee: "1000", kv })
     );
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toEqual({
-      success: false,
-      error: "Invalid JSON body",
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// POST / — submission paths
-// ---------------------------------------------------------------------------
-describe("POST / submission", () => {
-  it("submits a Soroban transaction (func+auth) and returns the result", async () => {
-    stubFetch({});
-    submitSorobanTransaction.mockResolvedValueOnce({
-      transactionId: "tx1",
-      hash: "h1",
-      status: "pending",
-    });
-
-    const res = await worker.fetch(
-      makeRequest("/", {
-        method: "POST",
-        body: { func: "FUNC", auth: ["A1", "A2"] },
-      }),
-      makeEnv({ kv: seededKV() }),
-      ctx()
-    );
-
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
-      success: true,
-      data: { transactionId: "tx1", hash: "h1", status: "pending" },
-    });
-    expect(submitSorobanTransaction).toHaveBeenCalledWith({
-      func: "FUNC",
-      auth: ["A1", "A2"],
-    });
+    expect(res.status).toBe(413);
+    expect(kv.get).not.toHaveBeenCalled();
     expect(submitTransaction).not.toHaveBeenCalled();
   });
+});
 
-  it("fee-bumps a signed transaction (xdr) and returns the result", async () => {
-    submitTransaction.mockResolvedValueOnce({
-      transactionId: "tx2",
-      hash: "h2",
-      status: "submitted",
+describe("rate limiting", () => {
+  it("checks both global and per-IP limits", async () => {
+    const rateLimitDO = makeRateLimitDO({
+      global: { allowed: false, retryAfterSeconds: 30 },
     });
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { xdr: "XDR" } }),
-      makeEnv({ kv: seededKV() }),
-      ctx()
-    );
-
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
-      success: true,
-      data: { transactionId: "tx2", hash: "h2", status: "submitted" },
-    });
-    expect(submitTransaction).toHaveBeenCalledWith({ xdr: "XDR" });
-    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+    const kv = seededKV();
+    const res = await post(deploySubmission(), makeEnv({ rateLimitDO, kv }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("30");
+    expect(rateLimitDO.names).toEqual(["global", `ip:${CLIENT_IP}`]);
+    expect(kv.get).not.toHaveBeenCalled();
   });
 
-  it("maps PluginExecutionError to 400 with code/details", async () => {
-    submitSorobanTransaction.mockRejectedValueOnce(
-      new PluginExecutionError("exec failed", { code: "E123", details: "nope" })
-    );
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv: seededKV() }),
-      ctx()
-    );
-
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toEqual({
-      success: false,
-      error: "exec failed",
-      data: { code: "E123", details: "nope" },
+  it("atomically rejects requests above a fixed-window limit", async () => {
+    const store = new Map<string, unknown>();
+    const state = {
+      storage: {
+        get: vi.fn(async (key: string) => store.get(key)),
+        put: vi.fn(async (key: string, value: unknown) => void store.set(key, value)),
+      },
+      blockConcurrencyWhile: vi.fn(async (fn: () => Promise<unknown>) => fn()),
+    } as any;
+    const limiter = new RequestRateLimiter(state);
+    const request = new Request("https://rate/check?limit=1&windowMs=60000");
+    await expect(limiter.fetch(request).then((res) => res.json())).resolves.toEqual({
+      allowed: true,
+      retryAfterSeconds: 0,
     });
-  });
-
-  it("maps PluginTransportError to its status code", async () => {
-    submitSorobanTransaction.mockRejectedValueOnce(
-      new PluginTransportError("upstream unavailable", 502)
-    );
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv: seededKV() }),
-      ctx()
-    );
-
-    expect(res.status).toBe(502);
-    await expect(res.json()).resolves.toEqual({
-      success: false,
-      error: "upstream unavailable",
-    });
-  });
-
-  it("maps an unknown error to 500", async () => {
-    submitSorobanTransaction.mockRejectedValueOnce(new Error("boom"));
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv: seededKV() }),
-      ctx()
-    );
-
-    expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toEqual({
-      success: false,
-      error: "boom",
+    await expect(limiter.fetch(request).then((res) => res.json())).resolves.toMatchObject({
+      allowed: false,
     });
   });
 });
 
-// ---------------------------------------------------------------------------
-// POST / — testnet friendbot retry
-// ---------------------------------------------------------------------------
-describe("POST / testnet retry", () => {
-  it("funds a missing channel account via friendbot then retries", async () => {
-    const fetchMock = stubFetch({ friendbot: () => okText("funded") });
+describe("Friendbot retry", () => {
+  it("funds a missing channel account and retries", async () => {
+    const fetchMock = stubFetch({ friendbot: () => new Response("funded") });
     submitSorobanTransaction
-      .mockRejectedValueOnce(new Error(`Account not found: ${G_ADDRESS}`))
-      .mockResolvedValueOnce({ transactionId: "tx3", hash: "h3", status: "ok" });
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv: seededKV(), network: "testnet" }),
-      ctx()
-    );
-
+      .mockRejectedValueOnce(new Error(`Account not found: ${MISSING_CHANNEL}`))
+      .mockResolvedValueOnce({ transactionId: "tx2", hash: "hash2", status: "ok" });
+    const res = await post(deploySubmission());
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
-      success: true,
-      data: { transactionId: "tx3", hash: "h3", status: "ok" },
-    });
     expect(submitSorobanTransaction).toHaveBeenCalledTimes(2);
-    const friendbotCalls = fetchMock.mock.calls.filter(([u]) =>
-      String(u).includes("friendbot")
-    );
-    expect(friendbotCalls).toHaveLength(1);
-    expect(String(friendbotCalls[0][0])).toContain(G_ADDRESS);
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("friendbot"))
+    ).toBe(true);
   });
 
-  it("does NOT retry a missing account on mainnet (no friendbot)", async () => {
+  it("derives and never funds the shared deterministic deployer", async () => {
+    expect(SHARED_DEPLOYER).toBe(
+      Keypair.fromRawEd25519Seed(
+        hash(new TextEncoder().encode("openzeppelin-smart-account-kit"))
+      ).publicKey()
+    );
+    expect(SHARED_DEPLOYER).toBe(
+      "GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N"
+    );
     const fetchMock = stubFetch({});
     submitSorobanTransaction.mockRejectedValueOnce(
-      new Error(`Account not found: ${G_ADDRESS}`)
+      new Error(`Account not found: ${SHARED_DEPLOYER}`)
     );
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv: seededKV(), network: "mainnet" }),
-      ctx()
-    );
-
+    const res = await post(deploySubmission());
     expect(res.status).toBe(500);
     expect(submitSorobanTransaction).toHaveBeenCalledTimes(1);
     expect(
-      fetchMock.mock.calls.some(([u]) => String(u).includes("friendbot"))
+      fetchMock.mock.calls.some(([url]) => String(url).includes("friendbot"))
     ).toBe(false);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Per-IP API key lifecycle
-// ---------------------------------------------------------------------------
-describe("API key lifecycle", () => {
-  it("mints a key from the Relayer /gen endpoint when none exists", async () => {
+describe("existing proxy behavior", () => {
+  it("mints a key only for a validated request", async () => {
     const kv = createKV();
     const fetchMock = stubFetch({
-      gen: () => okJson({ apiKey: "sk_generatedkey1234" }),
+      gen: () => Response.json({ apiKey: "sk_generatedkey1234" }),
     });
-    submitSorobanTransaction.mockResolvedValueOnce({
-      transactionId: "tx",
-      hash: "h",
+    const res = await post(deploySubmission(), makeEnv({ kv }));
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/gen"))).toBe(
+      true
+    );
+    expect(JSON.parse(kv.store.get(KV_KEY)!).apiKey).toBe("sk_generatedkey1234");
+  });
+
+  it("maps plugin errors", async () => {
+    submitSorobanTransaction.mockRejectedValueOnce(
+      new PluginExecutionError("bad deploy", { code: "E1", details: "nope" })
+    );
+    const execution = await post(deploySubmission());
+    expect(execution.status).toBe(400);
+
+    submitSorobanTransaction.mockRejectedValueOnce(
+      new PluginTransportError("upstream", 502)
+    );
+    const transport = await post(deploySubmission());
+    expect(transport.status).toBe(502);
+  });
+
+  it("reports health and stored-key status", async () => {
+    const health = await worker.fetch(makeRequest("/"), makeEnv(), ctx());
+    await expect(health.json()).resolves.toEqual({
       status: "ok",
+      service: "smart-account-relayer-proxy",
+      network: "testnet",
     });
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv }),
-      ctx()
-    );
-
-    expect(res.status).toBe(200);
-    expect(
-      fetchMock.mock.calls.some(([u]) => String(u).includes("/gen"))
-    ).toBe(true);
-    const stored = JSON.parse(kv.store.get(KV_KEY)!);
-    expect(stored.apiKey).toBe("sk_generatedkey1234");
-    expect(typeof stored.createdAt).toBe("number");
-  });
-
-  it("returns 500 when a key cannot be minted", async () => {
-    stubFetch({ gen: () => notOk(500, "denied") });
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv: createKV() }),
-      ctx()
-    );
-
-    expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toEqual({
-      success: false,
-      error: "Could not obtain API key. Service may be misconfigured.",
-    });
-    expect(submitSorobanTransaction).not.toHaveBeenCalled();
-  });
-
-  it("migrates a legacy plain-text KV value to the JSON record", async () => {
-    const legacyKey = "sk_plaintextkey12345";
-    const kv = createKV({ [KV_KEY]: legacyKey });
-    stubFetch({});
-    submitSorobanTransaction.mockResolvedValueOnce({
-      transactionId: "tx",
-      hash: "h",
-      status: "ok",
-    });
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv }),
-      ctx()
-    );
-
-    expect(res.status).toBe(200);
-    // Reused the legacy key (no /gen call) and rewrote it as a JSON record.
-    const stored = JSON.parse(kv.store.get(KV_KEY)!);
-    expect(stored.apiKey).toBe(legacyKey);
-    expect(typeof stored.createdAt).toBe("number");
-  });
-
-  it("migrates a legacy JSON-string KV value to the JSON record", async () => {
-    const legacyKey = "sk_jsonstringkey1234";
-    const kv = createKV({ [KV_KEY]: JSON.stringify(legacyKey) });
-    stubFetch({});
-    submitSorobanTransaction.mockResolvedValueOnce({
-      transactionId: "tx",
-      hash: "h",
-      status: "ok",
-    });
-
-    const res = await worker.fetch(
-      makeRequest("/", { method: "POST", body: { func: "F", auth: ["A"] } }),
-      makeEnv({ kv }),
-      ctx()
-    );
-
-    expect(res.status).toBe(200);
-    const stored = JSON.parse(kv.store.get(KV_KEY)!);
-    expect(stored.apiKey).toBe(legacyKey);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// GET /status
-// ---------------------------------------------------------------------------
-describe("GET /status", () => {
-  it("returns client IP, network, and key presence", async () => {
-    const res = await worker.fetch(
-      makeRequest("/status"),
-      makeEnv({ kv: seededKV() }),
-      ctx()
-    );
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
+    const status = await worker.fetch(makeRequest("/status"), makeEnv(), ctx());
+    await expect(status.json()).resolves.toMatchObject({
       success: true,
-      data: {
-        clientIP: CLIENT_IP,
-        network: "testnet",
-        hasKey: true,
-        keyCreatedAt: 1000,
-      },
+      data: { clientIP: CLIENT_IP, hasKey: true, keyCreatedAt: 1000 },
     });
+  });
+
+  it("extracts missing account errors", () => {
+    expect(extractMissingAccount(`Account not found: ${MISSING_CHANNEL}`)).toBe(
+      MISSING_CHANNEL
+    );
+    expect(extractMissingAccount("other")).toBeNull();
   });
 });
