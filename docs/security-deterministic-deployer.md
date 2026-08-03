@@ -97,10 +97,24 @@ This is an accepted, documented residual:
   mainnet address — no race, no leak, no access to the user. Register a fresh
   credential per network rather than reusing a passkey that already has a
   wallet deployed on another one.
-- The realistic window is a leaked/reused ID or a delayed/failed deployment.
+- **Same-network, the "before deployment" framing also fails for secondary
+  credentials.** Only a wallet's first credential salts its deploy, so
+  `derive(credentialId_1)` is the wallet itself. Every signer added later
+  publishes its credential ID on-chain, yet `derive(credentialId_2)` is a
+  distinct address that is never legitimately deployed — and is therefore
+  squattable indefinitely, with no race and no leak. A single-credential wallet
+  has only the narrower leaked/reused-ID or delayed-deployment window; a
+  multi-credential wallet has a permanently open one per secondary credential.
 - The impact is griefing or a deposit sent to the wrong precomputed address,
   not control of a correctly deployed wallet. The deployer is never a wallet
   signer.
+- `connectWithCredentials` resolves from stored credentials first and only falls
+  back to derivation (`src/kit/wallet-ops.ts`), so a returning user with local
+  state is not misbound by a squat. It then confirms the resolved address with
+  an **instance-existence check only** — which a squatted contract passes. The
+  sibling passkey-kit additionally verifies that the credential is a live signer
+  on the wallet. Closing this properly needs the code-identity binding described
+  next, not a signer check alone; it is a tracked follow-up.
 
 A signer-set-equality check **alone is not a mitigation**. Arbitrary code at a
 squatted address can implement `get_signer`, `list`, or an equivalent getter and
