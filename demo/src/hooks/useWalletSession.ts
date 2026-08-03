@@ -250,10 +250,6 @@ export function useWalletSession({
       try {
         const result = await kit.createWallet("Smart Account Demo", name, {
           autoSubmit: true,
-          // Deploy over direct RPC even when the Relayer is configured: the demo
-          // uses the Relayer for wallet *transactions* (transfers, rule/policy
-          // ops); account deployment keeps its existing RPC path.
-          forceMethod: "rpc",
         });
 
         log(`Passkey created: ${result.credentialId.slice(0, 20)}...`, "success");
@@ -518,7 +514,6 @@ export function useWalletSession({
       try {
         const result = await kit.credentials.deploy(credential.credentialId, {
           autoSubmit: true,
-          forceMethod: "rpc", // deployment stays on RPC; see createWallet
         });
 
         if (result.submitResult?.success) {

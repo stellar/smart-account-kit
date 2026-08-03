@@ -22,6 +22,7 @@ import {
   buildI128ScVal,
   getSubmissionMethod,
   hasSourceAccountAuth,
+  resolveResimSource,
   sendAndPoll,
   shouldUseFeeSponsoring,
   sign,
@@ -285,6 +286,7 @@ describe("tx-ops", () => {
     expect(signResimulateAndPrepare).toHaveBeenCalledWith(expect.any(Object), tx.simulationData.result.auth, {
       credentialId: "cred-id",
       expiration: 555,
+      forceMethod: "rpc",
       resolveContextRuleIds: undefined,
     });
     expect(sendAndPollMock).toHaveBeenCalledWith(preparedTx, { forceMethod: "rpc" });
@@ -424,6 +426,68 @@ describe("signFeePayer", () => {
       hasSourceAccountAuth: () => false,
     });
     expect(tx.sign).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES to sign as fee payer with the shared default deployer", () => {
+    const sharedDeployer = Keypair.fromRawEd25519Seed(
+      hash(Buffer.from("openzeppelin-smart-account-kit"))
+    );
+    const tx = fakeTx();
+    expect(() =>
+      signFeePayer(tx, sharedDeployer, {
+        shouldUseFeeSponsoring: () => false,
+        hasSourceAccountAuth: () => false,
+      })
+    ).toThrow(/must never be a transaction source or fee payer/);
+    expect(tx.sign).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveResimSource (sign-only invariant)", () => {
+  const sharedDeployer = Keypair.fromRawEd25519Seed(
+    hash(Buffer.from("openzeppelin-smart-account-kit"))
+  );
+  const customDeployer = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 42));
+
+  it("relayer path: uses a dummy source and NEVER reads the shared deployer's sequence", async () => {
+    const getAccount = vi.fn();
+    const src = await resolveResimSource(
+      {
+        rpc: { getAccount } as never,
+        deployerKeypair: sharedDeployer,
+        shouldUseFeeSponsoring: () => true, // fee-sponsored
+      },
+      { forceMethod: "relayer" }
+    );
+    // Never touches on-chain sequence → a bumpSequence'd deployer can't break it.
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(src.accountId()).toBe(sharedDeployer.publicKey());
+  });
+
+  it("RPC path: refuses the shared deployer as source", async () => {
+    await expect(
+      resolveResimSource(
+        {
+          rpc: { getAccount: vi.fn() } as never,
+          deployerKeypair: sharedDeployer,
+          shouldUseFeeSponsoring: () => false, // direct RPC
+        },
+        { forceMethod: "rpc" }
+      )
+    ).rejects.toThrow(/must never be a transaction source or fee payer/);
+  });
+
+  it("RPC path: allows a dedicated custom deployer (reads its real sequence)", async () => {
+    const getAccount = vi.fn().mockResolvedValue({ id: "acct" });
+    await resolveResimSource(
+      {
+        rpc: { getAccount } as never,
+        deployerKeypair: customDeployer,
+        shouldUseFeeSponsoring: () => false,
+      },
+      { forceMethod: "rpc" }
+    );
+    expect(getAccount).toHaveBeenCalledWith(customDeployer.publicKey());
   });
 });
 

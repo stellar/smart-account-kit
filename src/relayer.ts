@@ -301,7 +301,8 @@ export class RelayerClient {
   /**
    * Submit a signed transaction for fee-bumping.
    *
-   * Use this for transactions that require source_account auth (e.g., deployment).
+   * Use this for transactions that require source_account auth (e.g., a
+   * custom-deployer deployment). Shared-deployer deployments use send(func, auth).
    * The Relayer will fee-bump the signed transaction, preserving the inner signature.
    *
    * @param transaction - Signed transaction (Transaction object or XDR string)

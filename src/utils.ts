@@ -6,7 +6,7 @@
  * @packageDocumentation
  */
 
-import { StrKey, hash, xdr, Address } from "@stellar/stellar-sdk";
+import { StrKey, hash, xdr, Address, Keypair } from "@stellar/stellar-sdk";
 import type { RegistrationResponseJSON } from "@simplewebauthn/browser";
 import base64url from "./base64url.js";
 
@@ -14,11 +14,33 @@ import {
   SECP256R1_PUBLIC_KEY_SIZE,
   UNCOMPRESSED_PUBKEY_PREFIX,
   STROOPS_PER_XLM,
+  DEFAULT_DEPLOYER_SEED,
 } from "./constants.js";
 import {
   ValidationError,
   SmartAccountErrorCode,
 } from "./errors.js";
+
+/**
+ * Public key of the shared, deterministic default deployer (derived once from
+ * {@link DEFAULT_DEPLOYER_SEED}).
+ */
+export const DEFAULT_DEPLOYER_PUBLIC_KEY = Keypair.fromRawEd25519Seed(
+  hash(Buffer.from(DEFAULT_DEPLOYER_SEED))
+).publicKey();
+
+/**
+ * True when `publicKey` is the shared, publicly-derivable default deployer.
+ *
+ * The default deployer's secret is recoverable from source and the account is
+ * shared across all default-configured integrators. It is a **sign-only /
+ * address-derivation** identity: the SDK must never use it as a transaction
+ * source (sequence) or fee payer. This predicate gates those refusals — see the
+ * fee/source guards in `tx-ops`, `deploy-ops`, and the deploy submission path.
+ */
+export function isDefaultDeployer(publicKey: string): boolean {
+  return publicKey === DEFAULT_DEPLOYER_PUBLIC_KEY;
+}
 
 // ============================================================================
 // Validation Helpers

@@ -43,6 +43,7 @@ import { resolveContextRuleIdsForEntry } from "../kit/context-rules.js";
 import {
   buildDirectTokenTransfer,
   resimulateAndAssemble,
+  resolveResimSource,
   signFeePayer,
 } from "../kit/tx-ops.js";
 import { computeEntryAuthDigest } from "../signers.js";
@@ -460,14 +461,17 @@ export class MultiSignerManager {
       }
 
       onLog("Re-simulating with signatures...");
-      const sourceAccount = await this.deps.rpc.getAccount(this.deps.deployerPublicKey);
+      const submissionOptions: SubmissionOptions = { forceMethod: options?.forceMethod };
+      // Honour the sign-only invariant: dummy source on the relayer path
+      // (envelope discarded), real source only on direct RPC where the shared
+      // deployer is refused. Never reads a bricked shared deployer's sequence.
+      const sourceAccount = await resolveResimSource(this.deps, submissionOptions);
       const preparedTx = await resimulateAndAssemble(
         this.deps,
         sourceAccount,
         hostFunc,
         signedAuthEntries
       );
-      const submissionOptions: SubmissionOptions = { forceMethod: options?.forceMethod };
 
       signFeePayer(preparedTx, this.deps.deployerKeypair, this.deps, submissionOptions);
 
