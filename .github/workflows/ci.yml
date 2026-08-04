@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes an in-flight run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: test & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pnpm version from `packageManager` in package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Frozen: a lockfile that does not match package.json should fail the
+      # build rather than be silently resolved away.
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test --run
+
+      # Also compiles the bindings package and runs the Node-ESM import smoke
+      # test, so a broken export map fails here rather than at publish.
+      - run: pnpm run build
+
+      # The demo consumes the SDK's public API, so this catches breaking
+      # changes that the unit tests do not.
+      - run: pnpm run build:demo
+
+      # `prebuild` regenerates src/version.ts; if that leaves the tree dirty,
+      # the committed version constant is stale.
+      - name: Check for uncommitted changes
+        run: git diff --exit-code
