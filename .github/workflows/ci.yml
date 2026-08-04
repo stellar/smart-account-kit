@@ -29,11 +29,17 @@ jobs:
       # build rather than be silently resolved away.
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm test --run
+      # relayer-proxy is NOT a workspace member (the workspace is `packages/**`)
+      # but the root vitest run picks up its tests, so its deps must be present.
+      - name: Install relayer-proxy dependencies
+        working-directory: relayer-proxy
+        run: pnpm install --frozen-lockfile --ignore-workspace
 
-      # Also compiles the bindings package and runs the Node-ESM import smoke
-      # test, so a broken export map fails here rather than at publish.
+      # Build BEFORE test: the tests import the generated bindings package by
+      # name, which only resolves once its dist/ exists.
       - run: pnpm run build
+
+      - run: pnpm test --run
 
       # The demo consumes the SDK's public API, so this catches breaking
       # changes that the unit tests do not.
