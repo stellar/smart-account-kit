@@ -125,6 +125,11 @@ pkg.version = '$NEW_VERSION';
 fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 "
 
+# Regenerate src/version.ts from the version just written. Without this the
+# published VERSION constant silently keeps the previous release's value.
+echo -e "${YELLOW}Syncing src/version.ts...${NC}"
+node "$SCRIPT_DIR/sync-version.js"
+
 # Build
 echo -e "${YELLOW}Building...${NC}"
 "$SCRIPT_DIR/build.sh"

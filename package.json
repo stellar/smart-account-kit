@@ -25,6 +25,7 @@
     "agent-browser:webauthn": "node scripts/agent-browser-webauthn-helper.mjs",
     "prebuild": "node scripts/sync-version.js",
     "build": "pnpm --filter smart-account-kit-bindings build && tsc && node scripts/verify-esm.mjs",
+    "version:sync": "node scripts/sync-version.js",
     "verify:esm": "node scripts/verify-esm.mjs",
     "build:all": "./scripts/build.sh",
     "build:bindings": "./scripts/bindings/build.sh",
