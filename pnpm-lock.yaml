@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@stellar/stellar-sdk': 16.0.1
+  '@stellar/stellar-sdk': '>=16.0.0'
 
 importers:
 
@@ -15,7 +15,7 @@ importers:
         specifier: ^13.3.0
         version: 13.3.0
       '@stellar/stellar-sdk':
-        specifier: 16.0.1
+        specifier: '>=16.0.0'
         version: 16.0.1
       base64url:
         specifier: ^3.0.1
@@ -46,7 +46,7 @@ importers:
         specifier: npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0
         version: '@jsr/creit-tech__stellar-wallets-kit@2.1.0(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.2))(@stellar/stellar-sdk@16.0.1)(@trezor/connect@9.7.2(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.2))(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(tslib@2.8.1)(typescript@6.0.2)(utf-8-validate@5.0.10)(ws@8.20.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@types/react@19.2.14)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(near-api-js@5.1.1)(react@19.2.4)(tslib@2.8.1)(typescript@6.0.2)(utf-8-validate@5.0.10)(ws@8.20.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)'
       '@stellar/stellar-sdk':
-        specifier: 16.0.1
+        specifier: '>=16.0.0'
         version: 16.0.1
       buffer:
         specifier: ^6.0.3
@@ -86,7 +86,7 @@ importers:
         specifier: ^13.3.0
         version: 13.3.0
       '@stellar/stellar-sdk':
-        specifier: 16.0.1
+        specifier: '>=16.0.0'
         version: 16.0.1
       smart-account-kit:
         specifier: workspace:^
@@ -102,7 +102,7 @@ importers:
   packages/smart-account-kit-bindings:
     dependencies:
       '@stellar/stellar-sdk':
-        specifier: 16.0.1
+        specifier: '>=16.0.0'
         version: 16.0.1
       buffer:
         specifier: 6.0.3
@@ -1636,7 +1636,7 @@ packages:
   '@trezor/connect-plugin-stellar@9.2.6':
     resolution: {integrity: sha512-RA0Q4GHaf1mFxgSX183yyH+5tWEgS1j+sfe9KiUyIn/VnpXeUnaCpQuKMomAjGXQ5oNuvikTOdHYOqsvuEdOyw==}
     peerDependencies:
-      '@stellar/stellar-sdk': 16.0.1
+      '@stellar/stellar-sdk': '>=16.0.0'
       '@trezor/connect': 9.x.x
       tslib: ^2.6.2
 
