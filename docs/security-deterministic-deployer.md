@@ -117,10 +117,25 @@ This is an accepted, documented residual:
   next, not a signer check alone; it is a tracked follow-up.
 
 A signer-set-equality check **alone is not a mitigation**. Arbitrary code at a
-squatted address can implement `get_signer`, `list`, or an equivalent getter and
-return whatever signer set the client expects. Any future mitigation must first
-bind the accepted WASM/code identity independently, then validate signer and
-policy state against that trusted code.
+squatted address can implement `get_signer`, `get_signer_id`, `list`, or an
+equivalent getter and return whatever the client expects. Any future mitigation
+must first bind the accepted WASM/code identity independently, then validate
+signer and policy state against that trusted code.
+
+Binding that identity is cheaper than "future" suggests: the connect path already
+fetches the contract instance ledger entry and uses it only to test existence, so
+the executable WASM hash is in hand at no extra round-trip. Comparing it against
+accepted hashes — an allowlist rather than a single value, since a legitimately
+upgraded wallet runs different code — is the sound form. It is a partial
+mitigation, not a cure: an attacker willing to deploy the genuine WASM still
+passes it, but must then also be a real signer, which is a materially harder and
+more detectable position than deploying arbitrary code that simply lies.
+
+The connect path also **deletes a credential's stored wallet mapping once it
+connects successfully**, so the storage-first resolution above stops protecting
+that credential on subsequent connects. Combined with session expiry, a secondary
+credential can fall back to derivation in ordinary use rather than only on a new
+device. Both belong to the same follow-up.
 
 ## Deployer inventory
 
@@ -148,3 +163,9 @@ reduce operational risk on testnet and on shared infrastructure.
   is publicly derivable, so anyone can move its balance today.
 - Source shared infrastructure deploys (verifier, policy, WASM upload) from a
   dedicated funded account rather than a shared deployer.
+- Harden the connect path, as one piece of work: an **opt-in WASM-hash binding**
+  reusing the contract instance the path already reads, plus keeping a
+  non-pending credential's stored wallet mapping instead of deleting it on
+  connect. Explicitly **not** a bare signer-presence check — a squatted contract
+  answers `get_signer_id` with whatever the client wants, so that check verifies
+  nothing against this adversary and would misrepresent the guarantee.
