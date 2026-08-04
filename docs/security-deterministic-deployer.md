@@ -131,11 +131,17 @@ mitigation, not a cure: an attacker willing to deploy the genuine WASM still
 passes it, but must then also be a real signer, which is a materially harder and
 more detectable position than deploying arbitrary code that simply lies.
 
-The connect path also **deletes a credential's stored wallet mapping once it
-connects successfully**, so the storage-first resolution above stops protecting
-that credential on subsequent connects. Combined with session expiry, a secondary
-credential can fall back to derivation in ordinary use rather than only on a new
-device. Both belong to the same follow-up.
+Until `0.5.1`, connecting or syncing **deleted a credential's stored wallet
+mapping**, so storage-first resolution stopped protecting that credential on
+every subsequent connect and a secondary credential fell back to derivation in
+ordinary use. Fixed: a stored row is now discarded only when it is a pending
+deployment — an empty `contractId`, or one equal to its own derived address —
+so a secondary credential keeps its mapping. The WASM-hash binding above remains
+the outstanding half.
+
+Operational verification of the mainnet geometry below is scripted — see
+[`mainnet-hardening.md`](./mainnet-hardening.md) and
+`scripts/check-mainnet-deployer.mjs`, which exits non-zero on drift.
 
 ## Deployer inventory
 
@@ -163,9 +169,14 @@ reduce operational risk on testnet and on shared infrastructure.
   is publicly derivable, so anyone can move its balance today.
 - Source shared infrastructure deploys (verifier, policy, WASM upload) from a
   dedicated funded account rather than a shared deployer.
-- Harden the connect path, as one piece of work: an **opt-in WASM-hash binding**
-  reusing the contract instance the path already reads, plus keeping a
-  non-pending credential's stored wallet mapping instead of deleting it on
-  connect. Explicitly **not** a bare signer-presence check — a squatted contract
-  answers `get_signer_id` with whatever the client wants, so that check verifies
-  nothing against this adversary and would misrepresent the guarantee.
+- Bind code identity on the connect path: a **WASM-hash allowlist** checked
+  against the contract instance the path already reads. Explicitly **not** a bare
+  signer-presence check — a squatted contract answers `get_signer_id` with
+  whatever the client wants, so that check verifies nothing against this
+  adversary and would misrepresent the guarantee. Deliberately not shipped as a
+  lone opt-in flag: the sibling repo's equivalent is enabled by no consumer, and
+  an always-on single-hash check breaks legitimately upgraded wallets, which both
+  contracts support. It earns its place only alongside a real code-identity
+  design, not before one.
+  *(The other half of this item — keeping a non-pending credential's stored
+  mapping instead of deleting it — shipped in `0.5.1`.)*
