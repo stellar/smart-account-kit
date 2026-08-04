@@ -7,6 +7,7 @@
 
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
 import { PolicyNotFoundError } from "../errors.js";
+import { unwrapContractResult } from "../contract-errors.js";
 
 /** Dependencies required by PolicyManager */
 export interface PolicyManagerDeps {
@@ -80,9 +81,13 @@ export class PolicyManager {
    */
   async remove(contextRuleId: number, policyAddress: string) {
     const { wallet } = this.deps.requireWallet();
-    const policyId = (await wallet.get_policy_id({
-      policy: policyAddress,
-    })).result;
+    const policyId = unwrapContractResult(
+      (await wallet.get_policy_id({ policy: policyAddress })).result,
+      (error) =>
+        error.contractCode === 3008
+          ? new PolicyNotFoundError(policyAddress, contextRuleId)
+          : error
+    );
 
     if (policyId === undefined || policyId === null) {
       throw new PolicyNotFoundError(policyAddress, contextRuleId);
@@ -104,7 +109,13 @@ export class PolicyManager {
    */
   async idOf(policyAddress: string): Promise<number> {
     const { wallet } = this.deps.requireWallet();
-    const policyId = (await wallet.get_policy_id({ policy: policyAddress })).result;
+    const policyId = unwrapContractResult(
+      (await wallet.get_policy_id({ policy: policyAddress })).result,
+      (error) =>
+        error.contractCode === 3008
+          ? new PolicyNotFoundError(policyAddress)
+          : error
+    );
     if (policyId === undefined || policyId === null) {
       throw new PolicyNotFoundError(policyAddress);
     }

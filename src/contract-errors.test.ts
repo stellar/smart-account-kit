@@ -83,6 +83,40 @@ describe("contractErrorFromCode", () => {
 });
 
 describe("CONTRACT_ERROR_REGISTRY", () => {
+  /**
+   * `unwrapContractResult` maps a contract Err back to a typed error by matching
+   * the Err's message against this registry. The SDK builds that message from the
+   * spec's doc string (`errorCases()[n].doc()`), so for the codes reachable
+   * through a wrapped call site the registry text must equal the doc verbatim —
+   * otherwise the mapping silently degrades to an untyped Error.
+   *
+   * Only these three are reachable today: ContextRuleNotFound via the
+   * get_context_rule fallback, SignerNotFound via get_signer_id, PolicyNotFound
+   * via get_policy_id. The rest of the registry is deliberately paraphrased for
+   * users and is not required to match.
+   */
+  it("keeps the translated codes' messages identical to the spec doc strings", async () => {
+    const { Client } = await import("smart-account-kit-bindings");
+    const client = new Client({
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      rpcUrl: "https://example.invalid",
+    });
+    const docs = new Map<number, string>(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (client as any).spec.errorCases().map((c: any) => [c.value(), c.doc().toString()])
+    );
+
+    for (const code of [3000, 3006, 3008]) {
+      expect(docs.get(code), `spec is missing code ${code}`).toBeDefined();
+      expect(
+        CONTRACT_ERROR_REGISTRY[code].message,
+        `registry message for ${code} drifted from the bindings doc string, so ` +
+          `unwrapContractResult can no longer type it`
+      ).toBe(docs.get(code));
+    }
+  });
+
   it("stays in sync with the generated bindings' SmartAccountError map", () => {
     // The account contract family (3000-3016) is the source of truth in the
     // generated bindings; a regen must not drift from this table.

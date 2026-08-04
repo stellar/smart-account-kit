@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.2 — 2026-08-04
+
+- **Fixed: contract errors were silently returned as values.** A contract method
+  whose spec declares error cases does not throw when it reverts — the SDK wires
+  `errorTypes` from the spec, so the failure comes back as a rust `Err` and
+  `.result` resolves with it. Seven call sites read `.result` directly and so
+  received an `Err` object where a number was expected: `get_signer_id`,
+  `get_policy_id`, the context-rule fallback, and the legacy rule-XDR hydration
+  paths. `SignerManager.remove` and `PolicyManager.remove` then passed that
+  object straight into `remove_signer` / `remove_policy`. Those reads now route
+  through a shared unwrap that raises the documented typed error
+  (`SignerNotFoundError`, `PolicyNotFoundError`, `ContractError`) and rethrows
+  anything unrecognised, so an `Err` can never continue on as data. Transport
+  failures still propagate unchanged.
+
 ## 0.5.1 — 2026-08-04
 
 - **Fixed: connecting or syncing deleted a secondary passkey's only wallet

@@ -170,6 +170,50 @@ export function decodeContractError(diagnostic: unknown): ContractError | null {
   return contractErrorFromCode(code, { diagnostic: text });
 }
 
+/** Structural check for the SDK's `Ok`/`Err` rust-result wrappers. */
+function isRustResult<T>(
+  value: unknown
+): value is { isErr(): boolean; unwrap(): T; unwrapErr(): { message: string } } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "isErr" in value &&
+    "unwrap" in value &&
+    "unwrapErr" in value
+  );
+}
+
+/**
+ * Unwrap an SDK rust result, translating a known `Err` through the registry.
+ *
+ * A contract method whose spec declares error cases does **not** throw when it
+ * reverts: the SDK wires `errorTypes` from the spec, so `parseError` returns an
+ * `Err` and `.result` resolves with it. Reading `.result` directly therefore
+ * yields an `Err` object where a value is expected. Route those reads through
+ * here.
+ *
+ * The `Err` carries only a message — the spec's doc string — so that is the
+ * only key available for mapping it back to a code. When the message is not
+ * recognised we fall through to `unwrap()`, which throws; an `Err` can never
+ * continue on as data.
+ */
+export function unwrapContractResult<T>(
+  result: T,
+  mapError: (error: ContractError) => Error = (error) => error
+): T {
+  if (!isRustResult<T>(result)) return result;
+  if (!result.isErr()) return result.unwrap();
+
+  const message = result.unwrapErr().message;
+  const info = Object.values(CONTRACT_ERROR_REGISTRY).find(
+    (entry) => entry.message === message
+  );
+  const error = info && contractErrorFromCode(info.code, { diagnostic: message });
+  if (error) throw mapError(error);
+
+  return result.unwrap();
+}
+
 /**
  * Build a {@link TransactionFailure} from an already-typed error.
  */

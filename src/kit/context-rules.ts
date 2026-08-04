@@ -22,12 +22,16 @@ import {
   signersEqual,
 } from "../signer-utils.js";
 import type { ContractDetailsResponse } from "../indexer.js";
-import { decodeContractError } from "../contract-errors.js";
+import {
+  decodeContractError,
+  unwrapContractResult,
+} from "../contract-errors.js";
 import {
   DEFAULT_MAX_CONSECUTIVE_PROBE_MISSES,
   DEFAULT_MAX_PROBED_RULE_ID,
   DEFAULT_READ_TIMEOUT_SECONDS,
 } from "../constants.js";
+import { ContractError } from "../errors.js";
 
 type ContextRuleQueryClient = {
   get_context_rule: (args: { context_rule_id: number }) => Promise<AssembledTransaction<ContextRule>>;
@@ -139,7 +143,9 @@ async function hydrateContextRuleIds(
       ? wallet.get_policy_id
         ? Promise.all(
             rule.policies.map(async (policy) => {
-              const result = (await wallet.get_policy_id?.({ policy }))?.result;
+              const result = unwrapContractResult(
+                (await wallet.get_policy_id?.({ policy }))?.result
+              );
               if (result === undefined || result === null) {
                 throw new Error(`Failed to resolve policy ID for ${policy}`);
               }
@@ -152,7 +158,9 @@ async function hydrateContextRuleIds(
       ? wallet.get_signer_id
         ? Promise.all(
             rule.signers.map(async (signer) => {
-              const result = (await wallet.get_signer_id?.({ signer }))?.result;
+              const result = unwrapContractResult(
+                (await wallet.get_signer_id?.({ signer }))?.result
+              );
               if (result === undefined || result === null) {
                 throw new Error(`Failed to resolve signer ID for hydrated context rule ${rule.id}`);
               }
@@ -326,7 +334,7 @@ export async function readContextRule(
       return hydrateContextRuleIds(wallet, rule);
     }
   }
-  return ruleTx.result;
+  return unwrapContractResult(ruleTx.result);
 }
 
 export async function listContextRules(
@@ -614,9 +622,16 @@ function isMissingContextRuleError(error: unknown): boolean {
     return false;
   }
 
+  if (error instanceof ContractError && error.contractCode === 3000) {
+    return true;
+  }
+
   // Prefer the centralized contract-error registry: a rendered
   // `Error(Contract, #3000)` decodes to the ContextRuleNotFound entry.
-  if (decodeContractError(error.message)?.name === "ContextRuleNotFound") {
+  if (
+    decodeContractError(error.message)?.contractErrorName ===
+    "ContextRuleNotFound"
+  ) {
     return true;
   }
 

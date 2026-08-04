@@ -11,6 +11,7 @@ import type { SmartAccountEventEmitter } from "../events.js";
 import type { StorageAdapter, StoredCredential } from "../types.js";
 import { buildKeyData } from "../utils.js";
 import { SignerNotFoundError } from "../errors.js";
+import { unwrapContractResult } from "../contract-errors.js";
 import { validateSigner, validateSigners } from "../validation.js";
 
 /** Dependencies required by SignerManager */
@@ -157,7 +158,13 @@ export class SignerManager {
    */
   async idOf(signer: ContractSigner): Promise<number> {
     const { wallet } = this.deps.requireWallet();
-    const signerId = (await wallet.get_signer_id({ signer })).result;
+    const signerId = unwrapContractResult(
+      (await wallet.get_signer_id({ signer })).result,
+      (error) =>
+        error.contractCode === 3006
+          ? new SignerNotFoundError("signer")
+          : error
+    );
     if (signerId === undefined || signerId === null) {
       throw new SignerNotFoundError("signer");
     }
@@ -169,9 +176,13 @@ export class SignerManager {
    */
   async remove(contextRuleId: number, signer: ContractSigner) {
     const { wallet } = this.deps.requireWallet();
-    const signerId = (await wallet.get_signer_id({
-      signer,
-    })).result;
+    const signerId = unwrapContractResult(
+      (await wallet.get_signer_id({ signer })).result,
+      (error) =>
+        error.contractCode === 3006
+          ? new SignerNotFoundError(`signer on context rule ${contextRuleId}`)
+          : error
+    );
 
     if (signerId === undefined || signerId === null) {
       throw new SignerNotFoundError(
