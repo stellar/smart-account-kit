@@ -8,6 +8,7 @@
 
 import { StrKey, hash, xdr, Address, Keypair } from "@stellar/stellar-sdk";
 import type { RegistrationResponseJSON } from "@simplewebauthn/browser";
+import type { StoredCredential } from "./types.js";
 import base64url from "./base64url.js";
 
 import {
@@ -183,6 +184,13 @@ export function deriveContractAddress(
   );
 
   return StrKey.encodeContract(hash(preimage.toXDR()));
+}
+
+export function isCredentialSafeToDelete(
+  credential: Pick<StoredCredential, "contractId">,
+  derivedContractId: string
+): boolean {
+  return credential.contractId === "" || credential.contractId === derivedContractId;
 }
 
 /**

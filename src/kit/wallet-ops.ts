@@ -13,7 +13,11 @@ import type {
 import type { SmartAccountEventEmitter } from "../events.js";
 import type { contract, rpc } from "@stellar/stellar-sdk";
 import { WEBAUTHN_TIMEOUT_MS, DEFAULT_SESSION_EXPIRY_MS } from "../constants.js";
-import { deriveContractAddress, generateChallenge } from "../utils.js";
+import {
+  deriveContractAddress,
+  generateChallenge,
+  isCredentialSafeToDelete,
+} from "../utils.js";
 import { ValidationError } from "../errors.js";
 import { failedTransaction } from "../contract-errors.js";
 import {
@@ -236,6 +240,7 @@ export async function connectWithCredentials(
   contractId?: string
 ): Promise<ConnectWalletResult> {
   let credential: StoredCredential | null = null;
+  let derivedContractId: string | undefined;
   if (credentialId) {
     credential = await deps.storage.get(credentialId);
     if (credential) {
@@ -245,11 +250,12 @@ export async function connectWithCredentials(
 
   if (!contractId && credentialId) {
     const credentialIdBuffer = base64url.toBuffer(credentialId);
-    contractId = deriveContractAddress(
+    derivedContractId = deriveContractAddress(
       credentialIdBuffer,
       deps.deployerKeypair.publicKey(),
       deps.networkPassphrase
     );
+    contractId = derivedContractId;
   }
 
   if (!contractId) {
@@ -278,7 +284,14 @@ export async function connectWithCredentials(
   }
 
   if (credential) {
-    await deps.storage.delete(credentialId);
+    derivedContractId ??= deriveContractAddress(
+      base64url.toBuffer(credentialId),
+      deps.deployerKeypair.publicKey(),
+      deps.networkPassphrase
+    );
+    if (isCredentialSafeToDelete(credential, derivedContractId)) {
+      await deps.storage.delete(credentialId);
+    }
   }
 
   deps.setConnectedState(contractId, credentialId);

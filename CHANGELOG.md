@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1 — 2026-08-04
+
+- **Fixed: connecting or syncing deleted a secondary passkey's only wallet
+  mapping.** `CredentialManager.sync()` (and therefore `syncAll()`) deleted any
+  stored credential whose contract existed on-chain, and the connect path did the
+  same. For a credential added with `signers.addPasskey()` that row is the *only*
+  thing mapping it to its wallet — deterministic derivation is correct only for a
+  wallet's first credential, the one that salted its deploy. Once the row was
+  gone and the session expired, reconnecting with that passkey derived an address
+  that is never legitimately deployed and failed, or resolved somewhere
+  unintended. `syncAll()` is called on startup by the demo, so the loss happened
+  routinely rather than at an edge. Pending-credential cleanup is unchanged, and
+  a pending row with an empty `contractId` is now cleaned up correctly instead of
+  being skipped.
+
 ## 0.5.0 — 2026-08-03
 
 - **Breaking: the shared deployer is sign-only.** `createWallet()` and

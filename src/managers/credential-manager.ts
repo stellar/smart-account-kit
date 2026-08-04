@@ -11,6 +11,7 @@ import type { contract, rpc } from "@stellar/stellar-sdk";
 import type { AuthenticatorTransportFuture } from "@simplewebauthn/browser";
 import type { SmartAccountEventEmitter } from "../events.js";
 import type { PolicyConfig, StorageAdapter, StoredCredential, SubmissionMethod, SubmissionOptions, TransactionResult } from "../types.js";
+import { isCredentialSafeToDelete } from "../utils.js";
 import {
   prepareDeploymentArtifacts,
   type DeployTransaction,
@@ -206,11 +207,16 @@ export class CredentialManager {
     }
 
     try {
+      const derivedContractId = this.deps.deriveContractAddress(
+        base64url.toBuffer(credentialId)
+      );
       await this.deps.rpc.getContractData(
-        credential.contractId,
+        credential.contractId || derivedContractId,
         xdr.ScVal.scvLedgerKeyContractInstance()
       );
-      await this.deps.storage.delete(credentialId);
+      if (isCredentialSafeToDelete(credential, derivedContractId)) {
+        await this.deps.storage.delete(credentialId);
+      }
       return true;
     } catch {
       return false;

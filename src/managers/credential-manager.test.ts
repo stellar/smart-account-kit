@@ -1,6 +1,7 @@
 import base64url from "base64url";
 import { describe, expect, it, vi } from "vitest";
 import type { StoredCredential } from "../types";
+import { MemoryStorage } from "../storage/memory";
 import { CredentialManager } from "./credential-manager";
 
 function makeStorage(initial: StoredCredential[] = []) {
@@ -292,6 +293,7 @@ describe("CredentialManager", () => {
       createdAt: 2,
     };
     const deps = makeDeps([deployed, pending]);
+    deps.deriveContractAddress.mockReturnValue("CCONTRACT");
     deps.rpc.getContractData.mockImplementation(async (_contractId: string) => {
       if (_contractId === "CCONTRACT") {
         return {};
@@ -308,6 +310,63 @@ describe("CredentialManager", () => {
     await expect(manager.sync("cred-2")).resolves.toBe(false);
 
     expect(deps.storage.delete).toHaveBeenCalledWith("cred-1");
+  });
+
+  it("keeps a secondary credential during syncAll", async () => {
+    const credential = {
+      credentialId: base64url.encode("secondary-credential"),
+      publicKey: Buffer.alloc(65, 1),
+      contractId: "CPARENT",
+      createdAt: 1,
+      isPrimary: false,
+    };
+    const storage = new MemoryStorage();
+    await storage.save(credential);
+    const deps = makeDeps();
+    deps.deriveContractAddress.mockReturnValue("CDERIVED");
+    deps.rpc.getContractData.mockResolvedValue({});
+    const manager = new CredentialManager({
+      ...deps,
+      storage,
+      rpName: "App",
+    });
+
+    await manager.syncAll();
+    await expect(storage.get(credential.credentialId)).resolves.toEqual(credential);
+  });
+
+  it("cleans up an empty-contract pending credential using its derived address", async () => {
+    const credential = {
+      credentialId: base64url.encode("pending-credential"),
+      publicKey: Buffer.alloc(65, 2),
+      contractId: "",
+      createdAt: 2,
+      deploymentStatus: "pending" as const,
+    };
+    const storage = new MemoryStorage();
+    await storage.save(credential);
+    const deps = makeDeps();
+    deps.deriveContractAddress.mockReturnValue("CDERIVED");
+    deps.rpc.getContractData.mockImplementation(async (contractId: string) => {
+      if (contractId === "CDERIVED") return {};
+      throw new Error("missing");
+    });
+    const manager = new CredentialManager({
+      ...deps,
+      storage,
+      rpName: "App",
+    });
+
+    await expect(manager.syncAll()).resolves.toEqual({
+      deployed: 1,
+      pending: 0,
+      failed: 0,
+    });
+    expect(deps.rpc.getContractData).toHaveBeenCalledWith(
+      "CDERIVED",
+      expect.anything()
+    );
+    await expect(storage.get(credential.credentialId)).resolves.toBeNull();
   });
 
   it("counts deployed, pending, and failed credentials in syncAll", async () => {

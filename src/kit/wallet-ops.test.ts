@@ -7,6 +7,7 @@ import {
   disconnect,
 } from "./wallet-ops";
 import { deriveContractAddress, generateChallenge } from "../utils";
+import { MemoryStorage } from "../storage/memory";
 import type { RegistrationResponseJSON, AuthenticationResponseJSON } from "@simplewebauthn/browser";
 
 vi.mock("../utils", async () => {
@@ -288,10 +289,10 @@ describe("wallet-ops", () => {
     expect(result).toBeNull();
   });
 
-  it("connects with stored credential data and persists session", async () => {
+  it("keeps a secondary credential mapping across reconnects", async () => {
     vi.spyOn(Date, "now").mockReturnValue(9_000);
 
-    const storage = createStorageMock();
+    const storage = new MemoryStorage();
     const events = createEventMock();
     const rpc = {
       getContractData: vi.fn().mockResolvedValue({}),
@@ -301,32 +302,32 @@ describe("wallet-ops", () => {
       publicKey: new Uint8Array(65).fill(9),
       contractId: "Cstoredcontract",
       deploymentStatus: "pending",
-    };
-    storage.get.mockResolvedValue(credential);
+    } as const;
+    await storage.save(credential);
     const setConnectedState = vi.fn();
+    const deps = {
+      storage,
+      rpc: rpc as never,
+      deployerKeypair: Keypair.random(),
+      networkPassphrase: "Test SDF Network ; September 2015",
+      sessionExpiryMs: 7_000,
+      events: events as never,
+      setConnectedState,
+    };
 
-    const result = await connectWithCredentials(
-      {
-        storage: storage as never,
-        rpc: rpc as never,
-        deployerKeypair: Keypair.random(),
-        networkPassphrase: "Test SDF Network ; September 2015",
-        sessionExpiryMs: 7_000,
-        events: events as never,
-        setConnectedState,
-      },
-      "cred",
-      undefined
-    );
+    await connectWithCredentials(deps, "cred");
+    await storage.clearSession();
+    const result = await connectWithCredentials(deps, "cred");
 
-    expect(deriveContractAddress).not.toHaveBeenCalled();
-    expect(rpc.getContractData).toHaveBeenCalledWith(
+    expect(rpc.getContractData).toHaveBeenCalledTimes(2);
+    expect(rpc.getContractData).toHaveBeenNthCalledWith(
+      2,
       "Cstoredcontract",
       xdr.ScVal.scvLedgerKeyContractInstance()
     );
-    expect(storage.delete).toHaveBeenCalledWith("cred");
+    expect(await storage.get("cred")).toEqual(credential);
     expect(setConnectedState).toHaveBeenCalledWith("Cstoredcontract", "cred");
-    expect(storage.saveSession).toHaveBeenCalledWith({
+    expect(await storage.getSession()).toEqual({
       contractId: "Cstoredcontract",
       credentialId: "cred",
       connectedAt: 9_000,
@@ -337,6 +338,33 @@ describe("wallet-ops", () => {
       contractId: "Cstoredcontract",
       credential,
     });
+  });
+
+  it("cleans up a pending credential that maps to its derived contract", async () => {
+    const storage = new MemoryStorage();
+    const events = createEventMock();
+    const credential = {
+      credentialId: "cred",
+      publicKey: new Uint8Array(65).fill(9),
+      contractId: "CDETERMINISTICCONTRACTADDRESS12345678901234567890123456",
+      deploymentStatus: "pending",
+    } as const;
+    await storage.save(credential);
+
+    await connectWithCredentials(
+      {
+        storage,
+        rpc: { getContractData: vi.fn().mockResolvedValue({}) } as never,
+        deployerKeypair: Keypair.random(),
+        networkPassphrase: "Test SDF Network ; September 2015",
+        sessionExpiryMs: 7_000,
+        events: events as never,
+        setConnectedState: vi.fn(),
+      },
+      "cred"
+    );
+
+    expect(await storage.get("cred")).toBeNull();
   });
 
   it("marks a stored credential pending when on-chain lookup fails", async () => {
