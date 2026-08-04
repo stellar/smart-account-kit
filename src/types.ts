@@ -114,6 +114,23 @@ export interface SmartAccountConfig {
   /** Smart account WASM hash for deployment */
   accountWasmHash: string;
 
+  /**
+   * Code identities (hex WASM hashes) accepted when connecting to an account
+   * whose address came from an untrusted source — an indexer reverse lookup or
+   * address derivation. Defaults to `[accountWasmHash]`.
+   *
+   * Binding code identity is what makes an account's on-chain state meaningful:
+   * under accepted code, signer state can only have been produced by logic that
+   * required authorization. Arbitrary code can present whatever state a client
+   * checks for, so an unbound reverse lookup proves nothing.
+   *
+   * A list rather than a single value because a legitimately upgraded account
+   * runs different code — add each accepted hash as upgrades roll out. An
+   * address resolved from trusted local storage is not checked, so returning
+   * users with upgraded accounts are unaffected.
+   */
+  acceptedWasmHashes?: string[];
+
   /** Deployed WebAuthn verifier contract address */
   webauthnVerifierAddress: string;
 

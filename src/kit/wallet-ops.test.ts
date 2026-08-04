@@ -402,6 +402,114 @@ describe("wallet-ops", () => {
     expect(storage.saveSession).not.toHaveBeenCalled();
   });
 
+  describe("code identity on untrusted resolution", () => {
+    const DERIVED = "CDETERMINISTICCONTRACTADDRESS12345678901234567890123456";
+    const ACCEPTED = "ab".repeat(32);
+
+    /** An instance ledger entry carrying a WASM executable hash. */
+    const instanceWithWasm = (hashHex: string) => ({
+      val: {
+        contractData: () => ({
+          val: () => ({
+            instance: () => ({
+              executable: () => ({
+                switch: () => ({ name: "contractExecutableWasm" }),
+                wasmHash: () => Buffer.from(hashHex, "hex"),
+              }),
+            }),
+          }),
+        }),
+      },
+    });
+
+    const makeDeps = (rpc: unknown, storage: MemoryStorage) => ({
+      storage,
+      rpc: rpc as never,
+      deployerKeypair: Keypair.random(),
+      networkPassphrase: "Test SDF Network ; September 2015",
+      sessionExpiryMs: 7_000,
+      acceptedWasmHashes: [ACCEPTED],
+      events: createEventMock() as never,
+      setConnectedState: vi.fn(),
+    });
+
+    it("REJECTS a derived address running unaccepted code", async () => {
+      // Nothing legitimate occupies derive(credentialId) for a credential with no
+      // stored mapping, and arbitrary code there can present whatever on-chain
+      // state a client checks for. Accepted code is the binding that makes any
+      // later state read meaningful, so it must fail closed here.
+      const storage = new MemoryStorage();
+      const deps = makeDeps(
+        { getContractData: vi.fn().mockResolvedValue(instanceWithWasm("cd".repeat(32))) },
+        storage
+      );
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /unaccepted code/i
+      );
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+      expect(await storage.getSession()).toBeNull();
+    });
+
+    it("REJECTS a non-WASM executable at the derived address", async () => {
+      const storage = new MemoryStorage();
+      const deps = makeDeps(
+        {
+          getContractData: vi.fn().mockResolvedValue({
+            val: {
+              contractData: () => ({
+                val: () => ({
+                  instance: () => ({
+                    executable: () => ({
+                      switch: () => ({ name: "contractExecutableStellarAsset" }),
+                    }),
+                  }),
+                }),
+              }),
+            },
+          }),
+        },
+        storage
+      );
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /unaccepted code/i
+      );
+    });
+
+    it("connects when the derived address runs accepted code", async () => {
+      const storage = new MemoryStorage();
+      const deps = makeDeps(
+        { getContractData: vi.fn().mockResolvedValue(instanceWithWasm(ACCEPTED)) },
+        storage
+      );
+
+      const result = await connectWithCredentials(deps, "cred");
+
+      expect(result.contractId).toBe(DERIVED);
+      expect(deps.setConnectedState).toHaveBeenCalledWith(DERIVED, "cred");
+    });
+
+    it("does NOT check a storage-resolved address, so an upgraded account opens", async () => {
+      const storage = new MemoryStorage();
+      await storage.save({
+        credentialId: "cred",
+        publicKey: new Uint8Array(65).fill(9),
+        contractId: "Cstoredcontract",
+      } as never);
+      // Unaccepted code on purpose: a returning user whose account legitimately
+      // upgraded must not be locked out of their own wallet.
+      const deps = makeDeps(
+        { getContractData: vi.fn().mockResolvedValue(instanceWithWasm("cd".repeat(32))) },
+        storage
+      );
+
+      const result = await connectWithCredentials(deps, "cred");
+
+      expect(result.contractId).toBe("Cstoredcontract");
+    });
+  });
+
   it("disconnects and emits a walletDisconnected event", async () => {
     const storage = createStorageMock();
     const events = createEventMock();

@@ -122,14 +122,72 @@ equivalent getter and return whatever the client expects. Any future mitigation
 must first bind the accepted WASM/code identity independently, then validate
 signer and policy state against that trusted code.
 
-Binding that identity is cheaper than "future" suggests: the connect path already
-fetches the contract instance ledger entry and uses it only to test existence, so
-the executable WASM hash is in hand at no extra round-trip. Comparing it against
-accepted hashes — an allowlist rather than a single value, since a legitimately
-upgraded wallet runs different code — is the sound form. It is a partial
-mitigation, not a cure: an attacker willing to deploy the genuine WASM still
-passes it, but must then also be a real signer, which is a materially harder and
-more detectable position than deploying arbitrary code that simply lies.
+Binding that identity is cheap: the connect path already fetches the contract
+instance ledger entry to test existence, so the executable WASM hash is in hand at
+no extra round-trip. Comparing it against accepted hashes — an allowlist rather
+than a single value, since a legitimately upgraded account runs different code —
+is the sound form, and is what ships (see below).
+
+It is a partial mitigation, not a cure, and the gap is wider than "must then also
+be a real signer" would suggest: making the victim a real signer is free. This
+`__constructor` accepts a signer **array** and a policy map, and the victim's key
+material is public, so an account can be deployed running accepted code on which
+the victim genuinely is a signer while authority rests elsewhere. Code identity
+passes, and so does any signer-**presence** check.
+
+The predicate that excludes this is signer **and policy** equality against
+trusted local state, not presence. That is only available where trusted state
+exists — which is the storage-first path already shipped, and precisely what a
+fresh device lacks. So the allowlist hardens the derivation fallback against
+lying code; it does not authenticate a derived address.
+
+What defeats every check in this section is that each reads **current state**,
+which at a squatted address the squatter wrote. The one class of check that
+escapes that is deploy-time provenance — see the genesis-provenance follow-up
+below, which is tracked as the mitigation that does close this path.
+
+## Why code identity is bound before signer state
+
+An address obtained from an indexer reverse lookup or from address derivation is
+a **claim by an untrusted party**, not a fact. Neither the discovery signal nor
+the on-chain state read back is self-authenticating: contract-emitted events are
+unprivileged, and a contract controls its own storage, so code of the author's
+choosing can present whatever state a client inspects.
+
+So an account's signer state only means something **if the code that wrote it
+enforced authorization**. Under arbitrary code it means nothing. This is
+independent of the deployer key — it needs no derived address and no squatting,
+and it is why a bare signer-presence check was never shipped here.
+
+### What is enforced (since `0.6.0`)
+
+`connectWithCredentials` checks the resolved account's executable against
+`acceptedWasmHashes` whenever the address came from an untrusted source —
+derivation, or an app-supplied `contractId` such as a discovery result. Defaults
+to `[accountWasmHash]`. The check reuses the contract instance entry the path
+already fetched for its existence probe, so it costs no extra round-trip. An
+address resolved from trusted local storage is not checked, so a legitimately
+upgraded account still opens for a returning user.
+
+### What this does and does not cover
+
+It removes the case that costs an attacker nothing — arbitrary code, deployed
+once. It does not make a discovery result authoritative on its own: an attacker
+willing to run accepted code and pay for a genuine, authorized signer addition can
+still produce an account on which the victim really is a signer, and for a
+secondary credential on a device with no local state that is not distinguishable
+client-side from the real account.
+
+Bound that residual in the flow rather than with another state check:
+
+- Never auto-select from a multi-candidate reverse lookup.
+  `discoverContractsByCredential` returns a list and forces an explicit choice —
+  that is the correct shape; keep it.
+- Surface provenance (genesis credential, code identity) at selection.
+- Prefer recovery with the credential that created the account, which reduces to
+  the derivation case that genesis provenance closes.
+- Keep an unverified discovery result unauthenticated — never present it as a
+  deposit address.
 
 Until `0.5.1`, connecting or syncing **deleted a credential's stored wallet
 mapping**, so storage-first resolution stopped protecting that credential on
@@ -169,14 +227,46 @@ reduce operational risk on testnet and on shared infrastructure.
   is publicly derivable, so anyone can move its balance today.
 - Source shared infrastructure deploys (verifier, policy, WASM upload) from a
   dedicated funded account rather than a shared deployer.
-- Bind code identity on the connect path: a **WASM-hash allowlist** checked
-  against the contract instance the path already reads. Explicitly **not** a bare
-  signer-presence check — a squatted contract answers `get_signer_id` with
-  whatever the client wants, so that check verifies nothing against this
-  adversary and would misrepresent the guarantee. Deliberately not shipped as a
-  lone opt-in flag: the sibling repo's equivalent is enabled by no consumer, and
-  an always-on single-hash check breaks legitimately upgraded wallets, which both
-  contracts support. It earns its place only alongside a real code-identity
-  design, not before one.
+- **Verify genesis provenance on the connect path.** For an address reached by
+  derivation, require that the contract's genesis signer set is exactly the
+  credential derived from, and that its genesis policies are empty — both read
+  from the constructor arguments of the creating transaction (equivalently the
+  contract's first signer events), never from current state.
+
+  This is the check that closes the derivation fallback, and it works where the
+  state checks do not: every state read at a squatted address returns what the
+  squatter wrote, whereas genesis is immutable history. It also needs no trusted
+  local state — only the `credentialId` already in hand — which is why it covers
+  the fresh-device case that signer-set equality cannot.
+
+  An attacker cannot both pass it and hold authority. Genesis
+  `[victim]` with empty policies leaves them with no key and no way to obtain one
+  (`add_signer` and `upgrade` require wallet auth). Anything else — an extra
+  constructor signer, or a policy granting them authority — is a detectable
+  mismatch. The policy half is not optional here: this constructor takes a signer
+  **array** and a policy **map**, so `signers: [victim]` with an attacker policy
+  would pass a signers-only check while handing over control.
+
+  Note the residual: it does not make derivation authoritative for a secondary
+  credential, whose derived address no legitimate deploy occupies. It guarantees
+  only that whatever sits there is not attacker-controlled — theft degrades to a
+  duplicate wallet the victim solely controls.
+
+  It also closes the **derivation path only**. An indexer-returned candidate is
+  not at a derived address and has no expected genesis relationship to a
+  secondary credential, so this check cannot validate one. See below.
+
+- ~~Bind code identity on the connect path.~~ **Shipped in `0.6.0`** — see
+  "Why code identity is bound before signer state" above.
+
+  Implementation is indexer-side: this reads history, so RPC event retention will
+  not cover older contracts. It is not blind trust in the indexer, since its
+  answer names a transaction the client can fetch and verify.
+
+  **Supersedes the previously tracked WASM-hash allowlist.** An allowlist binds
+  code identity and is worth having against lying code, but it does not bind the
+  constructor signer set or policy map, so it cannot authenticate an address on
+  its own. Explicitly still **not** a bare signer-presence check — a squatted
+  contract answers `get_signer_id` with whatever the client wants.
   *(The other half of this item — keeping a non-pending credential's stored
   mapping instead of deleting it — shipped in `0.5.1`.)*

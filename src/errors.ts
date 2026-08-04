@@ -18,6 +18,7 @@ export enum SmartAccountErrorCode {
   WALLET_NOT_CONNECTED = 2001,
   WALLET_ALREADY_EXISTS = 2002,
   WALLET_NOT_FOUND = 2003,
+  WALLET_CODE_NOT_ACCEPTED = 2004,
 
   // Credential errors (3xxx)
   CREDENTIAL_NOT_FOUND = 3001,
@@ -153,6 +154,27 @@ export class SignerNotFoundError extends SmartAccountError {
       { context: { identifier } }
     );
     this.name = "SignerNotFoundError";
+  }
+}
+
+/**
+ * Error thrown when a resolved smart account runs code that is not on the
+ * accepted allowlist.
+ *
+ * An address reached from an untrusted source — an indexer reverse lookup or
+ * address derivation — is a claim, not a fact. Binding accepted code identity is
+ * what makes the account's on-chain signer state meaningful, because arbitrary
+ * code can present whatever state a client expects.
+ */
+export class WalletCodeNotAcceptedError extends SmartAccountError {
+  constructor(contractId: string, actual: string, accepted: readonly string[]) {
+    super(
+      `Smart account ${contractId} runs unaccepted code (${actual}). ` +
+        "If this is a legitimate upgrade, add its WASM hash to `acceptedWasmHashes`.",
+      SmartAccountErrorCode.WALLET_CODE_NOT_ACCEPTED,
+      { context: { contractId, actual, accepted } }
+    );
+    this.name = "WalletCodeNotAcceptedError";
   }
 }
 

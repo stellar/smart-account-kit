@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.0 — 2026-08-04
+
+- **Added: code identity is bound on the connect path, on by default.**
+  `connectWithCredentials` now checks the resolved account's executable against
+  the new `acceptedWasmHashes` option whenever the address came from an untrusted
+  source — address derivation, or an app-supplied `contractId` such as a
+  discovery result. It defaults to `[accountWasmHash]`, so the common case needs
+  no configuration, and it reuses the contract instance entry the path already
+  read for its existence probe, so it costs no extra round-trip.
+
+  Why: an address from a reverse lookup or from derivation is a claim by an
+  untrusted party. A contract controls its own storage and emitted events, so
+  code of the author's choosing can present whatever on-chain state a client
+  inspects. Binding accepted code is what makes any later state read meaningful.
+  Previously this path confirmed only that *some* contract instance existed.
+
+  **Breaking for one case:** connecting to an account running code that is not on
+  the allowlist, from an untrusted path, now throws `WalletCodeNotAcceptedError`
+  instead of succeeding. Accounts resolved from trusted local storage are **not**
+  checked, so returning users with legitimately upgraded accounts are unaffected.
+  If you have upgraded accounts reachable by derivation or discovery, list their
+  hashes in `acceptedWasmHashes`.
+
+  See [`docs/security-deterministic-deployer.md`](./docs/security-deterministic-deployer.md).
+
 ## 0.5.2 — 2026-08-04
 
 - **Fixed: contract errors were silently returned as values.** A contract method

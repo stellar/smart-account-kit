@@ -90,6 +90,7 @@ The current Protocol 27 testnet/mainnet deployed contract IDs and WASM hashes ar
 | `rpcUrl` | `string` | Yes | Stellar RPC URL |
 | `networkPassphrase` | `string` | Yes | Network passphrase |
 | `accountWasmHash` | `string` | Yes | Smart account WASM hash for deployment |
+| `acceptedWasmHashes` | `string[]` | No | Code identities accepted when connecting to an account resolved from an untrusted source (derivation, or a discovery result). Defaults to `[accountWasmHash]`. Add each hash as upgrades roll out — see [security notes](./docs/security-deterministic-deployer.md) |
 | `webauthnVerifierAddress` | `string` | Yes | Deployed WebAuthn verifier contract address |
 | `ed25519VerifierAddress` | `string` | No | Deployed Ed25519 verifier — required only for Ed25519 external signers |
 | `defaultPolicies` | `PolicyConfig[]` | No | Constructor policies installed on the default rule of newly created wallets |

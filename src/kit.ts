@@ -219,6 +219,8 @@ export class SmartAccountKit {
 
   // Contract configuration
   private readonly accountWasmHash: string;
+  /** Accepted code identities, lowercase hex. Never empty. */
+  readonly acceptedWasmHashes: readonly string[];
   private readonly webauthnVerifierAddress: string;
   /** Deployed Ed25519 verifier contract address, if configured. */
   public readonly ed25519VerifierAddress?: string;
@@ -421,6 +423,13 @@ export class SmartAccountKit {
 
     // Contracts
     this.accountWasmHash = config.accountWasmHash;
+    // Seeded from the deploy hash so the common case is zero-config; an empty
+    // array would silently accept nothing, so treat it as "not supplied".
+    this.acceptedWasmHashes = (
+      config.acceptedWasmHashes?.length
+        ? config.acceptedWasmHashes
+        : [config.accountWasmHash]
+    ).map((h) => h.toLowerCase());
     this.webauthnVerifierAddress = config.webauthnVerifierAddress;
     this.ed25519VerifierAddress = config.ed25519VerifierAddress;
     this.defaultPolicies = config.defaultPolicies;
@@ -989,6 +998,7 @@ export class SmartAccountKit {
         deployerKeypair: this.deployerKeypair,
         networkPassphrase: this.networkPassphrase,
         sessionExpiryMs: this.sessionExpiryMs,
+        acceptedWasmHashes: this.acceptedWasmHashes,
         events: this.events,
         setConnectedState: (nextContractId, nextCredentialId) =>
           this.setConnectedState(nextContractId, nextCredentialId),

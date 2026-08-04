@@ -18,7 +18,7 @@ import {
   generateChallenge,
   isCredentialSafeToDelete,
 } from "../utils.js";
-import { ValidationError } from "../errors.js";
+import { ValidationError, WalletCodeNotAcceptedError } from "../errors.js";
 import { failedTransaction } from "../contract-errors.js";
 import {
   prepareDeploymentArtifacts,
@@ -226,6 +226,29 @@ export async function connectWallet(
   };
 }
 
+/**
+ * Assert a contract instance runs code on the accepted allowlist.
+ *
+ * Reads the executable out of an instance ledger entry the caller already has,
+ * so this costs no extra round-trip.
+ */
+function assertAcceptedCode(
+  instance: Awaited<ReturnType<rpc.Server["getContractData"]>>,
+  contractId: string,
+  accepted: readonly string[]
+): void {
+  const executable = instance.val.contractData().val().instance().executable();
+  if (executable.switch().name !== "contractExecutableWasm") {
+    // A Stellar-asset-contract executable has no WASM hash to bind, so it can
+    // never be an accepted smart account.
+    throw new WalletCodeNotAcceptedError(contractId, "not-a-wasm-contract", accepted);
+  }
+  const actual = executable.wasmHash().toString("hex");
+  if (!accepted.includes(actual)) {
+    throw new WalletCodeNotAcceptedError(contractId, actual, accepted);
+  }
+}
+
 export async function connectWithCredentials(
   deps: {
     storage: StorageAdapter;
@@ -233,6 +256,8 @@ export async function connectWithCredentials(
     deployerKeypair: Keypair;
     networkPassphrase: string;
     sessionExpiryMs: number;
+    /** Accepted code identities, lowercase hex. Never empty. */
+    acceptedWasmHashes: readonly string[];
     events: SmartAccountEventEmitter;
     setConnectedState: (contractId: string, credentialId: string) => void;
   },
@@ -266,8 +291,9 @@ export async function connectWithCredentials(
     throw new Error("Could not determine credential ID");
   }
 
+  let instance: Awaited<ReturnType<typeof deps.rpc.getContractData>>;
   try {
-    await deps.rpc.getContractData(
+    instance = await deps.rpc.getContractData(
       contractId,
       xdr.ScVal.scvLedgerKeyContractInstance()
     );
@@ -281,6 +307,16 @@ export async function connectWithCredentials(
       `Smart account contract not found on-chain for credential ${credentialId}. ` +
       "The wallet may not have been deployed yet."
     );
+  }
+
+  // Bind accepted code identity when the address did NOT come from trusted local
+  // state. An indexer row or a derived address is a claim by an untrusted party,
+  // and arbitrary code can present whatever on-chain state a client checks for —
+  // so accepted code is what makes any later state read meaningful. A
+  // storage-resolved address is skipped, so a legitimately upgraded account still
+  // opens for a returning user. Reuses the instance entry already read above.
+  if (!credential) {
+    assertAcceptedCode(instance, contractId, deps.acceptedWasmHashes);
   }
 
   if (credential) {
