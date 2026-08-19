@@ -2,9 +2,14 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## Unreleased
+## 0.6.2 — 2026-08-19
 
 - Improved browser compatibility for authorization nonce generation.
+  Nonce encoding now uses `DataView` without Buffer BigInt accessors.
+- Hardened the indexer demo rendering for external metadata.
+- Added an explicit security status and mainnet value warning.
+- Reduced unnecessary security implementation details in public documentation and comments.
+- Released `smart-account-kit-bindings@0.3.1` with the same security status.
 
 ## 0.6.1 — 2026-08-19
 

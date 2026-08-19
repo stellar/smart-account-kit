@@ -5,7 +5,9 @@ The repository publishes two packages. Release them in this order so the SDK can
 1. `smart-account-kit-bindings`
 2. `smart-account-kit`
 
-The current release target is `smart-account-kit@0.4.0` with `smart-account-kit-bindings@0.3.0` (the OpenZeppelin-parity overhaul). The two packages are versioned independently: the versions checked into `package.json` and `packages/smart-account-kit-bindings/package.json` are authoritative, and `npm view` (below) is the source of truth for what is already published. Confirm both against the checked-in `package.json` files before publishing.
+The two packages are versioned independently.
+The checked-in `package.json` files define the release targets.
+Use `npm view` as the source of truth for published versions.
 
 ## Prerequisites
 
@@ -40,7 +42,7 @@ CONTRACTS=../stellar-contracts
 )
 
 ACCOUNT_WASM="$CONTRACTS/target/wasm32v1-none/release/multisig_account_example.wasm" \
-BINDINGS_VERSION=0.3.0 \
+BINDINGS_VERSION=$(node -p "require('./packages/smart-account-kit-bindings/package.json').version") \
 pnpm build:bindings
 ```
 
@@ -76,8 +78,10 @@ Commit any intended changes before continuing. Uncommitted tracked changes cause
 The dry-run mode verifies npm authentication, reads the live registry versions, and shows the intended publish versions. It does not build or upload a package.
 
 ```bash
-pnpm release:bindings --version 0.3.0 --dry-run
-pnpm release --version 0.4.0 --bindings-version 0.3.0 --dry-run
+BINDINGS_VERSION=$(node -p "require('./packages/smart-account-kit-bindings/package.json').version")
+SDK_VERSION=$(node -p "require('./package.json').version")
+pnpm release:bindings --version "$BINDINGS_VERSION" --dry-run
+pnpm release --version "$SDK_VERSION" --bindings-version "$BINDINGS_VERSION" --dry-run
 ```
 
 Do not insert an extra `--` after the pnpm script name; pnpm forwards it to these shell scripts as an argument.
@@ -85,12 +89,14 @@ Do not insert an extra `--` after the pnpm script name; pnpm forwards it to thes
 ## Publish and verify
 
 ```bash
-pnpm release:bindings --version 0.3.0
-npm view smart-account-kit-bindings@0.3.0 version
+BINDINGS_VERSION=$(node -p "require('./packages/smart-account-kit-bindings/package.json').version")
+SDK_VERSION=$(node -p "require('./package.json').version")
+pnpm release:bindings --version "$BINDINGS_VERSION"
+npm view "smart-account-kit-bindings@$BINDINGS_VERSION" version
 
-pnpm release --version 0.4.0 --bindings-version 0.3.0
-npm view smart-account-kit@0.4.0 version
-npm view smart-account-kit@0.4.0 dependencies
+pnpm release --version "$SDK_VERSION" --bindings-version "$BINDINGS_VERSION"
+npm view "smart-account-kit@$SDK_VERSION" version
+npm view "smart-account-kit@$SDK_VERSION" dependencies
 ```
 
 If npm requires a one-time password, append `--otp <fresh-code>` to each `pnpm release...` command. Use a fresh code for the second publish if the first one expires.
