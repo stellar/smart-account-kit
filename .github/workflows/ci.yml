@@ -41,9 +41,13 @@ jobs:
 
       - run: pnpm test --run
 
+      - run: pnpm --filter indexer-demo test
+
       # The demo consumes the SDK's public API, so this catches breaking
       # changes that the unit tests do not.
       - run: pnpm run build:demo
+
+      - run: pnpm --filter indexer-demo build
 
       # `prebuild` regenerates src/version.ts; if that leaves the tree dirty,
       # the committed version constant is stale.
