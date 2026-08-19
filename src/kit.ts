@@ -800,7 +800,10 @@ export class SmartAccountKit {
         residentKey?: "discouraged" | "preferred" | "required";
         userVerification?: "discouraged" | "preferred" | "required";
       };
-      /** If true, automatically submit and wait for confirmation. Default: false */
+      /**
+       * If true, submit and wait for confirmation. The kit connects only after
+       * a successful deployment. Default: false.
+       */
       autoSubmit?: boolean;
       /** If true and on testnet, fund the wallet via Friendbot after creation. Requires nativeTokenContract. */
       autoFund?: boolean;

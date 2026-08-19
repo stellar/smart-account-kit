@@ -82,7 +82,10 @@ export interface StoredCredential {
   /** Which context rule ID this signer belongs to (if any) */
   contextRuleId?: number;
 
-  /** Whether this was the primary passkey used to deploy the wallet */
+  /**
+   * Whether this was the primary passkey used to deploy the wallet.
+   * An omitted legacy value is not trusted as a secondary association.
+   */
   isPrimary?: boolean;
 
   /**
@@ -125,9 +128,11 @@ export interface SmartAccountConfig {
    * checks for, so an unbound reverse lookup proves nothing.
    *
    * A list rather than a single value because a legitimately upgraded account
-   * runs different code — add each accepted hash as upgrades roll out. An
-   * address resolved from trusted local storage is not checked, so returning
-   * users with upgraded accounts are unaffected.
+   * runs different code — add each accepted hash as upgrades roll out. A
+   * distinct explicitly non-primary address from trusted local association
+   * state is not checked, so returning users with upgraded accounts are unaffected.
+   * Empty addresses, deterministic deployment addresses, and primary deployment
+   * predictions are checked because they do not confirm a successful deployment.
    */
   acceptedWasmHashes?: string[];
 

@@ -66,6 +66,7 @@ describe("SmartAccountKit top-level surface", () => {
       } as unknown as SmartAccountKit,
       "My App",
       "user@example.com",
+      { autoSubmit: true },
     );
 
     expect(createPasskey).toHaveBeenCalledWith("My App", "user@example.com", undefined);

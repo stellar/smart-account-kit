@@ -124,21 +124,24 @@ export async function createWallet(
     deps.signWithDeployer
   );
 
-  deps.setConnectedState(contractId, credentialId);
-
-  deps.events.emit("walletConnected", { contractId, credentialId });
-
-  const now = Date.now();
-  await deps.storage.saveSession({
-    contractId,
-    credentialId,
-    connectedAt: now,
-    expiresAt: now + (deps.sessionExpiryMs ?? DEFAULT_SESSION_EXPIRY_MS),
-  });
-
   const submitResult = options?.autoSubmit
     ? await deps.submitDeploymentTx(deployTx, credentialId, submissionOpts)
     : undefined;
+
+  // A derived address is only a prediction until deployment succeeds. Do not
+  // expose it as a connected wallet or persist it as a restorable session.
+  if (submitResult?.success) {
+    deps.setConnectedState(contractId, credentialId);
+    deps.events.emit("walletConnected", { contractId, credentialId });
+
+    const now = Date.now();
+    await deps.storage.saveSession({
+      contractId,
+      credentialId,
+      connectedAt: now,
+      expiresAt: now + (deps.sessionExpiryMs ?? DEFAULT_SESSION_EXPIRY_MS),
+    });
+  }
 
   let fundResult: (TransactionResult & { amount?: number }) | undefined;
   if (options?.autoFund && submitResult?.success) {
@@ -291,6 +294,23 @@ export async function connectWithCredentials(
     throw new Error("Could not determine credential ID");
   }
 
+  // A pending primary row stores either an empty address or a deterministic
+  // deployment prediction. Neither proves that this SDK deployed the contract.
+  // isPrimary keeps that provenance after a deployer configuration change.
+  // Only a distinct non-primary mapping is trusted local association state.
+  if (credential && !derivedContractId) {
+    derivedContractId = deriveContractAddress(
+      base64url.toBuffer(credentialId),
+      deps.deployerKeypair.publicKey(),
+      deps.networkPassphrase
+    );
+  }
+  const resolvedFromTrustedStorage =
+    credential !== null &&
+    credential.isPrimary === false &&
+    credential.contractId !== "" &&
+    credential.contractId !== derivedContractId;
+
   let instance: Awaited<ReturnType<typeof deps.rpc.getContractData>>;
   try {
     instance = await deps.rpc.getContractData(
@@ -310,21 +330,18 @@ export async function connectWithCredentials(
   }
 
   // Bind accepted code identity when the address did NOT come from trusted local
-  // state. An indexer row or a derived address is a claim by an untrusted party,
-  // and arbitrary code can present whatever on-chain state a client checks for —
-  // so accepted code is what makes any later state read meaningful. A
-  // storage-resolved address is skipped, so a legitimately upgraded account still
-  // opens for a returning user. Reuses the instance entry already read above.
-  if (!credential) {
+  // association state. A deterministic pending or failed row is still only an
+  // address prediction. A distinct stored mapping keeps the upgrade exception.
+  // Reuse the instance entry already read above.
+  if (!resolvedFromTrustedStorage) {
     assertAcceptedCode(instance, contractId, deps.acceptedWasmHashes);
   }
 
   if (credential) {
-    derivedContractId ??= deriveContractAddress(
-      base64url.toBuffer(credentialId),
-      deps.deployerKeypair.publicKey(),
-      deps.networkPassphrase
-    );
+    // A stored credential always has a derived ID by this point.
+    if (!derivedContractId) {
+      throw new Error("Could not derive contract ID");
+    }
     if (isCredentialSafeToDelete(credential, derivedContractId)) {
       await deps.storage.delete(credentialId);
     }
