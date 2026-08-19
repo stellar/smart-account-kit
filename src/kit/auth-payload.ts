@@ -316,7 +316,12 @@ export function upsertAuthPayloadSigner(
 export function randomAuthEntryNonce(): xdr.Int64 {
   const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
-  return xdr.Int64.fromString(Buffer.from(bytes).readBigInt64BE(0).toString());
+  // DataView, not Buffer#readBigInt64BE: common bundler `buffer` polyfills
+  // (Next.js ships a pre-6.x feross/buffer) lack the BigInt accessors, which
+  // crashed every browser flow that builds an auth entry.
+  return xdr.Int64.fromString(
+    new DataView(bytes.buffer).getBigInt64(0, false).toString(),
+  );
 }
 
 export function signerToScVal(signer: ContractSigner): xdr.ScVal {
