@@ -113,6 +113,7 @@ export class CredentialManager {
       nickname,
       createdAt: Date.now(),
       transports: rawResponse?.response?.transports,
+      isPrimary: true,
       deploymentStatus: "pending",
     };
 
@@ -130,6 +131,7 @@ export class CredentialManager {
     publicKey: Uint8Array;
     nickname?: string;
     contractId?: string;
+    isPrimary?: boolean;
   }): Promise<StoredCredential> {
     const storedCredential: StoredCredential = {
       credentialId: credential.credentialId,
@@ -137,6 +139,8 @@ export class CredentialManager {
       contractId: credential.contractId || "",
       nickname: credential.nickname,
       createdAt: Date.now(),
+      isPrimary:
+        credential.isPrimary ?? (credential.contractId ? undefined : true),
       deploymentStatus: "pending",
     };
 
@@ -146,6 +150,9 @@ export class CredentialManager {
 
   /**
    * Deploy a wallet using an existing pending credential.
+   *
+   * The manager connects only after a successful automatic submission. A
+   * manual caller must connect after its own submission confirms.
    *
    * @param options.policies - Constructor policies to install on the new
    *   wallet's default context rule. Overrides `config.defaultPolicies` when
@@ -181,13 +188,17 @@ export class CredentialManager {
       this.deps.signWithDeployer
     );
 
-    this.deps.setConnectedState(contractId, credentialId);
-    this.deps.initializeWallet(contractId);
-    this.deps.events.emit("walletConnected", { contractId, credentialId });
-
     const submitResult = options?.autoSubmit
       ? await this.deps.submitDeploymentTx(deployTx, credentialId, submissionOpts)
       : undefined;
+
+    // A derived address is not a wallet connection until its deployment has
+    // succeeded. Manual callers can connect after their own submission confirms.
+    if (submitResult?.success) {
+      this.deps.setConnectedState(contractId, credentialId);
+      this.deps.initializeWallet(contractId);
+      this.deps.events.emit("walletConnected", { contractId, credentialId });
+    }
 
     return {
       contractId,

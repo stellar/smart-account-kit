@@ -1,5 +1,5 @@
 import { Address, hash, xdr } from "@stellar/stellar-sdk";
-import type { contract, rpc } from "@stellar/stellar-sdk";
+import { contract, type rpc } from "@stellar/stellar-sdk";
 import type { SubmissionOptions, TransactionResult } from "../types.js";
 import type { RelayerClient } from "../relayer.js";
 import type { StorageAdapter } from "../types.js";
@@ -82,13 +82,59 @@ export function sharedDeployerFeeError(
 async function sendDeploymentTxViaRpc<T>(
   tx: contract.AssembledTransaction<T>
 ): Promise<{ hashValue: string; ledger: number | undefined }> {
-  const sentTx = await tx.send();
+  let sentTx: Awaited<ReturnType<typeof tx.send>>;
+  try {
+    sentTx = await tx.send();
+  } catch (error) {
+    if (
+      error instanceof contract.SentTransaction.Errors.TransactionStillPending
+    ) {
+      const signed = tx.signed as { hash?: () => Buffer } | undefined;
+      throw transactionConfirmationError(
+        "NOT_FOUND",
+        signed?.hash?.().toString("hex")
+      );
+    }
+    throw error;
+  }
   const txResponse = sentTx.getTransactionResponse;
+  const hashValue = sentTx.sendTransactionResponse?.hash ?? "";
+
+  if (!hashValue) {
+    throw new Error("Transaction submission returned no hash");
+  }
+  if (txResponse?.status !== "SUCCESS") {
+    throw transactionConfirmationError(txResponse?.status, hashValue);
+  }
 
   return {
-    hashValue: sentTx.sendTransactionResponse?.hash ?? "",
-    ledger: txResponse?.status === "SUCCESS" ? txResponse.ledger : undefined,
+    hashValue,
+    ledger: txResponse.ledger,
   };
+}
+
+class TransactionConfirmationError extends Error {
+  constructor(
+    readonly deploymentStatus: "pending" | "failed",
+    readonly hash: string | undefined,
+    message: string
+  ) {
+    super(message);
+    this.name = "TransactionConfirmationError";
+  }
+}
+
+function transactionConfirmationError(
+  status: string | undefined,
+  hash?: string
+): TransactionConfirmationError {
+  return new TransactionConfirmationError(
+    status === "FAILED" ? "failed" : "pending",
+    hash,
+    status === "FAILED"
+      ? "Transaction failed on-chain"
+      : "Transaction confirmation timed out"
+  );
 }
 
 export async function submitDeploymentTx(
@@ -116,6 +162,7 @@ export async function submitDeploymentTx(
   }
 
   if (authEntryRoute) {
+    let submittedHash: string | undefined;
     try {
       const relayerResult = await deps.relayer!.send(
         deployment.func.toXDR("base64"),
@@ -125,27 +172,30 @@ export async function submitDeploymentTx(
         throw new Error(relayerResult.error ?? "Relayer submission failed");
       }
 
-      const hashValue = relayerResult.hash ?? "";
-      const txResult = await deps.rpc.pollTransaction(hashValue, { attempts: 10 });
+      submittedHash = relayerResult.hash ?? "";
+      if (!submittedHash) {
+        throw new Error("Relayer submission returned no transaction hash");
+      }
+      const txResult = await deps.rpc.pollTransaction(submittedHash, { attempts: 10 });
       if (txResult.status !== "SUCCESS") {
-        throw new Error(
-          txResult.status === "FAILED"
-            ? "Transaction failed on-chain"
-            : "Transaction confirmation timed out"
-        );
+        throw transactionConfirmationError(txResult.status, submittedHash);
       }
 
       await deps.storage.delete(credentialId);
-      return { success: true, hash: hashValue, ledger: txResult.ledger };
+      return { success: true, hash: submittedHash, ledger: txResult.ledger };
     } catch (err) {
       const error =
         decodeContractError(err) ??
         wrapError(err, SmartAccountErrorCode.CREDENTIAL_DEPLOYMENT_FAILED);
+      const confirmation =
+        err instanceof TransactionConfirmationError ? err : undefined;
+      const knownHash = confirmation?.hash ?? submittedHash;
       await deps.storage.update(credentialId, {
-        deploymentStatus: "failed",
+        deploymentStatus:
+          confirmation?.deploymentStatus ?? (knownHash ? "pending" : "failed"),
         deploymentError: error.message,
       });
-      return failedTransaction(error);
+      return failedTransaction(error, knownHash);
     }
   }
 
@@ -153,6 +203,7 @@ export async function submitDeploymentTx(
 
   const rpcSubmit = () => sendDeploymentTxViaRpc(tx);
 
+  let submittedHash: string | undefined;
   try {
     let hashValue: string;
     let ledger: number | undefined;
@@ -168,17 +219,21 @@ export async function submitDeploymentTx(
         ({ hashValue, ledger } = await rpcSubmit());
       } else {
         hashValue = relayerResult.hash ?? "";
+        if (!hashValue) {
+          throw new Error("Relayer submission returned no transaction hash");
+        }
+        submittedHash = hashValue;
 
         const txResult = await deps.rpc.pollTransaction(hashValue, { attempts: 10 });
-        if (txResult.status === "SUCCESS") {
-          ledger = txResult.ledger;
-        } else if (txResult.status === "FAILED") {
-          throw new Error("Transaction failed on-chain");
+        if (txResult.status !== "SUCCESS") {
+          throw transactionConfirmationError(txResult.status, hashValue);
         }
+        ledger = txResult.ledger;
       }
     } else {
       ({ hashValue, ledger } = await rpcSubmit());
     }
+    submittedHash = hashValue;
 
     await deps.storage.delete(credentialId);
     return {
@@ -190,11 +245,15 @@ export async function submitDeploymentTx(
     const error =
       decodeContractError(err) ??
       wrapError(err, SmartAccountErrorCode.CREDENTIAL_DEPLOYMENT_FAILED);
+    const confirmation =
+      err instanceof TransactionConfirmationError ? err : undefined;
+    const knownHash = confirmation?.hash ?? submittedHash;
     await deps.storage.update(credentialId, {
-      deploymentStatus: "failed",
+      deploymentStatus:
+        confirmation?.deploymentStatus ?? (knownHash ? "pending" : "failed"),
       deploymentError: error.message,
     });
-    return failedTransaction(error);
+    return failedTransaction(error, knownHash);
   }
 }
 

@@ -111,6 +111,110 @@ describe("submitDeploymentTx", () => {
     });
   });
 
+  it.each([
+    ["FAILED", "failed"],
+    ["NOT_FOUND", "pending"],
+  ] as const)(
+    "does not confirm a relayer deployment with %s status",
+    async (status, deploymentStatus) => {
+      const deps = makeDeps();
+      const tx = makeTx();
+      deps.relayer.sendXdr.mockResolvedValue({
+        success: true,
+        hash: "relayer-hash",
+      });
+      deps.rpc.pollTransaction.mockResolvedValue({ status });
+
+      const result = await submitDeploymentTx(
+        deps as never,
+        tx as never,
+        "cred-unconfirmed"
+      );
+
+      expect(result.success).toBe(false);
+      expect(result).toMatchObject({ hash: "relayer-hash" });
+      expect(deps.storage.delete).not.toHaveBeenCalled();
+      expect(deps.storage.update).toHaveBeenCalledWith("cred-unconfirmed", {
+        deploymentStatus,
+        deploymentError: expect.stringMatching(/failed|timed out/i),
+      });
+    }
+  );
+
+  it.each([
+    ["FAILED", "failed"],
+    ["NOT_FOUND", "pending"],
+  ] as const)(
+    "does not confirm a direct RPC deployment with %s status",
+    async (status, deploymentStatus) => {
+      const deps = makeDeps();
+      deps.relayer = null as never;
+      const tx = makeTx({
+        sendTransactionResponse: { hash: "rpc-hash" },
+        getTransactionResponse: { status },
+      });
+
+      const result = await submitDeploymentTx(
+        deps as never,
+        tx as never,
+        "cred-rpc-unconfirmed"
+      );
+
+      expect(result.success).toBe(false);
+      expect(result).toMatchObject({ hash: "rpc-hash" });
+      expect(deps.storage.delete).not.toHaveBeenCalled();
+      expect(deps.storage.update).toHaveBeenCalledWith(
+        "cred-rpc-unconfirmed",
+        {
+          deploymentStatus,
+          deploymentError: expect.stringMatching(/failed|timed out/i),
+        }
+      );
+    }
+  );
+
+  it("does not confirm a custom-relayer deployment without a hash", async () => {
+    const deps = makeDeps();
+    const tx = makeTx();
+    deps.relayer.sendXdr.mockResolvedValue({ success: true });
+
+    const result = await submitDeploymentTx(
+      deps as never,
+      tx as never,
+      "cred-no-relayer-hash"
+    );
+
+    expect(result.success).toBe(false);
+    expect(deps.rpc.pollTransaction).not.toHaveBeenCalled();
+    expect(deps.storage.delete).not.toHaveBeenCalled();
+    expect(deps.storage.update).toHaveBeenCalledWith("cred-no-relayer-hash", {
+      deploymentStatus: "failed",
+      deploymentError: "Relayer submission returned no transaction hash",
+    });
+  });
+
+  it("does not confirm a direct RPC deployment without a hash", async () => {
+    const deps = makeDeps();
+    deps.relayer = null as never;
+    const tx = makeTx({
+      sendTransactionResponse: {},
+      getTransactionResponse: { status: "SUCCESS", ledger: 456 },
+    });
+
+    const result = await submitDeploymentTx(
+      deps as never,
+      tx as never,
+      "cred-no-rpc-hash"
+    );
+
+    expect(result.success).toBe(false);
+    expect(deps.storage.delete).not.toHaveBeenCalled();
+    expect(deps.storage.update).toHaveBeenCalledWith("cred-no-rpc-hash", {
+      deploymentStatus: "failed",
+      deploymentError: "Transaction submission returned no hash",
+    });
+  });
+
   it("falls back to rpc for deployments when relayer submission fails", async () => {
     const deps = makeDeps();
     const tx = makeTx();
@@ -204,6 +308,52 @@ describe("submitDeploymentTx", () => {
       expect(deps.relayer.send).toHaveBeenCalledWith("func-xdr", ["auth-xdr"]);
       expect(deps.relayer.sendXdr).not.toHaveBeenCalled();
       expect(result).toEqual({ success: true, hash: "relayer-hash", ledger: 123 });
+    });
+
+    it("does not confirm a shared deployment after polling times out", async () => {
+      const deps = makeDeps();
+      deps.usingSharedDeployer = true;
+      const deployment = makeAuthEntryDeployment();
+      deps.relayer.send.mockResolvedValue({
+        success: true,
+        hash: "relayer-hash",
+      });
+      deps.rpc.pollTransaction.mockResolvedValue({ status: "NOT_FOUND" });
+
+      const result = await submitDeploymentTx(
+        deps as never,
+        deployment as never,
+        "cred-timeout"
+      );
+
+      expect(result.success).toBe(false);
+      expect(result).toMatchObject({ hash: "relayer-hash" });
+      expect(deps.storage.delete).not.toHaveBeenCalled();
+      expect(deps.storage.update).toHaveBeenCalledWith("cred-timeout", {
+        deploymentStatus: "pending",
+        deploymentError: "Transaction confirmation timed out",
+      });
+    });
+
+    it("does not confirm a shared deployment without a hash", async () => {
+      const deps = makeDeps();
+      deps.usingSharedDeployer = true;
+      const deployment = makeAuthEntryDeployment();
+      deps.relayer.send.mockResolvedValue({ success: true });
+
+      const result = await submitDeploymentTx(
+        deps as never,
+        deployment as never,
+        "cred-no-shared-hash"
+      );
+
+      expect(result.success).toBe(false);
+      expect(deps.rpc.pollTransaction).not.toHaveBeenCalled();
+      expect(deps.storage.delete).not.toHaveBeenCalled();
+      expect(deps.storage.update).toHaveBeenCalledWith("cred-no-shared-hash", {
+        deploymentStatus: "failed",
+        deploymentError: "Relayer submission returned no transaction hash",
+      });
     });
 
     it("does not fall back to an envelope submission when the relayer fails", async () => {

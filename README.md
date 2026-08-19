@@ -117,7 +117,7 @@ The deployer salts wallet deployment (the contract address is derived from it). 
 >
 > Because of this, the shared deployer is **sign-only**: it signs the CreateContractV2 authorization entry, while a relayer/channel account supplies the transaction source, sequence, and fees. Choose one of:
 > - **Fee sponsoring:** set `relayerUrl`. The SDK submits `{ func, auth }`; the shared deployer never signs an envelope or supplies sequence/fees.
-> - **Submit it yourself:** call `createWallet(..., { autoSubmit: false })` and submit the returned `relayerPayload: { func, auth }` through any funded source you control. Building it needs no relayer — signing an auth entry spends nothing and confers no privilege, since the deployer's key is public.
+> - **Submit it yourself:** call `createWallet(..., { autoSubmit: false })` and submit the returned `relayerPayload: { func, auth }` through any funded source you control. Building it needs no relayer — signing an auth entry spends nothing and confers no privilege, since the deployer's key is public. The kit remains disconnected until you confirm submission and call `connectWallet()`.
 > - **Dedicated deployer:** set `deployerSecret` to a key you control. It becomes the fee payer. *Note: a custom deployer changes the derived contract addresses, so a wallet created with one deployer cannot be re-derived with another.*
 
 The shared default deployer accounts are, by design, **on-chain hardened** on mainnet: `auth_immutable` is set and thresholds/weights prevent `accountMerge` and signer changes. This bounds takeover, not balance: any XLM held by the sponsored-reserve account remains sweepable. A third party can also set its sequence to `INT64_MAX`, but the current SDK never uses the shared account as an envelope source, so that no longer blocks deployments. **Do not fund it.** See [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md) for the exact guarantees and residual risks.
@@ -197,7 +197,7 @@ Submission methods (`transfer`, `signAndSubmit`, `executeAndSubmit`, `fundWallet
 
 #### Wallet lifecycle
 
-`createWallet()` creates and deploys a new smart account tied to a freshly generated passkey. `connectWallet()` restores or prompts into an existing wallet, `authenticatePasskey()` gives you passkey auth without connecting, and `disconnect()` only clears session state.
+`createWallet()` creates deployment artifacts for a new smart account tied to a freshly generated passkey. With `autoSubmit: true`, it connects only after deployment succeeds. With manual submission, confirm the transaction and call `connectWallet()`. `connectWallet()` restores or prompts into an existing wallet, `authenticatePasskey()` gives you passkey auth without connecting, and `disconnect()` only clears session state.
 
 For transactions, `signAndSubmit()` is the default for smart-account auth flows and the canonical way to submit an assembled transaction returned by any of the sub-managers (`kit.rules.*`, `kit.signers.*`, `kit.policies.*`, `kit.upgrade`, and the policy clients). `executeAndSubmit()` is the one-shot path for arbitrary smart-account-mediated contract calls, and `sign()` / `signAuthEntry()` remain available when you need to inspect or compose around signed auth entries directly.
 
@@ -826,7 +826,7 @@ import type { SmartAccountEventMap, SmartAccountEvent, EventListener } from 'sma
 
 | Event | Payload |
 |-------|---------|
-| `walletConnected` | `{ contractId, credentialId }` |
+| `walletConnected` | `{ contractId, credentialId }` after a confirmed deployment or a validated connection |
 | `walletDisconnected` | `{ contractId }` |
 | `credentialCreated` | `{ credential }` |
 | `credentialDeleted` | `{ credentialId }` |

@@ -150,6 +150,7 @@ describe("CredentialManager", () => {
         publicKey,
         contractId: "",
         nickname: "Recovery",
+        isPrimary: true,
         deploymentStatus: "pending",
       })
     );
@@ -165,6 +166,7 @@ describe("CredentialManager", () => {
         publicKey,
         contractId: "",
         nickname: "Recovery",
+        isPrimary: true,
         deploymentStatus: "pending",
       })
     );
@@ -200,6 +202,28 @@ describe("CredentialManager", () => {
         nickname: "Imported",
         deploymentStatus: "pending",
       })
+    );
+    expect(saved.isPrimary).toBeUndefined();
+  });
+
+  it("stores trusted secondary provenance only when supplied explicitly", async () => {
+    const deps = makeDeps();
+    const manager = new CredentialManager({
+      ...deps,
+      getContractId: vi.fn().mockReturnValue(undefined),
+      rpName: "App",
+    });
+
+    const saved = await manager.save({
+      credentialId: "cred-secondary",
+      publicKey: Buffer.alloc(65, 4),
+      contractId: "CCONTRACT",
+      isPrimary: false,
+    });
+
+    expect(saved.isPrimary).toBe(false);
+    expect(deps.storage.save).toHaveBeenCalledWith(
+      expect.objectContaining({ isPrimary: false })
     );
   });
 
@@ -245,6 +269,43 @@ describe("CredentialManager", () => {
       signedTransaction: "signed-xdr",
       submitResult: { success: true, hash: "tx-1" },
     });
+  });
+
+  it("does not connect when deployment is manual or fails", async () => {
+    const credentialId = base64url.encode("credential-not-deployed");
+    const credential = {
+      credentialId,
+      publicKey: Buffer.alloc(65, 5),
+      contractId: "",
+      createdAt: 1,
+      deploymentStatus: "pending" as const,
+    };
+    const deps = makeDeps([credential]);
+    const deployTx = {
+      signed: { toXDR: vi.fn().mockReturnValue("signed-xdr") },
+    } as any;
+    deps.deriveContractAddress.mockReturnValue("CCONTRACT");
+    deps.buildDeployTransaction.mockResolvedValue(deployTx);
+    deps.signWithDeployer.mockResolvedValue(undefined);
+    deps.submitDeploymentTx.mockResolvedValue({
+      success: false,
+      error: new Error("deployment failed"),
+    });
+    const manager = new CredentialManager({
+      ...deps,
+      getContractId: vi.fn().mockReturnValue(undefined),
+      rpName: "App",
+    });
+
+    await manager.deploy(credentialId);
+    await manager.deploy(credentialId, { autoSubmit: true });
+
+    expect(deps.setConnectedState).not.toHaveBeenCalled();
+    expect(deps.initializeWallet).not.toHaveBeenCalled();
+    expect(deps.events.emit).not.toHaveBeenCalledWith(
+      "walletConnected",
+      expect.anything()
+    );
   });
 
   it("threads deploy() policies through to buildDeployTransaction", async () => {

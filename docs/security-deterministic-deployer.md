@@ -105,11 +105,13 @@ This is an accepted, documented residual:
   not control of a correctly deployed wallet. The deployer is never a wallet
   signer.
 - `connectWithCredentials` resolves from stored credentials first and only falls
-  back to derivation (`src/kit/wallet-ops.ts`), so a returning user with local
-  state is not misbound by a squat. Since `0.6.0` an address that did **not**
-  come from trusted storage is additionally checked against accepted code
-  identity before it is connected; previously this path confirmed only that some
-  contract instance existed, which a squatted contract passes.
+  back to derivation (`src/kit/wallet-ops.ts`). A stored address is trusted only
+  when it is distinct from that credential's deterministic deployment address
+  and the row is explicitly non-primary. Empty rows, deterministic
+  rows, and primary pending or failed rows remain deployment claims. Therefore,
+  the accepted-code check runs before connection, including after deployer
+  configuration changes. Since `0.6.0`, every other untrusted address is also
+  checked against accepted code identity before connection.
 
 A signer-set-equality check **alone is not a mitigation**. Arbitrary code at a
 squatted address can implement `get_signer`, `get_signer_id`, `list`, or an
@@ -154,15 +156,21 @@ enforced authorization**. Under arbitrary code it means nothing. This is
 independent of the deployer key — it needs no derived address and no squatting,
 and it is why a bare signer-presence check was never shipped here.
 
-### What is enforced (since `0.6.0`)
+### What is enforced
 
 `connectWithCredentials` checks the resolved account's executable against
 `acceptedWasmHashes` whenever the address came from an untrusted source —
 derivation, or an app-supplied `contractId` such as a discovery result. Defaults
 to `[accountWasmHash]`. The check reuses the contract instance entry the path
-already fetched for its existence probe, so it costs no extra round-trip. An
-address resolved from trusted local storage is not checked, so a legitimately
-upgraded account still opens for a returning user.
+already fetched for its existence probe, so it costs no extra round-trip. A
+distinct explicitly non-primary address from trusted local association state is not checked,
+so a legitimately upgraded account still opens for a returning user. A stored
+deterministic or primary predicted address is checked because the row does not
+confirm that deployment succeeded.
+
+Legacy rows without an `isPrimary` value fail closed and receive the code check.
+An integrator may migrate a confirmed secondary association to `isPrimary: false`
+only when its local source is trusted.
 
 ### What this does and does not cover
 
