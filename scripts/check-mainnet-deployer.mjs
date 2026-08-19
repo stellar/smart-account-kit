@@ -2,10 +2,8 @@
 /**
  * Verify the shared deterministic deployer's mainnet hardening.
  *
- * The deployer's secret is publicly derivable by design — that is what makes a
- * wallet address reproducible from a credential ID alone. Its safety therefore
- * comes entirely from on-chain configuration, not from secrecy, so that
- * configuration has to be checked rather than assumed.
+ * The deployer's key is public by design. On-chain configuration and an empty
+ * balance provide its required controls. This script verifies those controls.
  *
  * Read-only. Exits non-zero if any invariant fails, so it can run in CI or cron.
  *
@@ -25,12 +23,8 @@ const address =
   Keypair.fromRawEd25519Seed(hash(Buffer.from(DEFAULT_DEPLOYER_SEED))).publicKey();
 
 /**
- * Required geometry. Together these mean: the account cannot be merged away, its
- * signers and thresholds cannot be changed, and it holds nothing worth taking.
- *
- * A weight-2 master key still clears the medium threshold, so it can authorize a
- * payment. That is deliberate — it is what lets the account authorize a
- * create_contract — and it is exactly why the balance must stay at dust.
+ * Required geometry. The account must keep its identity configuration and a
+ * minimal balance.
  */
 const CHECKS = [
   {
@@ -53,7 +47,7 @@ const CHECKS = [
   },
   {
     id: "sole_signer",
-    why: "an extra signer would be someone else's key on a shared identity",
+    why: "the shared identity must contain only its expected signer",
     check: (a) => a.signers.length === 1 && a.signers[0].key === a.account_id,
     actual: (a) => a.signers.map((s) => `${s.key.slice(0, 8)}…:${s.weight}`).join(","),
     expected: "the account itself, once",
@@ -67,7 +61,7 @@ const CHECKS = [
   },
   {
     id: "balance_is_dust",
-    why: "the secret is public, so any real balance is spendable by anyone",
+    why: "the public shared account must keep only a minimal balance",
     // Sponsored reserves put the true minimum at zero; dust is the reserve
     // left over from before sponsorship. Anything above this is someone
     // funding an account they should not fund.
@@ -77,7 +71,7 @@ const CHECKS = [
   },
   {
     id: "no_other_assets",
-    why: "a trustline balance is as spendable as XLM here",
+    why: "the shared deployer must not hold other assets",
     check: (a) => a.balances.filter((b) => b.asset_type !== "native").length === 0,
     actual: (a) =>
       String(a.balances.filter((b) => b.asset_type !== "native").length) + " non-native",

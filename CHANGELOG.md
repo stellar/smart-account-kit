@@ -1,20 +1,22 @@
 # Changelog
 
+All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
+
+## Unreleased
+
+- Improved browser compatibility for authorization nonce generation.
+
+## 0.6.1 — 2026-08-19
+
+- Hardened connection handling for predicted wallet addresses.
+  Pending and failed deployment predictions remain disconnected until deployment confirmation.
+  Confirm a manual submission before you call `connectWallet()`.
+
 ## 0.6.0 — 2026-08-04
 
-- **Added: code identity is bound on the connect path, on by default.**
-  `connectWithCredentials` now checks the resolved account's executable against
-  the new `acceptedWasmHashes` option whenever the address came from an untrusted
-  source — address derivation, or an app-supplied `contractId` such as a
-  discovery result. It defaults to `[accountWasmHash]`, so the common case needs
-  no configuration, and it reuses the contract instance entry the path already
-  read for its existence probe, so it costs no extra round-trip.
-
-  Why: an address from a reverse lookup or from derivation is a claim by an
-  untrusted party. A contract controls its own storage and emitted events, so
-  code of the author's choosing can present whatever on-chain state a client
-  inspects. Binding accepted code is what makes any later state read meaningful.
-  Previously this path confirmed only that *some* contract instance existed.
+- **Added code identity checks to the connection path.**
+  `connectWithCredentials` checks untrusted addresses against
+  `acceptedWasmHashes`. This option defaults to `[accountWasmHash]`.
 
   **Breaking for one case:** connecting to an account running code that is not on
   the allowlist, from an untrusted path, now throws `WalletCodeNotAcceptedError`
@@ -27,33 +29,15 @@
 
 ## 0.5.2 — 2026-08-04
 
-- **Fixed: contract errors were silently returned as values.** A contract method
-  whose spec declares error cases does not throw when it reverts — the SDK wires
-  `errorTypes` from the spec, so the failure comes back as a rust `Err` and
-  `.result` resolves with it. Seven call sites read `.result` directly and so
-  received an `Err` object where a number was expected: `get_signer_id`,
-  `get_policy_id`, the context-rule fallback, and the legacy rule-XDR hydration
-  paths. `SignerManager.remove` and `PolicyManager.remove` then passed that
-  object straight into `remove_signer` / `remove_policy`. Those reads now route
-  through a shared unwrap that raises the documented typed error
-  (`SignerNotFoundError`, `PolicyNotFoundError`, `ContractError`) and rethrows
-  anything unrecognised, so an `Err` can never continue on as data. Transport
-  failures still propagate unchanged.
+- **Fixed contract error handling.** Contract failures now produce documented
+  typed errors instead of continuing as return values. Transport failures still
+  propagate unchanged.
 
 ## 0.5.1 — 2026-08-04
 
-- **Fixed: connecting or syncing deleted a secondary passkey's only wallet
-  mapping.** `CredentialManager.sync()` (and therefore `syncAll()`) deleted any
-  stored credential whose contract existed on-chain, and the connect path did the
-  same. For a credential added with `signers.addPasskey()` that row is the *only*
-  thing mapping it to its wallet — deterministic derivation is correct only for a
-  wallet's first credential, the one that salted its deploy. Once the row was
-  gone and the session expired, reconnecting with that passkey derived an address
-  that is never legitimately deployed and failed, or resolved somewhere
-  unintended. `syncAll()` is called on startup by the demo, so the loss happened
-  routinely rather than at an edge. Pending-credential cleanup is unchanged, and
-  a pending row with an empty `contractId` is now cleaned up correctly instead of
-  being skipped.
+- **Fixed secondary passkey association storage.** Connection and synchronization
+  now preserve confirmed wallet mappings. Pending-credential cleanup remains
+  unchanged.
 
 ## 0.5.0 — 2026-08-03
 
@@ -78,13 +62,12 @@
   `resolveContextRuleIds` override like `multiSigners.transfer`.
 - **Context-rule auto-resolution prefers a rule scoped to the invoked contract
   over a `Default` fallback** when both match the selected signers. Before
-  this change, automatic resolution could select the `Default` rule instead,
-  which bypassed the scoped rule's policies (e.g. a spending limit), because
-  the account only enforces the rule selected at signing time.
+  this change, automatic resolution could select the `Default` rule instead.
+  The new selection keeps scoped policies active.
 
 ## 0.4.2 — 2026-07-11
 
-SDK-usage audit: the kit now leans on `@stellar/stellar-sdk` primitives where
+SDK usage review: the kit now leans on `@stellar/stellar-sdk` primitives where
 it previously re-implemented them.
 
 **Compatibility:** the `@stellar/stellar-sdk` peer requirement is now
@@ -107,7 +90,7 @@ No other breaking changes.
 
 ## 0.4.1 — 2026-07-11
 
-Packaging fix plus a post-release API-surface audit. No breaking changes.
+Packaging fix plus a post-release API-surface review. No breaking changes.
 
 - **Fixed: the published package was unimportable from Node's native ESM loader.**
   `tsconfig` used `moduleResolution: "bundler"`, so `tsc` emitted extensionless
@@ -144,7 +127,7 @@ Packaging fix plus a post-release API-surface audit. No breaking changes.
 
 ## 0.4.0 — 2026-07-10
 
-Ground-up audit and overhaul against the OpenZeppelin smart account contracts
+Ground-up review and overhaul against the OpenZeppelin smart account contracts
 ([`stellar-contracts@1e513890`](https://github.com/OpenZeppelin/stellar-contracts/commit/1e513890ecf79833c9d6e7ef38a9358001c0b111),
 the exact commit behind the Protocol 27 deployments). Breaking release; see
 [`docs/migration-v0.4.0.md`](docs/migration-v0.4.0.md) for the complete
@@ -184,10 +167,10 @@ migration guide.
   with every runtime module covered, including auth-digest and WebAuthn
   signature vectors.
 
-### Audit follow-up fixes
+### Review follow-up fixes
 
 A verified code-review pass over the release branch. See
-[`docs/migration-v0.4.0.md`](docs/migration-v0.4.0.md#audit-follow-up-fixes) for
+[`docs/migration-v0.4.0.md`](docs/migration-v0.4.0.md#review-follow-up-fixes) for
 details and upgrade notes.
 
 - **Host-order `ScMap` sort.** Signer maps (weighted-threshold params and the

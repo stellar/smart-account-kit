@@ -2,6 +2,16 @@
 
 TypeScript SDK for deploying and managing OpenZeppelin smart account contracts on Stellar with WebAuthn passkey authentication.
 
+## Security status
+
+> [!WARNING]
+> This SDK, demo, relayer proxy, and integration code have not undergone an independent security audit.
+> The underlying OpenZeppelin Stellar contracts have a [separate audit](https://www.openzeppelin.com/news/stellar-contracts-rc-v0.7.0-audit) with a different scope.
+> The [deployed artifacts](docs/deployments-protocol-27-2026-07-09.md) use a later source revision than that audit scope.
+> Security fixes and tests do not guarantee safety.
+> Use this software on mainnet at your own risk.
+> Do not store assets you cannot afford to lose in accounts managed through this software.
+
 ## Features
 
 - **Passkey authentication** — create and manage smart wallets secured by WebAuthn passkeys (secp256r1)
@@ -25,7 +35,7 @@ The kit is a client for the OpenZeppelin [`stellar-contracts`](https://github.co
 - **Context rules** — the account's authorization policy. Each rule has a **context type** — `Default` (matches any operation), `CallContract(address)` (a specific target contract), or `CreateContract(wasmHash)` (deploying a specific WASM) — a set of **signers**, a set of **policies**, and an optional `valid_until` expiry. A rule with no policies requires **all** its signers to authenticate; a rule with policies defers to those policies.
 - **Signers** — an on-chain `Signer` is either `Delegated(G-address)` (native Stellar `require_auth`) or `External(verifier, keyData)` (a verifier contract validates a signature). Passkeys are `External` signers against the WebAuthn verifier; Ed25519 keys are `External` signers against the Ed25519 verifier.
 - **Policies** — contracts that enforce additional constraints during authorization (e.g. N-of-M threshold, weighted voting, spending limits). Policies are multi-tenant: their state is keyed by `(smart_account, context_rule_id)`.
-- **Auth digest** — every signer authenticates the same Protocol 27 digest, which binds the context rule ids the signature is valid under (defeating rule-downgrade attacks):
+- **Auth digest** — every signer authenticates the same Protocol 27 digest, which binds the approved context rule ids:
 
   ```text
   signature_payload = sha256(P27 auth preimage)
@@ -97,7 +107,7 @@ The current Protocol 27 testnet/mainnet deployed contract IDs and WASM hashes ar
 | `timeoutInSeconds` | `number` | No | Transaction timeout (default: 30) |
 | `signatureExpirationLedgers` | `number` | No | Signature lifetime from the current ledger (default: 720, ~1 hour) |
 | `storage` | `StorageAdapter` | No | Credential storage adapter (default: in-memory) |
-| `deployerSecret` | `string` | No | Secret key (`S...`) of a deployer you control, which then sources and pays for its own deployments. Defaults to a deterministic well-known keypair whose secret is **publicly derivable** and which is sign-only — see below |
+| `deployerSecret` | `string` | No | Secret key (`S...`) for a deployer you control. The default is a public, shared, sign-only keypair — see below |
 | `externalSignerStorage` | `WalletStorage` | No | Persistence store for external-wallet connections (default: `localStorage` when available) |
 | `rpId` | `string` | No | WebAuthn relying party ID (domain) |
 | `rpName` | `string` | No | WebAuthn relying party name (default: `"Smart Account"`) |
@@ -113,14 +123,14 @@ The current Protocol 27 testnet/mainnet deployed contract IDs and WASM hashes ar
 
 The deployer salts wallet deployment (the contract address is derived from it). By default it is a **deterministic keypair derived from a fixed, well-known seed** (`DEFAULT_DEPLOYER_SEED`), which makes smart-account addresses reproducible across clients from a credential ID alone. The deployer **never controls the smart account** — it is not a signer on the deployed wallet.
 
-> ⚠️ **The default deployer's secret key is publicly derivable from this package's source, and the account is shared across every default-configured integrator.** It must **never** be used as a fee source on a network carrying real value: anyone can read the seed, reconstruct the key, and spend the account's balance. Do not fund it on mainnet, and never follow any prompt to "fund the deployer" for the shared default account.
+> ⚠️ **The default deployer's key is public, and the account is shared across every default-configured integrator.** Any balance is unsafe. Never use it as a fee source or fund it on mainnet.
 >
 > Because of this, the shared deployer is **sign-only**: it signs the CreateContractV2 authorization entry, while a relayer/channel account supplies the transaction source, sequence, and fees. Choose one of:
 > - **Fee sponsoring:** set `relayerUrl`. The SDK submits `{ func, auth }`; the shared deployer never signs an envelope or supplies sequence/fees.
-> - **Submit it yourself:** call `createWallet(..., { autoSubmit: false })` and submit the returned `relayerPayload: { func, auth }` through any funded source you control. Building it needs no relayer — signing an auth entry spends nothing and confers no privilege, since the deployer's key is public. The kit remains disconnected until you confirm submission and call `connectWallet()`.
+> - **Submit it yourself:** call `createWallet(..., { autoSubmit: false })` and submit the returned `relayerPayload: { func, auth }` through any funded source you control. Building it needs no relayer. The kit remains disconnected until you confirm submission and call `connectWallet()`.
 > - **Dedicated deployer:** set `deployerSecret` to a key you control. It becomes the fee payer. *Note: a custom deployer changes the derived contract addresses, so a wallet created with one deployer cannot be re-derived with another.*
 
-The shared default deployer accounts are, by design, **on-chain hardened** on mainnet: `auth_immutable` is set and thresholds/weights prevent `accountMerge` and signer changes. This bounds takeover, not balance: any XLM held by the sponsored-reserve account remains sweepable. A third party can also set its sequence to `INT64_MAX`, but the current SDK never uses the shared account as an envelope source, so that no longer blocks deployments. **Do not fund it.** See [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md) for the exact guarantees and residual risks.
+The shared default deployer accounts use on-chain controls on mainnet. These controls protect identity configuration, not account balances. **Do not fund them.** See [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md) for the guarantees and residual risks.
 
 ### Fee sponsoring
 

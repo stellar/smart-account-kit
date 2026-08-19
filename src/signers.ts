@@ -6,8 +6,8 @@
  *   signature_payload = sha256(P27 auth preimage)          // see auth-payload.ts
  *   auth_digest       = sha256(signature_payload ++ scvVec(context_rule_ids).toXDR())
  *
- * (see scratchpad #576 §__check_auth — auth digest binds the context rule ids to
- * defeat rule-downgrade attacks.)
+ * The auth digest binds the context rule ids, so rule selection cannot change
+ * after signing.
  *
  * A signature-bearing signer (WebAuthn passkey, Ed25519) contributes bytes into
  * the AuthPayload `signers` map keyed by its on-chain {@link ContractSigner}:

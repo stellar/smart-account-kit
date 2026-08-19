@@ -39,8 +39,7 @@ function assertNotSharedDeployerSource(publicKey: string): void {
   if (isDefaultDeployer(publicKey)) {
     throw new SubmissionError(
       `The shared default deployer ${publicKey} must never be a transaction ` +
-        `source or fee payer — its secret key is publicly derivable and its ` +
-        `sequence/balance can be drained or bricked by anyone. Use a relayer ` +
+        `source or fee payer because its signing key is public. Use a relayer ` +
         `(the relayer/channel account sources and pays) or configure a ` +
         `dedicated \`deployerSecret\` you control for this path.`
     );
@@ -335,16 +334,12 @@ export async function resimulateAndAssemble(
  * Pick the source account for a re-simulation, honouring the sign-only
  * invariant for the shared default deployer.
  *
- * On the fee-sponsored (relayer) path the built envelope is DISCARDED —
- * `sendAndPoll` submits only `func` + `auth`, and the relayer/channel account
- * sources and pays. So we must NOT read the deployer's real sequence there: a
- * `bumpSequence`-bricked shared deployer would otherwise overflow the sequence
- * increment and break re-simulation even though its sequence is never used. A
- * placeholder sequence is correct and safe.
+ * On the fee-sponsored path, `sendAndPoll` submits only `func` and `auth`.
+ * The relayer or channel account supplies the source and fee.
+ * A placeholder source is correct because the built envelope is discarded.
  *
- * On the direct-RPC path the envelope IS submitted, so its source's real
- * sequence is required — and the shared default deployer must never be that
- * source (refused here; a dedicated `deployerSecret` you control is fine).
+ * The direct-RPC path submits the envelope and requires the real source sequence.
+ * This function refuses the shared deployer as that source.
  */
 export async function resolveResimSource(
   deps: {
@@ -538,4 +533,3 @@ export async function signAndSubmit(
     return failedTransaction(wrapError(err, SmartAccountErrorCode.TRANSACTION_SIGNING_FAILED));
   }
 }
-

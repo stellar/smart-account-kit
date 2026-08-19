@@ -83,16 +83,9 @@ export const DEFAULT_READ_TIMEOUT_SECONDS = 30;
  * account. This determinism is intentional and load-bearing for keyId → contract
  * discovery — the seed value must not change.
  *
- * ⚠️ SECURITY: because the seed is a published constant, the resulting SECRET
- * key is publicly derivable — `Keypair.fromRawEd25519Seed(hash(seed))` yields it
- * for anyone. The account is therefore SHARED and must NEVER be used as a fee
- * source on any network. The SDK uses it only to sign deploy authorization
- * entries; use a relayer or a dedicated `deployerSecret` instead. On
- * mainnet the shared deployer accounts are additionally hardened on-chain
- * (`auth_immutable` + thresholds) so they can never be merged or re-signed —
- * this bounds *takeover*, but NOT availability or balance: any XLM the account
- * holds is fully sweepable (sponsored reserve → zero minimum), and anyone can
- * `bumpSequence` (low threshold) to permanently brick it. See
+ * SECURITY: the seed and resulting key are public. The account is shared and
+ * must never hold value or pay fees. The SDK uses it only for deployment
+ * authorization. Use a relayer or a dedicated `deployerSecret` instead. See
  * docs/security-deterministic-deployer.md.
  */
 export const DEFAULT_DEPLOYER_SEED = "openzeppelin-smart-account-kit";

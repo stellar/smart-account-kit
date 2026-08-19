@@ -4,6 +4,12 @@ Generated TypeScript client and contract types for the OpenZeppelin smart accoun
 
 Most applications should install [`smart-account-kit`](https://www.npmjs.com/package/smart-account-kit), which wraps these bindings with passkey, signer, policy, discovery, and transaction workflows. Use this package directly when you need the generated contract client or exact contract types.
 
+> [!WARNING]
+> These bindings can build state-changing transactions.
+> This integration package has not undergone an independent security audit.
+> Review each transaction before signing or submitting it.
+> See the [project security status](https://github.com/stellar/smart-account-kit#security-status).
+
 ## Install
 
 ```bash

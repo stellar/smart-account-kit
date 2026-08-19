@@ -459,7 +459,7 @@ describe("resolveResimSource (sign-only invariant)", () => {
       },
       { forceMethod: "relayer" }
     );
-    // Never touches on-chain sequence → a bumpSequence'd deployer can't break it.
+    // The discarded relayer envelope does not need an on-chain sequence.
     expect(getAccount).not.toHaveBeenCalled();
     expect(src.accountId()).toBe(sharedDeployer.publicKey());
   });

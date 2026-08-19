@@ -650,7 +650,7 @@ describe("wallet invocation validation", () => {
 
   it("rejects a non-allowlisted wallet function", async () => {
     await expectRejected(
-      walletSubmission({ functionName: "drain" }),
+      walletSubmission({ functionName: "unsupported" }),
       "Wallet function is not allowlisted"
     );
   });
@@ -674,10 +674,7 @@ describe("wallet invocation validation", () => {
   });
 
   it("accepts a transfer of ANY token when the wallet authorizes it", async () => {
-    // The authorizer is the control, not the asset: a genuine smart account
-    // spending its own balance may move any token. Allowlisting tokens would
-    // break legitimate transfers without stopping abuse (see the note in
-    // validateDirectTokenTransfer).
+    // Wallet authorization and fee controls apply without a token allowlist.
     const body = transferSubmission({ token: OTHER_WALLET });
     const res = await post(body);
     expect(res.status).toBe(200);

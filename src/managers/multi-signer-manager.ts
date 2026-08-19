@@ -462,9 +462,8 @@ export class MultiSignerManager {
 
       onLog("Re-simulating with signatures...");
       const submissionOptions: SubmissionOptions = { forceMethod: options?.forceMethod };
-      // Honour the sign-only invariant: dummy source on the relayer path
-      // (envelope discarded), real source only on direct RPC where the shared
-      // deployer is refused. Never reads a bricked shared deployer's sequence.
+      // Use a placeholder source for the discarded relayer envelope.
+      // Use the real source only for direct RPC, which refuses the shared deployer.
       const sourceAccount = await resolveResimSource(this.deps, submissionOptions);
       const preparedTx = await resimulateAndAssemble(
         this.deps,

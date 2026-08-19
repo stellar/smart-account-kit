@@ -122,10 +122,8 @@ export interface SmartAccountConfig {
    * whose address came from an untrusted source — an indexer reverse lookup or
    * address derivation. Defaults to `[accountWasmHash]`.
    *
-   * Binding code identity is what makes an account's on-chain state meaningful:
-   * under accepted code, signer state can only have been produced by logic that
-   * required authorization. Arbitrary code can present whatever state a client
-   * checks for, so an unbound reverse lookup proves nothing.
+   * Check code identity before trusting account state from an external source.
+   * This check does not prove deployment provenance.
    *
    * A list rather than a single value because a legitimately upgraded account
    * runs different code — add each accepted hash as upgrades roll out. A
@@ -169,11 +167,10 @@ export interface SmartAccountConfig {
    * across clients from a credential ID alone. The deployer only salts the
    * deploy. A custom deployer can source fees; the shared default cannot.
    *
-   * ⚠️ The default deployer's secret key is **publicly derivable from this
-   * package's source** and is a *shared* account across every default-configured
-   * integrator. It MUST NOT be used as a fee source on a live network: anyone
-   * can spend its balance. The SDK uses it only to sign the deploy authorization
-   * entry; a relayer/channel account supplies the transaction source and fees.
+   * The default deployer's key is public, and every default-configured
+   * integrator shares the account. It must not hold value or pay fees.
+   * The SDK uses it only to sign the deploy authorization entry.
+   * A relayer or channel account supplies the transaction source and fees.
    * Configure a `relayerUrl`, or set your own `deployerSecret`
    * (note: a custom deployer changes the derived contract addresses).
    */

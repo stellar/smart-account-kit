@@ -1,9 +1,8 @@
 # Mainnet hardening — the shared deployer
 
-The shared deterministic deployer's secret is publicly derivable. That is the
-design: it is what makes a wallet address reproducible from a credential ID
-alone, by any client, with no server. Its safety therefore comes entirely from
-**on-chain configuration and an empty balance**, never from secrecy.
+The shared deterministic deployer's key is public by design.
+This design makes a wallet address reproducible from a credential ID.
+Its controls depend on on-chain configuration and an empty balance.
 
 Everything below is about the mainnet account. Testnet is deliberately out of
 scope — it holds nothing of value and gets reset.
@@ -22,45 +21,37 @@ detection. It is read-only and needs no keys.
 
 | Invariant | Value | Why |
 |---|---|---|
-| `auth_immutable` | `true` | Blocks `account_merge` and freezes the auth flags. Without it the account can be merged away by anyone. |
+| `auth_immutable` | `true` | Blocks `account_merge` and freezes the authorization flags. |
 | Thresholds | `1 / 2 / 3` | High (3) exceeds the master weight (2), so no one can add a signer, change a threshold, or set options. |
-| Signers | itself, once | A second signer on a shared identity is someone else's key. |
+| Signers | itself, once | The shared identity must not have another signer. |
 | Master weight | `2` | Clears medium — which is what lets it authorize a deployment — but not high. |
-| Native balance | dust (`< 1 XLM`) | The secret is public. Any real balance is spendable by anyone, immediately. |
-| Other assets | none | A trustline balance is exactly as spendable as XLM here. |
+| Native balance | dust (`< 1 XLM`) | The key is public. Any larger balance is unsafe. |
+| Other assets | none | The deployer must not hold asset balances. |
 
 Sponsored reserves keep the account's true minimum balance at zero, so the dust
 is a leftover, not a requirement.
 
 ## What this does and does not buy
 
-**Does:** prevents takeover of the identity. The account cannot be merged, its
+**Does:** protects the identity configuration. The account cannot be merged, its
 signers cannot be changed, and its thresholds cannot be raised or lowered. The
 derived-address namespace therefore cannot be seized.
 
-**Does not:** protect a balance. A weight-2 master key still clears the medium
-threshold, so it can authorize a payment out. That is not a flaw to be fixed —
-it is the same capability that lets the account authorize `create_contract`, and
-removing it would break deployment. **The mitigation is that the account holds
-nothing.**
+**Does not:** protect a balance. The deployer must remain unfunded.
 
-> **Never fund this account.** Not on mainnet, not "just enough for fees", not
-> temporarily. As of `smart-account-kit@0.5.0` the SDK never uses it as a
-> transaction source or fee payer, and no configuration re-enables that, so it
-> has no reason to hold a balance. If you find yourself wanting to fund it,
-> configure a `relayerUrl` or set your own `deployerSecret` instead.
+> **Never fund this account.**
+> Since `smart-account-kit@0.5.0`, the SDK does not use it as a source or fee payer.
+> Configure `relayerUrl` or use a dedicated `deployerSecret` instead.
 
 ## If a check fails
 
-1. **Balance is non-dust.** Assume it is already gone; anyone can sweep it. Move
-   what remains to an account you control, then find what funded it — an old SDK
-   version, a misconfigured integrator, or a manual "fix" — and stop that.
+1. **Balance is non-dust.** Move the remaining balance to an account you control.
+   Find and stop the funding source.
 2. **Thresholds or flags drifted.** With `auth_immutable` set this should be
    impossible; if it happened, the flag was not set when you thought. Re-harden
    immediately and treat the derived namespace as suspect until you have
    confirmed no unexpected wallets were deployed.
-3. **An extra signer appears.** Same as above, and more urgent — someone else can
-   now authorize deployments under this identity.
+3. **An extra signer appears.** Treat the identity as untrusted and start the migration plan.
 4. **The account does not exist.** This is the safest state, not a failure. Do
    not create it. Address derivation does not require the account to exist —
    only authorizing a deployment does, and that is the relayer's job.
@@ -68,10 +59,8 @@ nothing.**
 ## Rotation
 
 Do not rotate the deployer. Its address is an input to every derived wallet
-address, so changing it moves every wallet and breaks credential-only recovery —
-the property the whole design exists to provide. If the identity is ever
-genuinely compromised in a way hardening cannot contain, that is a migration,
-not a key rotation, and it needs its own plan.
+address, so changing it moves every wallet and breaks credential-only recovery.
+If the controls fail, use a planned migration.
 
 See [`security-deterministic-deployer.md`](./security-deterministic-deployer.md)
-for the threat model, the accepted residuals, and the deployer inventory.
+for the security model and required integration rules.

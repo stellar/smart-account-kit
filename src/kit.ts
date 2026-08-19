@@ -260,9 +260,8 @@ export class SmartAccountKit {
   // Contract-address identity and deploy authorizer; only custom deployers source.
   private readonly deployerKeypair: Keypair;
 
-  // True when the deployer resolves to the shared, publicly-derivable default
-  // keypair (by identity — see isDefaultDeployer — so supplying the known-public
-  // secret explicitly still counts). Used to refuse using it as source/fee.
+  // True when the deployer matches the shared default identity.
+  // Source and fee guards use this identity check.
   private readonly usingSharedDeployer: boolean;
 
   // ==========================================================================
@@ -481,11 +480,8 @@ export class SmartAccountKit {
       ? Keypair.fromSecret(config.deployerSecret)
       : Keypair.fromRawEd25519Seed(hash(Buffer.from(DEFAULT_DEPLOYER_SEED)));
 
-    // The deployer is "shared" when it resolves to the publicly-derivable
-    // default keypair — whether via the default (no deployerSecret) OR because a
-    // caller passed the shared secret explicitly. Identity compare (not presence
-    // of deployerSecret) so the guards can't be disabled by supplying the
-    // known-public secret.
+    // Check the resolved identity instead of the configuration path.
+    // Source and fee guards always apply to the shared default deployer.
     this.usingSharedDeployer = isDefaultDeployer(this.deployerKeypair.publicKey());
     // Event emitter (initialized first as other managers may use it)
     this.events = new SmartAccountEventEmitter();

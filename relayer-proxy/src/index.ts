@@ -538,13 +538,9 @@ async function validateDirectTokenTransfer(
   invoke: xdr.InvokeContractArgs,
   auth: xdr.SorobanAuthorizationEntry[]
 ): Promise<void> {
-  // Deliberately NOT allowlisting the token contract. The abuse control here is
-  // the AUTHORIZER, not the asset: the transfer must be authorized by a genuine
-  // smart account (verified on-chain WASM below) spending its own balance, and
-  // fee-drain is bounded by the fee cap + rate limits. Allowlisting tokens would
-  // not stop an attacker (they can spam an allowlisted token from their own
-  // wallet just as easily) while breaking legitimate transfers of any other
-  // asset — a wallet must be able to move arbitrary tokens.
+  // Token allowlists do not improve the fee-abuse controls. Authorization,
+  // on-chain code checks, fee caps, and rate limits provide those controls.
+  // Keep token selection open so wallets can transfer supported assets.
   const args = invoke.args();
   if (args.length !== 3 || args[0].switch().name !== "scvAddress") {
     throw new RequestError("Token transfer has an invalid argument shape", 403);

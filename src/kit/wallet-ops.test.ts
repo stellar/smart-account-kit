@@ -497,10 +497,8 @@ describe("wallet-ops", () => {
     });
 
     it("REJECTS a derived address running unaccepted code", async () => {
-      // Nothing legitimate occupies derive(credentialId) for a credential with no
-      // stored mapping, and arbitrary code there can present whatever on-chain
-      // state a client checks for. Accepted code is the binding that makes any
-      // later state read meaningful, so it must fail closed here.
+      // A derived address without a confirmed mapping is untrusted.
+      // The connection must fail closed when its code is not accepted.
       const storage = new MemoryStorage();
       const deps = makeDeps(
         { getContractData: vi.fn().mockResolvedValue(instanceWithWasm("cd".repeat(32))) },

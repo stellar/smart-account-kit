@@ -245,7 +245,7 @@ The default indexer provider changed to **[Mercury](https://mercurydata.app)**, 
 
 ---
 
-## Audit follow-up fixes
+## Review follow-up fixes
 
 A verified code-review pass over the 0.4.0 branch applied the following behavior changes. They are folded into the 0.4.0 release (no compatibility layer).
 

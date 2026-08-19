@@ -4,6 +4,12 @@ Discovery layer for smart account contracts on Stellar. It enables reverse looku
 
 As of v0.4.0 the indexer is **[Mercury](https://mercurydata.app/)** — a hosted, managed provider. There is nothing to deploy: the SDK points at Mercury's `smart-account-indexer` REST service by default.
 
+> [!IMPORTANT]
+> Treat every discovery result as untrusted.
+> Check the contract code before connecting or showing a deposit address.
+> `SmartAccountKit` performs the code check through `acceptedWasmHashes`.
+> This check does not prove deployment provenance.
+
 > **History:** before v0.4.0 this directory also shipped a self-hosted reference stack (a Goldsky Turbo pipeline → PostgreSQL → Cloudflare Worker). That path was removed in v0.4.0 (too expensive to operate, and Mercury indexes the same events as a managed service). The old pipeline configs, SQL schema, and Worker live in git history if you need them.
 
 ## Why an indexer?

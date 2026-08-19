@@ -2,6 +2,11 @@
 
 Cloudflare Worker that proxies transaction submission to the [OpenZeppelin Relayer Channels](https://docs.openzeppelin.com/relayer) service, so frontend apps can submit **fee-sponsored** Stellar transactions without exposing a Relayer API key.
 
+> [!WARNING]
+> This reference proxy has not undergone an independent security audit.
+> Review and test its configuration before production use.
+> Limit its fee balance and spending capacity to an acceptable loss.
+
 This is a **separate concern from the [indexer](../indexer)**: the indexer answers discovery/read queries (which contracts a passkey signs for), while the relayer proxy submits transactions. They are deployed and operated independently.
 
 It wraps the official [`@openzeppelin/relayer-plugin-channels`](https://www.npmjs.com/package/@openzeppelin/relayer-plugin-channels) `ChannelsClient` and validates the SDK's wallet calls, shared-deployer `{func,auth}` deployments, and signed dedicated-deployer deployment envelopes before forwarding them.

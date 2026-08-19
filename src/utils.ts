@@ -31,13 +31,10 @@ export const DEFAULT_DEPLOYER_PUBLIC_KEY = Keypair.fromRawEd25519Seed(
 ).publicKey();
 
 /**
- * True when `publicKey` is the shared, publicly-derivable default deployer.
+ * True when `publicKey` is the shared default deployer.
  *
- * The default deployer's secret is recoverable from source and the account is
- * shared across all default-configured integrators. It is a **sign-only /
- * address-derivation** identity: the SDK must never use it as a transaction
- * source (sequence) or fee payer. This predicate gates those refusals — see the
- * fee/source guards in `tx-ops`, `deploy-ops`, and the deploy submission path.
+ * This sign-only identity must not provide the transaction source or fee.
+ * This predicate supports the guards in each deployment and submission path.
  */
 export function isDefaultDeployer(publicKey: string): boolean {
   return publicKey === DEFAULT_DEPLOYER_PUBLIC_KEY;

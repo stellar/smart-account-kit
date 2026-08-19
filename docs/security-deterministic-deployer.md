@@ -1,275 +1,87 @@
 # Deterministic deployer security model
 
-The shared deterministic deployer is intentional. Its published seed makes a
-wallet address reproducible from the network, deployer address, and
-credential-derived salt. The deployer is never a signer on the resulting smart
-account and cannot authorize wallet operations or move wallet funds.
+This document defines the shared deployer controls and required integration rules.
 
-## Status: sign-only is implemented
+## Scope and status
 
-The current SDK enforces this invariant for the shared default deployer:
+The shared deterministic deployer uses a published seed.
+This design makes wallet addresses reproducible from a credential-derived salt.
+The deployer is never a signer on the resulting smart account.
+It cannot authorize wallet operations or move funds from a correctly deployed wallet.
 
-> The shared deployer may derive an address and sign the CreateContractV2
-> Soroban authorization entry. It never supplies a transaction-envelope source,
-> sequence, or fee and never signs the transaction envelope.
+The current SDK keeps the shared deployer sign-only.
+It signs the `CreateContractV2` authorization entry.
+It never supplies the transaction source, sequence, or fee.
+It never signs the transaction envelope.
 
-`createWallet()` and `credentials.deploy()` return
-`relayerPayload: { func, auth }`. **Building** that payload requires nothing —
-it only signs an authorization entry, spends no balance, consumes no sequence,
-and confers no privilege (the deployer's key is public, so anyone can produce
-the same signature). Callers running their own submission infrastructure can
-therefore build with `autoSubmit: false` and submit through any funded source
-they control.
+This repository has not undergone an independent security audit.
+The underlying OpenZeppelin contracts have a separate audit with a different scope.
+See the [root security status](../README.md#security-status).
 
-**Submission** is what is constrained: the SDK's own auto-submit path goes
-through the relayer, and a missing relayer, direct RPC, and relayer-to-RPC
-fallback are all refused — because those would source or fund from the shared
-deployer. A custom `deployerSecret` remains a separate, self-sourced path and
-may return `signedTransaction`.
+## Required integration rules
 
-This path is implemented and testnet-verified:
+- Never fund a shared deployer.
+- Configure `relayerUrl` for automatic shared-deployer submission.
+- Use `autoSubmit: false` for submission through a funded source that you control.
+- Use `deployerSecret` only for a dedicated deployer that you control.
+- Confirm manual deployment before you call `connectWallet()`.
+- Treat derived addresses and discovery results as untrusted.
+- Register a fresh passkey credential for each network.
+- Do not derive a wallet address from a secondary credential.
+- Do not display an unverified address as a deposit address.
 
-- smart-account-kit transaction
-  `1de0c40e61504ecfcb630e2ef5ac033c18df157da781a6d4c6a16a7c6fc33f08`
-- passkey-kit transaction
-  `60e51c9c14c9c3f664c0f69c56179e9a677cd3e9137e74fb6a4ed1a176c63869`
+A custom deployer changes every derived wallet address.
+Keep the deployer configuration stable for discovery and recovery.
 
-In each validation, a separate funded account supplied the envelope source and
-fee, the shared deployer signed only address authorization, and the deployed
-contract matched the deterministically derived address.
+## Connection validation
 
-## We deliberately do not self-brick
+`connectWithCredentials` checks untrusted addresses against `acceptedWasmHashes`.
+The default list contains `accountWasmHash`.
+Add each approved hash when a wallet upgrade changes its code.
 
-We will not set the current shared deployer's sequence to `INT64_MAX`. Published
-SDK versions still read or source its account sequence, and self-bricking would
-retroactively break those clients. The current SDK does not read that sequence
-or use the account as an envelope source, so a third party setting it to
-`INT64_MAX` is a non-event for new shared deployments. Deliberately doing the
-same thing ourselves would add effectively no protection while breaking old
-clients.
+The code check confirms an accepted executable.
+It does not prove the intended deployment provenance.
+It also does not prove the expected initial signer and policy configuration.
 
-No on-chain self-brick is part of this remediation.
+The SDK trusts a stored secondary association only when local state identifies it as confirmed.
+Pending, failed, primary, and deterministic deployment predictions remain untrusted.
+Version `0.6.1` keeps these predictions disconnected until deployment confirmation.
 
-## What `INT64_MAX` does and does not mean
+Do not auto-select one result from a multi-candidate discovery response.
+Require the user to choose a candidate.
+Show available provenance before the user accepts an address.
 
-Setting an account's sequence to `INT64_MAX` prevents that account from being
-the **transaction-envelope source**, because it cannot supply a valid next
-sequence number. That is the complete protection supplied by the sequence
-brick. It does **not**:
+## Mainnet deployer controls
 
-- protect the account's balance;
-- stop another account's envelope from naming it as an operation source, with
-  its normal signer and threshold checks; or
-- affect Soroban address authorization, which uses address credentials,
-  signer weight/policy, and an authorization nonce rather than the classic
-  account sequence.
+The current mainnet deployer uses on-chain controls and a minimal balance.
+These controls protect its identity configuration.
+They do not protect funds held by the deployer.
 
-The publicly derivable key can therefore still authorize classic operations
-whose threshold it meets, including a payment sourced from the deployer. Never
-fund a shared deployer.
+Run the read-only verification after each operational change:
 
-The current mainnet smart-account-kit and passkey-kit deployers use
-`auth_immutable`, thresholds `1/2/3`, and a single signer of weight `2`. This
-blocks high-threshold signer changes and account merge, but it does not protect
-the balance from medium-threshold payments. These controls bound takeover; the
-SDK's sign-only architecture removes the shared sequence and balance from its
-deployment path.
+```bash
+node scripts/check-mainnet-deployer.mjs
+node scripts/check-mainnet-deployer.mjs --json
+```
 
-## Accepted residual: address squatting
+See [`mainnet-hardening.md`](./mainnet-hardening.md) for the required values and response steps.
 
-The contract address does not bind the wallet WASM hash or constructor signer
-set. Anyone who learns a credential ID before its intended deployment can use
-the public deployer key to place arbitrary code at the derived address first.
+## Relevant release history
 
-This is an accepted, documented residual:
+- `0.5.0` made the shared deployer sign-only.
+- `0.5.1` preserved confirmed secondary credential associations.
+- `0.6.0` added accepted code checks for untrusted connections.
+- `0.6.1` required deployment confirmation for predicted addresses.
 
-- Stellar does not expose a public transaction mempool that reveals a pending
-  credential ID.
-- A normal WebAuthn registration does not publish its credential ID before the
-  client deploys, and a new registration creates a fresh credential.
-- **Across networks, that last point does not hold.** Deploying a wallet
-  publishes its credential ID, and the credential ID is not network-scoped even
-  though the network passphrase is part of the address preimage. A passkey that
-  already has a wallet on one network therefore maps to an address on every other
-  network that its owner does not hold.
-  **Register a fresh credential per network; never reuse a passkey that already
-  has a wallet deployed on another one.**
-- **Same-network, the "before deployment" framing also fails for secondary
-  credentials.** Only a wallet's first credential salts its deploy, so
-  `derive(credentialId_1)` is the wallet itself. A later signer's credential ID
-  is also published, but `derive(credentialId_2)` is a distinct address that is
-  never legitimately deployed, so it does not have the narrow exposure window a
-  first credential does. Treat any derivation from a secondary credential as
-  unauthenticated.
-- The impact is griefing or a deposit sent to the wrong precomputed address,
-  not control of a correctly deployed wallet. The deployer is never a wallet
-  signer.
-- `connectWithCredentials` resolves from stored credentials first and only falls
-  back to derivation (`src/kit/wallet-ops.ts`). A stored address is trusted only
-  when it is distinct from that credential's deterministic deployment address
-  and the row is explicitly non-primary. Empty rows, deterministic
-  rows, and primary pending or failed rows remain deployment claims. Therefore,
-  the accepted-code check runs before connection, including after deployer
-  configuration changes. Since `0.6.0`, every other untrusted address is also
-  checked against accepted code identity before connection.
+These fixes reduce known risks.
+They do not replace an independent audit or an integrator review.
 
-A signer-set-equality check **alone is not a mitigation**. Arbitrary code at a
-squatted address can implement `get_signer`, `get_signer_id`, `list`, or an
-equivalent getter and return whatever the client expects. Code identity must be
-bound first, and signer and policy state validated only against that accepted
-code — which is the order the connect path now implements.
+## Operational follow-ups
 
-Binding that identity is cheap: the connect path already fetches the contract
-instance ledger entry to test existence, so the executable WASM hash is in hand at
-no extra round-trip. Comparing it against accepted hashes — an allowlist rather
-than a single value, since a legitimately upgraded account runs different code —
-is the sound form, and is what ships (see below).
+- Keep testnet shared deployers unfunded after network resets.
+- Use a dedicated funded account for verifier, policy, and WASM deployment.
+- Add deployment-provenance validation for derived addresses.
+- Validate the initial signer and policy configuration from immutable transaction history.
+- Keep the accepted code check after provenance validation exists.
 
-It is a partial mitigation, not a cure, and the gap is wider than "must then also
-be a real signer" would suggest: making the victim a real signer is free, because
-this `__constructor` accepts a signer **array** and a policy map and the victim's
-key material is public. Accepted code and a genuine signer entry for the expected
-credential can coexist with authority held elsewhere, so code identity passes and
-so does any signer-**presence** check.
-
-The predicate that excludes this is signer **and policy** equality against
-trusted local state, not presence. That is only available where trusted state
-exists — which is the storage-first path already shipped, and precisely what a
-fresh device lacks. So the allowlist hardens the derivation fallback against
-lying code; it does not authenticate a derived address.
-
-What defeats every check in this section is that each reads **current state**,
-which at a squatted address the squatter wrote. The one class of check that
-escapes that is deploy-time provenance — see the genesis-provenance follow-up
-below, which is tracked as the mitigation that does close this path.
-
-## Why code identity is bound before signer state
-
-An address obtained from an indexer reverse lookup or from address derivation is
-a **claim by an untrusted party**, not a fact. Neither the discovery signal nor
-the on-chain state read back is self-authenticating: contract-emitted events are
-unprivileged, and a contract controls its own storage, so code of the author's
-choosing can present whatever state a client inspects.
-
-So an account's signer state only means something **if the code that wrote it
-enforced authorization**. Under arbitrary code it means nothing. This is
-independent of the deployer key — it needs no derived address and no squatting,
-and it is why a bare signer-presence check was never shipped here.
-
-### What is enforced
-
-`connectWithCredentials` checks the resolved account's executable against
-`acceptedWasmHashes` whenever the address came from an untrusted source —
-derivation, or an app-supplied `contractId` such as a discovery result. Defaults
-to `[accountWasmHash]`. The check reuses the contract instance entry the path
-already fetched for its existence probe, so it costs no extra round-trip. A
-distinct explicitly non-primary address from trusted local association state is not checked,
-so a legitimately upgraded account still opens for a returning user. A stored
-deterministic or primary predicted address is checked because the row does not
-confirm that deployment succeeded.
-
-Legacy rows without an `isPrimary` value fail closed and receive the code check.
-An integrator may migrate a confirmed secondary association to `isPrimary: false`
-only when its local source is trusted.
-
-### What this does and does not cover
-
-It removes the case that costs an attacker nothing — arbitrary code, deployed
-once. It does not make a discovery result authoritative on its own: an attacker
-willing to run accepted code and pay for a genuine, authorized signer addition can
-still produce an account on which the victim really is a signer, and for a
-secondary credential on a device with no local state that is not distinguishable
-client-side from the real account.
-
-Bound that residual in the flow rather than with another state check:
-
-- Never auto-select from a multi-candidate reverse lookup.
-  `discoverContractsByCredential` returns a list and forces an explicit choice —
-  that is the correct shape; keep it.
-- Surface provenance (genesis credential, code identity) at selection.
-- Prefer recovery with the credential that created the account, which reduces to
-  the derivation case that genesis provenance closes.
-- Keep an unverified discovery result unauthenticated — never present it as a
-  deposit address.
-
-Until `0.5.1`, connecting or syncing **deleted a credential's stored wallet
-mapping**, so storage-first resolution stopped protecting that credential on
-every subsequent connect and a secondary credential fell back to derivation in
-ordinary use. Fixed: a stored row is now discarded only when it is a pending
-deployment — an empty `contractId`, or one equal to its own derived address —
-so a secondary credential keeps its mapping. The WASM-hash binding above remains
-the outstanding half.
-
-Operational verification of the mainnet geometry below is scripted — see
-[`mainnet-hardening.md`](./mainnet-hardening.md) and
-`scripts/check-mainnet-deployer.mjs`, which exits non-zero on drift.
-
-## Deployer inventory
-
-| Generation | Derivation | Address | State / action |
-|---|---|---|---|
-| Current smart-account-kit | `sha256("openzeppelin-smart-account-kit")` seed | `GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N` | Shared sign-only identity; do not fund or rotate. |
-| Current passkey-kit | `sha256("kalepail")` seed | `GC2C7AWLS2FMFTQAHW3IBUB4ZXVP4E37XNLEF2IK7IVXBB6CMEPCSXFO` | Shared sign-only identity; do not fund or rotate. |
-| Legacy passkey-kit mainnet, before `23597d8` | `sha256(mainnet network passphrase)` seed | `GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7` | Locked: master weight `0`; cannot sign. |
-| Legacy passkey-kit testnet, before `23597d8` | `sha256(testnet network passphrase)` seed | *(withheld — see internal ops tracker)* | Superseded, unhardened, testnet only. Tracked for retirement. |
-
-Changing a deployer changes the address preimage for every wallet derived from
-it. Keep legacy identities in discovery/migration logic; do not rotate a
-deployer as a fee-management shortcut.
-
-## Operational follow-ups (outside this change)
-
-Open ops tasks, not SDK defects. The sign-only SDK works without them; they
-reduce operational risk on testnet and on shared infrastructure.
-
-- Harden the testnet deployers (`0/0/0` today) and make post-reset provisioning
-  fail closed, so a network reset cannot recreate an unhardened `AccountEntry`
-  that address authorization then depends on. The relayer proxy already refuses
-  to Friendbot-fund a shared deployer.
-- Sweep or retire the superseded testnet deployer listed above. Like every shared
-  deployer its key is publicly derivable, so it must not hold a balance.
-- Source shared infrastructure deploys (verifier, policy, WASM upload) from a
-  dedicated funded account rather than a shared deployer.
-- **Verify genesis provenance on the connect path.** For an address reached by
-  derivation, require that the contract's genesis signer set is exactly the
-  credential derived from, and that its genesis policies are empty — both read
-  from the constructor arguments of the creating transaction (equivalently the
-  contract's first signer events), never from current state.
-
-  This is the check that closes the derivation fallback, and it works where the
-  state checks do not: every state read at a squatted address returns what the
-  squatter wrote, whereas genesis is immutable history. It also needs no trusted
-  local state — only the `credentialId` already in hand — which is why it covers
-  the fresh-device case that signer-set equality cannot.
-
-  An attacker cannot both pass it and hold authority. Genesis
-  `[victim]` with empty policies leaves them with no key and no way to obtain one
-  (`add_signer` and `upgrade` require wallet auth). Anything else — an extra
-  constructor signer, or a policy granting them authority — is a detectable
-  mismatch. The policy half is not optional here: this constructor takes a signer
-  **array** and a policy **map**, so `signers: [victim]` with an attacker policy
-  would pass a signers-only check while handing over control.
-
-  Note the residual: it does not make derivation authoritative for a secondary
-  credential, whose derived address no legitimate deploy occupies. It guarantees
-  only that whatever sits there is not attacker-controlled — theft degrades to a
-  duplicate wallet the victim solely controls.
-
-  It also closes the **derivation path only**. An indexer-returned candidate is
-  not at a derived address and has no expected genesis relationship to a
-  secondary credential, so this check cannot validate one. See below.
-
-- ~~Bind code identity on the connect path.~~ **Shipped in `0.6.0`** — see
-  "Why code identity is bound before signer state" above.
-
-  Implementation is indexer-side: this reads history, so RPC event retention will
-  not cover older contracts. It is not blind trust in the indexer, since its
-  answer names a transaction the client can fetch and verify.
-
-  **Supersedes the previously tracked WASM-hash allowlist.** An allowlist binds
-  code identity and is worth having against lying code, but it does not bind the
-  constructor signer set or policy map, so it cannot authenticate an address on
-  its own. Explicitly still **not** a bare signer-presence check — a squatted
-  contract answers `get_signer_id` with whatever the client wants.
-  *(The other half of this item — keeping a non-pending credential's stored
-  mapping instead of deleting it — shipped in `0.5.1`.)*
+Do not use current contract state as the only source of deployment provenance.

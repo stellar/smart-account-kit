@@ -2,6 +2,11 @@
 
 A basic Vite + React frontend application for testing the Smart Account Kit SDK with WebAuthn passkey authentication on Stellar.
 
+> [!WARNING]
+> This demo is test software and has not undergone an independent security audit.
+> Do not use it as a production wallet.
+> Use mainnet only with assets you accept losing.
+
 ## Features
 
 - **Wallet Creation**: Create a new smart wallet with a passkey as the primary signer
