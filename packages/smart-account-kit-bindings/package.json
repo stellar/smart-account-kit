@@ -1,5 +1,5 @@
 {
-  "version": "0.3.1",
+  "version": "0.4.0",
   "name": "smart-account-kit-bindings",
   "type": "module",
   "exports": "./dist/index.js",
@@ -27,7 +27,7 @@
     "url": "https://github.com/stellar/smart-account-kit"
   },
   "peerDependencies": {
-    "@stellar/stellar-sdk": ">=15.1.0"
+    "@stellar/stellar-sdk": ">=16.0.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

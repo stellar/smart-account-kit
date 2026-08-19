@@ -9,7 +9,8 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 - Hardened the indexer demo rendering for external metadata.
 - Added an explicit security status and mainnet value warning.
 - Reduced unnecessary security implementation details in public documentation and comments.
-- Released `smart-account-kit-bindings@0.3.1` with the same security status.
+- Released `smart-account-kit-bindings@0.4.0` with the same security status.
+  This release requires `@stellar/stellar-sdk` version `16.0.0` or later.
 
 ## 0.6.1 — 2026-08-19
 
