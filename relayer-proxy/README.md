@@ -6,6 +6,7 @@ Cloudflare Worker that proxies transaction submission to the [OpenZeppelin Relay
 > This reference proxy has not undergone an independent security audit.
 > Review and test its configuration before production use.
 > Limit its fee balance and spending capacity to an acceptable loss.
+> Report suspected vulnerabilities through the [project security policy](../SECURITY.md).
 
 This is a **separate concern from the [indexer](../indexer)**: the indexer answers discovery/read queries (which contracts a passkey signs for), while the relayer proxy submits transactions. They are deployed and operated independently.
 

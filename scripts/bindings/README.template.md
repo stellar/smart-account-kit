@@ -8,7 +8,7 @@ Most applications should install [`smart-account-kit`](https://www.npmjs.com/pac
 > These bindings can build state-changing transactions.
 > This integration package has not undergone an independent security audit.
 > Review each transaction before signing or submitting it.
-> See the [project security status](https://github.com/stellar/smart-account-kit#security-status).
+> See the [project security status](https://github.com/stellar/smart-account-kit#security-status) and [security policy](https://github.com/stellar/smart-account-kit/blob/main/SECURITY.md).
 
 ## Install
 

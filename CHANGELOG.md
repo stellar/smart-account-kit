@@ -2,6 +2,11 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
+## Unreleased
+
+- Added a private vulnerability-reporting policy without publishing issue details.
+- Included the security policy in future SDK package artifacts.
+
 ## 0.6.2 — 2026-08-19
 
 - Improved browser compatibility for authorization nonce generation.

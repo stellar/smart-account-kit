@@ -6,6 +6,7 @@ A basic Vite + React frontend application for testing the Smart Account Kit SDK 
 > This demo is test software and has not undergone an independent security audit.
 > Do not use it as a production wallet.
 > Use mainnet only with assets you accept losing.
+> Report suspected vulnerabilities through the [project security policy](../SECURITY.md).
 
 ## Features
 
