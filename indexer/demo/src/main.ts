@@ -31,6 +31,7 @@ import {
   STROOPS_PER_XLM,
   truncateAddress,
 } from "./constants";
+import { escapeHtml } from "./html";
 
 // Types
 interface SmartAccountInfo {
@@ -424,11 +425,11 @@ function renderContracts(contracts: SmartAccountInfo[]) {
         const isSelected = selectedContract === contract.contractId;
         return `
       <div class="contract-card ${isSelected ? "selected" : ""}"
-           data-contract-id="${contract.contractId}"
+           data-contract-id="${escapeHtml(contract.contractId)}"
            data-index="${index}">
         <div style="display: flex; justify-content: space-between; align-items: flex-start;">
           <div>
-            <div class="contract-id">${truncateAddress(contract.contractId)}</div>
+            <div class="contract-id">${escapeHtml(truncateAddress(contract.contractId))}</div>
             <div style="margin-top: 0.5rem; display: flex; gap: 1rem; flex-wrap: wrap;">
               <span class="activity">${contract.contextRuleCount} context rule${contract.contextRuleCount !== 1 ? 's' : ''}</span>
               <span class="activity">${contract.externalSignerCount + contract.delegatedSignerCount} signer${(contract.externalSignerCount + contract.delegatedSignerCount) !== 1 ? 's' : ''}</span>
@@ -470,14 +471,14 @@ async function renderContractDetails(details: ContractDetails) {
   const typedPolicyParams = await readTypedPolicyParams(contractId, contextRules);
 
   let html = `
-    <div class="contract-full-id">${contractId}</div>
+    <div class="contract-full-id">${escapeHtml(contractId)}</div>
   `;
 
   // Render each context rule
   for (const rule of contextRules) {
     html += `
       <div class="context-rule">
-        <h4>Context Rule #${rule.context_rule_id}</h4>
+        <h4>Context Rule #${escapeHtml(rule.context_rule_id)}</h4>
     `;
 
     // Group signers by type
@@ -501,7 +502,7 @@ async function renderContractDetails(details: ContractDetails) {
             <div class="signer-group-header">
               <span class="signer-type External">External</span>
               <span class="verifier-label">Verifier:</span>
-              <span class="address-full">${verifier}</span>
+              <span class="address-full">${escapeHtml(verifier)}</span>
             </div>
             <div class="signer-group-items">
         `;
@@ -510,7 +511,7 @@ async function renderContractDetails(details: ContractDetails) {
           html += `
             <div class="credential-item ${isMyCredential ? 'highlight' : ''}">
               ${isMyCredential ? '<span class="you-badge">YOU</span>' : ''}
-              <span class="address-full">${signer.credential_id}</span>
+              <span class="address-full">${escapeHtml(signer.credential_id)}</span>
             </div>
           `;
         }
@@ -535,7 +536,7 @@ async function renderContractDetails(details: ContractDetails) {
         html += `
           <div class="credential-item ${isMyAddress ? 'highlight' : ''}">
             ${isMyAddress ? '<span class="you-badge">YOU</span>' : ''}
-            <span class="address-full">${signer.signer_address}</span>
+            <span class="address-full">${escapeHtml(signer.signer_address)}</span>
           </div>
         `;
       }
@@ -559,7 +560,7 @@ async function renderContractDetails(details: ContractDetails) {
         html += `
           <div class="credential-item ${isMyAddress ? 'highlight' : ''}">
             ${isMyAddress ? '<span class="you-badge">YOU</span>' : ''}
-            <span class="address-full">${signer.signer_address}</span>
+            <span class="address-full">${escapeHtml(signer.signer_address)}</span>
           </div>
         `;
       }
@@ -586,8 +587,8 @@ async function renderContractDetails(details: ContractDetails) {
           typedPolicyParams.get(mapKey) ?? formatPolicyParams(policy.install_params);
         html += `
           <div class="credential-item">
-            <span class="address-full">${policy.policy_address}</span>
-            ${params ? `<span class="policy-params">${params}</span>` : ''}
+            <span class="address-full">${escapeHtml(policy.policy_address)}</span>
+            ${params ? `<span class="policy-params">${escapeHtml(params)}</span>` : ''}
           </div>
         `;
       }
