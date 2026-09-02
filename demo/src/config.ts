@@ -38,11 +38,10 @@ export const CONFIG = {
   // Contract discovery (optional; known networks have built-in defaults)
   indexerUrl: import.meta.env.VITE_INDEXER_URL || undefined,
   indexerAuthToken: import.meta.env.VITE_INDEXER_AUTH_TOKEN || undefined,
-  // Relayer fee sponsoring — ON by default via the deployed testnet relayer-proxy,
-  // so the demo submits transactions through the OpenZeppelin Relayer (channel
-  // accounts pay the fees; your smart wallet pays none). Set VITE_RELAYER_URL=""
-  // to disable (fall back to direct RPC). For mainnet, override it with the
-  // mainnet proxy URL (see .env.mainnet.example) so the network matches.
+  // Relayer fee sponsoring is on by default through the testnet proxy.
+  // The shared default deployer is sign-only. Clearing this URL makes direct
+  // submission fail unless the application supplies a funded deployerSecret.
+  // Every non-testnet configuration must supply a matching relayer URL.
   relayerUrl:
     import.meta.env.VITE_RELAYER_URL ??
     "https://smart-account-relayer-proxy.sdf-ecosystem.workers.dev",

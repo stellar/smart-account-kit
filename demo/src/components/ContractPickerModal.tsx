@@ -6,7 +6,7 @@ interface ContractPickerModalProps {
   onCancel: () => void;
 }
 
-/** Modal shown when a passkey is registered with several smart accounts. */
+/** Modal for selecting a candidate before the SDK verifies it. */
 export function ContractPickerModal({
   contracts,
   onSelect,
@@ -16,14 +16,14 @@ export function ContractPickerModal({
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-content contract-picker-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3>Select Smart Account</h3>
+          <h3>Select Wallet Candidate</h3>
           <button className="close-btn" onClick={onCancel}>
             ×
           </button>
         </div>
         <p className="modal-description">
-          Your passkey is registered with {contracts.length} smart accounts.
-          Select which one to connect to:
+          The indexer returned {contracts.length} candidate{contracts.length === 1 ? "" : "s"}.
+          The SDK will verify wallet birth, code, and passkey ownership before connection.
         </p>
         <div className="contract-list">
           {contracts.map((contract) => (
@@ -36,6 +36,7 @@ export function ContractPickerModal({
                 <code className="contract-address">
                   {contract.contract_id.slice(0, 8)}...{contract.contract_id.slice(-4)}
                 </code>
+                <span className="stat">Unverified candidate</span>
               </div>
               <div className="contract-option-stats">
                 <span className="stat">

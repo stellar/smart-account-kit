@@ -2,13 +2,13 @@
 
 Discovery layer for smart account contracts on Stellar. It enables reverse lookups from a passkey credential (or signer address) to the smart account contracts a user can access, and supplies active context-rule state to the SDK.
 
-As of v0.4.0 the indexer is **[Mercury](https://mercurydata.app/)** — a hosted, managed provider. There is nothing to deploy: the SDK points at Mercury's `smart-account-indexer` REST service by default.
+The built-in provider is **[Mercury](https://mercurydata.app/)**. This repository does not contain an indexer service. Mercury or another provider must deploy the schema-2 response below before fresh-device connection can succeed.
 
 > [!IMPORTANT]
 > Treat every discovery result as untrusted.
-> Check the contract code before connecting or showing a deposit address.
-> `SmartAccountKit` performs the code check through `acceptedWasmHashes`.
-> This check does not prove deployment provenance.
+> Never present a discovery result as a wallet or deposit address.
+> `SmartAccountKit` verifies immutable birth, current code, and live ownership.
+> A legacy or incomplete response cannot connect.
 
 > **History:** before v0.4.0 this directory also shipped a self-hosted reference stack (a Goldsky Turbo pipeline → PostgreSQL → Cloudflare Worker). That path was removed in v0.4.0 (too expensive to operate, and Mercury indexes the same events as a managed service). The old pipeline configs, SQL schema, and Worker live in git history if you need them.
 
@@ -32,17 +32,19 @@ The SDK keeps a bounded low-ID on-chain fallback for fresh wallets and temporary
 
 ### Authentication
 
-Mercury's `smart-account-indexer` **read endpoints are public** — no token is required for the lookups the SDK performs. The SDK's default configuration therefore works zero-config against Mercury.
+Mercury's `smart-account-indexer` read endpoints are public. The current lookup routes do not require a token.
 
-An optional provider token can be supplied via `indexerAuthToken` (SDK) / `VITE_INDEXER_AUTH_TOKEN` (demo); it is sent as `Authorization: Bearer <token>`. None is needed for Mercury today — its indexer read routes are anonymous and do not evaluate a token. When Mercury ships its gated tier, the credential will be a scoped publishable key for the indexer surface, not a Mercury account JWT; never embed a Mercury account JWT (or any other privileged credential) in a browser app.
+An optional provider token can be supplied through `indexerAuthToken` or `VITE_INDEXER_AUTH_TOKEN`. The client sends it as `Authorization: Bearer <token>`. Never embed a privileged token or account credential in a browser application.
 
 ### Coverage
 
-Mercury indexes every smart-account-kit contract's events live, and a global historical backfill means past activity is indexed too — there is no per-contract admin/catch-up step. (Verified: anonymous lookups return contracts spanning historical and recent ledgers.)
+Mercury indexes signer events on both public networks.
+Fresh-device connection also needs the schema-2 birth fields below.
+The SDK fails closed until a provider deploys that response.
 
 ## REST surface the SDK uses
 
-The SDK's `IndexerClient` depends on these routes (all served by Mercury, all public):
+The SDK's `IndexerClient` uses these public Mercury routes:
 
 | Endpoint | Used for |
 |----------|----------|
@@ -52,7 +54,57 @@ The SDK's `IndexerClient` depends on these routes (all served by Mercury, all pu
 | `GET /api/contract/:contractId` | Active contract detail: summary + context rules with signers and policies |
 | `GET /api/stats` | Aggregate indexer statistics |
 
-`getContractDetails()` treats a `404` as "not indexed yet" and returns `null`, so the SDK can fall back to its on-chain probe. Any wire-compatible provider that serves these five routes can be used instead of Mercury by overriding `indexerUrl`.
+`getContractDetails()` treats a `404` as "not indexed yet" and returns `null`. The SDK can then use its bounded on-chain rule probe. Any provider that serves these routes can replace Mercury through `indexerUrl`.
+
+The route list does not mean that Mercury already returns schema 2.
+Fresh-device connection fails closed until the credential route returns the complete schema below.
+
+## Required credential lookup schema
+
+`GET /api/lookup/:credentialId` must add these fields without removing summary data:
+
+```json
+{
+  "schema": 2,
+  "complete": true,
+  "indexed_through_ledger": 123456,
+  "credentialId": "0123abcd",
+  "contracts": [
+    {
+      "contract_id": "C...",
+      "birth_wasm_hash": "64 lowercase hex characters",
+      "creation_transaction_hash": "64 lowercase hex characters",
+      "creation_ledger": 123000,
+      "current_wasm_hash": "64 lowercase hex characters",
+      "derived_address": true,
+      "collision": false,
+      "incomplete": false,
+      "context_rule_count": 1,
+      "external_signer_count": 1,
+      "delegated_signer_count": 0,
+      "native_signer_count": 0,
+      "first_seen_ledger": 123000,
+      "last_seen_ledger": 123450,
+      "context_rule_ids": [0]
+    }
+  ],
+  "count": 1
+}
+```
+
+The provider must follow these rules:
+
+- Derive birth fields from the successful creation transaction.
+- Confirm current code and live signer state through RPC.
+- Return every candidate and deduplicate by `contract_id`.
+- Set `collision` when the credential resolves to more than one contract.
+- Set `incomplete` when any birth, current-code, signer, or RPC fact is unavailable.
+- Set `complete` only after a finished scan through `indexed_through_ledger`.
+- Never rank or select an owner.
+- Return `complete: false` after an RPC failure or partial scan.
+
+The SDK treats every field as a claim.
+It verifies the creation transaction through RPC or Horizon before connection.
 
 ## SDK Integration
 
@@ -70,16 +122,19 @@ const kit = new SmartAccountKit({
   // indexerAuthToken: 'optional-provider-token', // sent as Authorization: Bearer <token>; not needed for Mercury
 });
 
-// Step 1: Authenticate with passkey (prompts user to select)
+// Step 1: Request a passkey response for discovery.
+// Wallet ownership is not verified until connectWallet succeeds.
 const { credentialId } = await kit.authenticatePasskey();
 
 // Step 2: Discover contracts via indexer
 const contracts = await kit.discoverContractsByCredential(credentialId);
 
-// Step 3: Connect to selected contract
-if (contracts && contracts.length > 0) {
+// Step 3: Display every result as an unverified candidate.
+// Continue only after the user selects one.
+const selected = contracts?.find((candidate) => userSelected(candidate.contract_id));
+if (selected) {
   await kit.connectWallet({
-    contractId: contracts[0].contract_id,
+    contractId: selected.contract_id,
     credentialId,
   });
 }
@@ -93,7 +148,7 @@ if (kit.indexer) {
 
 ## Demo
 
-The [`demo/`](./demo) directory is a standalone Vite app that authenticates a passkey and looks up its smart account contracts against the indexer. It defaults to Mercury testnet.
+The [`demo/`](./demo) directory is a standalone Vite app that gets a passkey response and shows unverified indexer candidates. It defaults to Mercury testnet. The demo does not connect to a wallet.
 
 ```bash
 cd demo

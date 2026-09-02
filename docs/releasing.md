@@ -1,13 +1,16 @@
 # Releasing the npm packages
 
-The repository publishes two packages. Release them in this order so the SDK can resolve its workspace dependency to a version that already exists on npm:
+The repository can publish two packages. Publish a package only when its contents changed.
+
+When generated bindings changed, release packages in this order:
 
 1. `smart-account-kit-bindings`
 2. `smart-account-kit`
 
-The two packages are versioned independently.
+The two packages have independent versions.
 The checked-in `package.json` files define the release targets.
 Use `npm view` as the source of truth for published versions.
+Do not publish a new bindings version for an SDK-only change.
 
 ## Prerequisites
 
@@ -15,7 +18,7 @@ Use `npm view` as the source of truth for published versions.
 - pnpm 10 or newer
 - Stellar CLI 27 or newer when regenerating bindings
 - npm publish access to both packages
-- A clean tracked Git worktree; both release scripts stop if tracked changes are present
+- A clean Git worktree; both release scripts stop for tracked or untracked changes
 
 Authenticate and confirm the current registry state:
 
@@ -71,32 +74,53 @@ git diff --check
 git status --short
 ```
 
-Commit any intended changes before continuing. Uncommitted tracked changes cause the release scripts to exit.
+Commit every intended file before continuing. The release scripts reject tracked and untracked changes.
+
+Inspect the exact SDK package contents before publishing:
+
+```bash
+pnpm pack --dry-run
+```
 
 ## Authenticated dry run
 
 The dry-run mode verifies npm authentication, reads the live registry versions, and shows the intended publish versions. It does not build or upload a package.
 
+For an SDK-only release:
+
+```bash
+SDK_VERSION=$(node -p "require('./package.json').version")
+BINDINGS_VERSION=$(npm view smart-account-kit-bindings version)
+pnpm release --version "$SDK_VERSION" --bindings-version "$BINDINGS_VERSION" --dry-run
+```
+
+When generated bindings changed, also run this first:
+
 ```bash
 BINDINGS_VERSION=$(node -p "require('./packages/smart-account-kit-bindings/package.json').version")
-SDK_VERSION=$(node -p "require('./package.json').version")
 pnpm release:bindings --version "$BINDINGS_VERSION" --dry-run
-pnpm release --version "$SDK_VERSION" --bindings-version "$BINDINGS_VERSION" --dry-run
 ```
 
 Do not insert an extra `--` after the pnpm script name; pnpm forwards it to these shell scripts as an argument.
 
 ## Publish and verify
 
-```bash
-BINDINGS_VERSION=$(node -p "require('./packages/smart-account-kit-bindings/package.json').version")
-SDK_VERSION=$(node -p "require('./package.json').version")
-pnpm release:bindings --version "$BINDINGS_VERSION"
-npm view "smart-account-kit-bindings@$BINDINGS_VERSION" version
+For an SDK-only release:
 
+```bash
+SDK_VERSION=$(node -p "require('./package.json').version")
+BINDINGS_VERSION=$(npm view smart-account-kit-bindings version)
 pnpm release --version "$SDK_VERSION" --bindings-version "$BINDINGS_VERSION"
 npm view "smart-account-kit@$SDK_VERSION" version
 npm view "smart-account-kit@$SDK_VERSION" dependencies
+```
+
+When generated bindings changed, publish and verify them first:
+
+```bash
+BINDINGS_VERSION=$(node -p "require('./packages/smart-account-kit-bindings/package.json').version")
+pnpm release:bindings --version "$BINDINGS_VERSION"
+npm view "smart-account-kit-bindings@$BINDINGS_VERSION" version
 ```
 
 If npm requires a one-time password, append `--otp <fresh-code>` to each `pnpm release...` command. Use a fresh code for the second publish if the first one expires.

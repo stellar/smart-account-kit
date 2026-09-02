@@ -1090,7 +1090,8 @@ export function ContextRuleBuilder({
               {addMode === "ed25519" && (
                 <p className="form-hint">
                   Registers a local Ed25519 keypair as an External signer via the
-                  configured verifier. The key stays in memory only.
+                  configured verifier. Use an isolated test key only. Page code
+                  can read the key while it is in memory.
                 </p>
               )}
             </div>

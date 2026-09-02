@@ -35,17 +35,24 @@ Keep the deployer configuration stable for discovery and recovery.
 
 ## Connection validation
 
-`connectWithCredentials` checks untrusted addresses against `acceptedWasmHashes`.
-The default list contains `accountWasmHash`.
-Add each approved hash when a wallet upgrade changes its code.
+`connectWithCredentials` verifies immutable wallet birth before connection.
+It checks the successful `CreateContractV2` transaction against RPC or Horizon.
+It checks the deployer, salt, birth WASM, constructor signer count, signer type, and policies.
+It then checks current code and the exact live WebAuthn signer.
+An untrusted candidate also requires a fresh WebAuthn assertion.
 
-The code check confirms an accepted executable.
-It does not prove the intended deployment provenance.
-It also does not prove the expected initial signer and policy configuration.
+`acceptedBirthWasmHashes` controls code accepted at wallet birth.
+Keep this list narrower than `acceptedWasmHashes`.
+`acceptedWasmHashes` controls current wallet code after authorized upgrades.
 
-The SDK trusts a stored secondary association only when local state identifies it as confirmed.
-Pending, failed, primary, and deterministic deployment predictions remain untrusted.
-Version `0.6.1` keeps these predictions disconnected until deployment confirmation.
+The SDK retains confirmed birth data in credential storage.
+It never treats address occupancy as deployment confirmation.
+Pending, failed, occupied, and legacy predictions remain disconnected.
+
+Fresh-device recovery accepts the immutable primary passkey only.
+A verified local association keeps a secondary passkey usable on the same device.
+The current contracts cannot prove a fresh device consented to a later signer addition.
+The SDK therefore rejects fresh-device secondary recovery.
 
 Do not auto-select one result from a multi-candidate discovery response.
 Require the user to choose a candidate.
@@ -66,22 +73,33 @@ node scripts/check-mainnet-deployer.mjs --json
 
 See [`mainnet-hardening.md`](./mainnet-hardening.md) for the required values and response steps.
 
+## Indexer requirement
+
+Fresh-device recovery requires a complete schema-2 lookup response.
+The response must include immutable birth metadata and a complete ledger position.
+The SDK rejects legacy, malformed, incomplete, and duplicate claims.
+
+The indexer supplies discovery claims only.
+The SDK rechecks each immutable claim against RPC or Horizon.
+See [`../indexer/README.md`](../indexer/README.md) for the exact response contract.
+
 ## Relevant release history
 
 - `0.5.0` made the shared deployer sign-only.
 - `0.5.1` preserved confirmed secondary credential associations.
 - `0.6.0` added accepted code checks for untrusted connections.
 - `0.6.1` required deployment confirmation for predicted addresses.
+- `0.7.0` added immutable birth, current-code, live-signer, and fresh ownership checks.
 
-These fixes reduce known risks.
-They do not replace an independent audit or an integrator review.
+Version `0.7.0` replaces address occupancy with immutable verification.
+It does not replace an independent audit or an integrator review.
 
 ## Operational follow-ups
 
 - Keep testnet shared deployers unfunded after network resets.
 - Use a dedicated funded account for verifier, policy, and WASM deployment.
-- Add deployment-provenance validation for derived addresses.
-- Validate the initial signer and policy configuration from immutable transaction history.
+- Deploy schema 2 on every configured indexer before enabling fresh-device recovery.
+- Keep `acceptedBirthWasmHashes` limited to constructor-compatible code.
 - Keep the accepted code check after provenance validation exists.
 
 Do not use current contract state as the only source of deployment provenance.

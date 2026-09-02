@@ -3,7 +3,7 @@
  *
  * Manages G-address signers (Stellar accounts) for multi-signature operations.
  * Supports two methods of adding signers:
- * 1. Raw secret key (Keypair) - stored in memory only
+ * 1. Raw secret key (Keypair) - stored in memory only, not isolated from application code
  * 2. External wallet via StellarWalletsKit (if installed)
  *
  * Wallet connections can be persisted to storage and auto-restored on init.
@@ -139,6 +139,7 @@ export class ExternalSignerManager {
    * Add a signer from a raw secret key.
    *
    * The keypair is stored in memory only and is never persisted.
+   * Application code can read process memory, so use only trusted callers.
    * It will be lost when the page is refreshed.
    *
    * @param secretKey - Stellar secret key (S...)
@@ -177,6 +178,7 @@ export class ExternalSignerManager {
    * this registers an `External(verifierAddress, publicKey)` signer that signs
    * the smart-account auth digest directly with Ed25519. The keypair is stored
    * in memory only and is never persisted.
+   * Application code can read process memory, so use only trusted callers.
    *
    * @param secretKey - Stellar secret key (S...)
    * @param ed25519VerifierAddress - Deployed Ed25519 verifier contract address.

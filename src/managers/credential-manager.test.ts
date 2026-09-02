@@ -45,6 +45,10 @@ function makeDeps(initial: StoredCredential[] = []) {
   const submitDeploymentTx = vi.fn();
   const deriveContractAddress = vi.fn();
   const getContractId = vi.fn().mockReturnValue(undefined);
+  const describeDeploymentBirth = vi.fn(() => ({
+    birthWasmHash: "ab".repeat(32),
+    birthConstructorArgsHash: "cd".repeat(32),
+  }));
 
   return {
     storage,
@@ -58,6 +62,7 @@ function makeDeps(initial: StoredCredential[] = []) {
     submitDeploymentTx,
     deriveContractAddress,
     getContractId,
+    describeDeploymentBirth,
   };
 }
 
@@ -111,6 +116,14 @@ describe("CredentialManager", () => {
         publicKey: Buffer.alloc(65, 3),
         contractId: "",
         createdAt: 3,
+        deploymentStatus: "occupied",
+      },
+      {
+        credentialId: "cred-4",
+        publicKey: Buffer.alloc(65, 4),
+        contractId: "CDEPLOYED",
+        createdAt: 4,
+        deploymentStatus: "deployed",
       },
     ]);
     const manager = new CredentialManager({
@@ -120,7 +133,7 @@ describe("CredentialManager", () => {
     });
 
     await expect(manager.getForWallet()).resolves.toEqual([]);
-    await expect(manager.getPending()).resolves.toHaveLength(2);
+    await expect(manager.getPending()).resolves.toHaveLength(3);
   });
 
   it("creates and saves a new passkey credential", async () => {
@@ -346,6 +359,11 @@ describe("CredentialManager", () => {
       publicKey: Buffer.alloc(65, 1),
       contractId: "CCONTRACT",
       createdAt: 1,
+      deploymentStatus: "deployed" as const,
+      birthWasmHash: "ab".repeat(32),
+      creationTransactionHash: "12".repeat(32),
+      creationLedger: 123,
+      birthConstructorArgsHash: "cd".repeat(32),
     };
     const pending = {
       credentialId: "cred-2",
@@ -370,7 +388,7 @@ describe("CredentialManager", () => {
     await expect(manager.sync("cred-1")).resolves.toBe(true);
     await expect(manager.sync("cred-2")).resolves.toBe(false);
 
-    expect(deps.storage.delete).toHaveBeenCalledWith("cred-1");
+    expect(deps.storage.delete).not.toHaveBeenCalled();
   });
 
   it("keeps a secondary credential during syncAll", async () => {
@@ -393,10 +411,15 @@ describe("CredentialManager", () => {
     });
 
     await manager.syncAll();
-    await expect(storage.get(credential.credentialId)).resolves.toEqual(credential);
+    await expect(storage.get(credential.credentialId)).resolves.toEqual({
+      ...credential,
+      deploymentStatus: "occupied",
+      deploymentError:
+        "The derived address is occupied, but wallet birth is unverified.",
+    });
   });
 
-  it("cleans up an empty-contract pending credential using its derived address", async () => {
+  it("marks an empty-contract pending credential occupied at its derived address", async () => {
     const credential = {
       credentialId: base64url.encode("pending-credential"),
       publicKey: Buffer.alloc(65, 2),
@@ -419,15 +442,17 @@ describe("CredentialManager", () => {
     });
 
     await expect(manager.syncAll()).resolves.toEqual({
-      deployed: 1,
-      pending: 0,
+      deployed: 0,
+      pending: 1,
       failed: 0,
     });
     expect(deps.rpc.getContractData).toHaveBeenCalledWith(
       "CDERIVED",
       expect.anything()
     );
-    await expect(storage.get(credential.credentialId)).resolves.toBeNull();
+    await expect(storage.get(credential.credentialId)).resolves.toMatchObject({
+      deploymentStatus: "occupied",
+    });
   });
 
   it("counts deployed, pending, and failed credentials in syncAll", async () => {
@@ -437,6 +462,11 @@ describe("CredentialManager", () => {
         publicKey: Buffer.alloc(65, 1),
         contractId: "CCONTRACT",
         createdAt: 1,
+        deploymentStatus: "deployed",
+        birthWasmHash: "ab".repeat(32),
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 123,
+        birthConstructorArgsHash: "cd".repeat(32),
       },
       {
         credentialId: "cred-2",
@@ -478,6 +508,11 @@ describe("CredentialManager", () => {
         publicKey: Buffer.alloc(65, 1),
         contractId: "CCONTRACT",
         createdAt: 1,
+        deploymentStatus: "deployed",
+        birthWasmHash: "ab".repeat(32),
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 123,
+        birthConstructorArgsHash: "cd".repeat(32),
       },
     ]);
     deps.rpc.getContractData.mockRejectedValue(new Error("missing"));
@@ -499,6 +534,11 @@ describe("CredentialManager", () => {
         publicKey: Buffer.alloc(65, 1),
         contractId: "CCONTRACT",
         createdAt: 1,
+        deploymentStatus: "deployed",
+        birthWasmHash: "ab".repeat(32),
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 123,
+        birthConstructorArgsHash: "cd".repeat(32),
       },
     ]);
     deps.rpc.getContractData.mockResolvedValue({});

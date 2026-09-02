@@ -8,7 +8,6 @@
 
 import { StrKey, hash, xdr, Address, Keypair } from "@stellar/stellar-sdk";
 import type { RegistrationResponseJSON } from "@simplewebauthn/browser";
-import type { StoredCredential } from "./types.js";
 import base64url from "./base64url.js";
 
 import {
@@ -183,13 +182,6 @@ export function deriveContractAddress(
   return StrKey.encodeContract(hash(preimage.toXDR()));
 }
 
-export function isCredentialSafeToDelete(
-  credential: Pick<StoredCredential, "contractId">,
-  derivedContractId: string
-): boolean {
-  return credential.contractId === "" || credential.contractId === derivedContractId;
-}
-
 /**
  * Extract the public key from a WebAuthn attestation response.
  *
@@ -303,16 +295,34 @@ export async function extractPublicKeyFromAttestation(
  * @returns 64-byte compact signature (r || s)
  */
 export function compactSignature(derSignature: Buffer): Uint8Array {
-  // Decode DER signature: 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
-  let offset = 2; // Skip 0x30 and total length
+  const malformed = (reason: string): ValidationError =>
+    new ValidationError(`Malformed DER ECDSA signature: ${reason}`);
+  if (derSignature.length < 8) throw malformed("too short");
+  if (derSignature[0] !== 0x30) throw malformed("missing SEQUENCE tag");
+  const totalLength = derSignature[1]!;
+  if (totalLength >= 0x80) throw malformed("long-form length is unsupported");
+  if (totalLength !== derSignature.length - 2) {
+    throw malformed("SEQUENCE length does not span the buffer");
+  }
 
-  const rLength = derSignature[offset + 1];
-  const r = derSignature.slice(offset + 2, offset + 2 + rLength);
+  if (derSignature[2] !== 0x02) throw malformed("missing INTEGER tag for r");
+  const rLength = derSignature[3]!;
+  if (rLength < 1 || rLength > 33) throw malformed("r length is out of range");
+  if (4 + rLength + 2 > derSignature.length) {
+    throw malformed("r overruns the buffer");
+  }
+  const r = derSignature.subarray(4, 4 + rLength);
 
-  offset += 2 + rLength;
-
-  const sLength = derSignature[offset + 1];
-  const s = derSignature.slice(offset + 2, offset + 2 + sLength);
+  const sTagOffset = 4 + rLength;
+  if (derSignature[sTagOffset] !== 0x02) {
+    throw malformed("missing INTEGER tag for s");
+  }
+  const sLength = derSignature[sTagOffset + 1]!;
+  if (sLength < 1 || sLength > 33) throw malformed("s length is out of range");
+  if (sTagOffset + 2 + sLength !== derSignature.length) {
+    throw malformed("s does not end at the buffer end");
+  }
+  const s = derSignature.subarray(sTagOffset + 2);
 
   // Convert to BigInt for low-S calculation
   const rBigInt = BigInt("0x" + r.toString("hex"));
@@ -323,6 +333,12 @@ export function compactSignature(derSignature: Buffer): Uint8Array {
   const n = BigInt(
     "0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"
   );
+  if (rBigInt < 1n || rBigInt >= n) {
+    throw malformed("r is out of curve order range");
+  }
+  if (sBigInt < 1n || sBigInt >= n) {
+    throw malformed("s is out of curve order range");
+  }
   const halfN = n / 2n;
 
   if (sBigInt > halfN) {

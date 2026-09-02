@@ -7,7 +7,7 @@ interface PendingCredentialsPanelProps {
   onDelete: (credential: StoredCredential) => void;
 }
 
-/** Card listing passkeys whose wallet deployment failed / is incomplete. */
+/** Card listing passkeys whose wallet deployment is unresolved. */
 export function PendingCredentialsPanel({
   pendingCredentials,
   loading,
@@ -16,10 +16,10 @@ export function PendingCredentialsPanel({
 }: PendingCredentialsPanelProps) {
   return (
     <div className="card pending-credentials-card">
-      <h3>Pending Credentials</h3>
+      <h3>Unresolved Credentials</h3>
       <p className="pending-description">
-        These passkeys were created but wallet deployment failed or is incomplete.
-        Deploy to create a wallet, or delete to remove from tracking.
+        These passkeys need a deployment retry or an occupancy review.
+        An occupied address cannot be deployed again.
       </p>
       <div className="credentials-list">
         {pendingCredentials.map((cred) => (
@@ -28,7 +28,11 @@ export function PendingCredentialsPanel({
               <div className="nickname">
                 {cred.nickname || "Unnamed"}
                 <span className={`status-badge ${cred.deploymentStatus}`}>
-                  {cred.deploymentStatus === "pending" ? "Pending" : "Failed"}
+                  {cred.deploymentStatus === "occupied"
+                    ? "Occupied"
+                    : cred.deploymentStatus === "pending"
+                      ? "Pending"
+                      : "Failed"}
                 </span>
               </div>
               <div className="id">{cred.credentialId}</div>
@@ -43,7 +47,9 @@ export function PendingCredentialsPanel({
               <button
                 className="small"
                 onClick={() => onDeploy(cred)}
-                disabled={loading !== null}
+                disabled={
+                  loading !== null || cred.deploymentStatus === "occupied"
+                }
               >
                 {loading === `Deploying ${cred.credentialId.slice(0, 10)}...` ? (
                   <span className="spinner" />

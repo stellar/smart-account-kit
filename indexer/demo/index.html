@@ -172,7 +172,7 @@
       font-size: 0.75rem;
       word-break: break-all;
     }
-    .you-badge {
+    .match-badge {
       display: inline-block;
       padding: 0.15rem 0.5rem;
       background: #0066cc;
@@ -201,20 +201,21 @@
 </head>
 <body>
   <h1>Smart Account Indexer Demo</h1>
-  <p>Test reverse lookup from passkey to smart account contracts.</p>
+  <p>Test reverse lookup from a passkey identifier to unverified wallet candidates.</p>
+  <p><strong>Warning:</strong> Do not use a displayed address as a wallet or deposit address.</p>
 
   <div class="section">
-    <h2>1. Login with Passkey</h2>
-    <p>Sign in with your passkey to automatically discover all smart accounts you have access to.</p>
-    <button id="auth-btn">Login with Passkey</button>
+    <h2>1. Find with Passkey</h2>
+    <p>Get a passkey response and look up unverified indexer candidates.</p>
+    <button id="auth-btn">Find with Passkey</button>
     <div id="status" style="display: none;"></div>
   </div>
 
   <div class="section">
-    <h2>2. Your Smart Accounts</h2>
-    <p>Select which smart account to connect to:</p>
+    <h2>2. Wallet Candidates</h2>
+    <p>Select one unverified candidate to inspect its indexed details.</p>
     <div id="contracts-list">
-      <div class="empty-state">No contracts found yet. Login with your passkey above.</div>
+      <div class="empty-state">No candidates found yet. Use your passkey above.</div>
     </div>
   </div>
 
@@ -229,13 +230,13 @@
     <p>Enter a contract ID, credential ID, or Stellar address to inspect indexed contracts.</p>
     <div class="input-group">
       <label for="contract-id">Contract ID (C...):</label>
-      <input type="text" id="contract-id" placeholder="CBQVIRSH6EMJVR4SBEMUOZ3ZFFYI6FTQW7DMNESA2BB2XOVYG24FX47T">
+      <input type="text" id="contract-id" placeholder="C...">
     </div>
     <button id="contract-lookup-btn">Lookup by Contract ID</button>
     <hr style="margin: 1rem 0; border: none; border-top: 1px solid #ddd;">
     <div class="input-group">
       <label for="public-key">Credential ID (Hex):</label>
-      <input type="text" id="public-key" placeholder="3f8bd02ac47ad80f224404269c00133ec64c1e4b45b0b7ef1e20f3bd0d6a40a1">
+      <input type="text" id="public-key" placeholder="0123abcd...">
     </div>
     <button id="lookup-btn">Lookup by Credential ID</button>
     <hr style="margin: 1rem 0; border: none; border-top: 1px solid #ddd;">

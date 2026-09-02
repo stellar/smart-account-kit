@@ -2,17 +2,19 @@
 
 A basic Vite + React frontend application for testing the Smart Account Kit SDK with WebAuthn passkey authentication on Stellar.
 
-> [!WARNING]
-> This demo is test software and has not undergone an independent security audit.
-> Do not use it as a production wallet.
-> Use mainnet only with assets you accept losing.
+> [!CAUTION]
+> **Unaudited test software.**
+> This demo has not received an independent third-party security audit.
+> Defects can cause unauthorized transactions, loss of access, or permanent asset loss.
+> Do not use this demo as a production wallet.
+> Use only isolated test accounts and assets you accept losing.
 > Report suspected vulnerabilities through the [project security policy](../SECURITY.md).
 
 ## Features
 
 - **Wallet Creation**: Create a new smart wallet with a passkey as the primary signer
 - **Wallet Connection**: Connect to an existing wallet using stored or discoverable passkeys
-- **Contract Discovery**: Automatically discover smart accounts via indexer when connecting, with a fallback to the derived contract ID path if no indexed match is found
+- **Contract Discovery**: Show unverified indexer candidates and connect only after the SDK verifies a user-selected candidate
 - **Context Rule Management**: Create, view, and edit context rules with signers and policies (with a live rules-count readout)
 - **Multi-Signer Support**: Add passkey, delegated (G-address), and Ed25519 signers to context rules; batch-add signers when editing a rule
 - **Ed25519 Signers**: Register a local Ed25519 keypair as an `External` signer via the configured verifier and sign multi-sig transactions with it (in-memory keys only)
@@ -62,13 +64,15 @@ pnpm dev
 
 Open `http://localhost:5173` in your browser.
 
-The demo comes pre-configured with testnet contracts. To customize, copy `.env.example` to `.env` and edit as needed. For mainnet, start from `.env.mainnet.example`. Leave `VITE_WEIGHTED_THRESHOLD_POLICY_ADDRESS` blank if you do not want the weighted-threshold policy in the UI.
+The demo comes pre-configured with testnet contracts. To customize it, copy `.env.example` to `.env`. Leave `VITE_WEIGHTED_THRESHOLD_POLICY_ADDRESS` blank to hide that policy.
 
-Transactions (transfers and rule/policy operations) are **fee-sponsored by default**: `VITE_RELAYER_URL` points at the deployed testnet [relayer-proxy](../relayer-proxy), which submits them through the OpenZeppelin Relayer Channels service so the relayer's channel accounts pay the network fees and your smart wallet pays none. A "Fees Sponsored" badge appears in the config panel when it is active. Set `VITE_RELAYER_URL=""` to disable it and submit directly over RPC instead, or point it at your own proxy. (Wallet *deployment* always uses direct RPC.)
+Transactions are **fee-sponsored by default**. `VITE_RELAYER_URL` points at the deployed testnet [relayer proxy](../relayer-proxy). The proxy uses OpenZeppelin Relayer Channels to pay network fees. A "Fees Sponsored" badge appears when this mode is active.
+
+Do not clear `VITE_RELAYER_URL` with the shared default deployer. The shared deployer is sign-only and cannot submit through direct RPC. Direct RPC requires a funded dedicated `deployerSecret`, which this demo does not configure.
 
 The SDK auto-configures its hosted indexer for Stellar testnet and mainnet when you use a known network passphrase. Set `VITE_INDEXER_URL` to use a wire-compatible provider such as Mercury, and set `VITE_INDEXER_AUTH_TOKEN` when that provider expects `Authorization: Bearer <token>`. Because Vite embeds `VITE_*` values in the browser bundle, only use public or tightly scoped tokens; privileged/admin credentials belong behind a server.
 
-This demo ships with testnet defaults, so a mainnet run also needs mainnet RPC and contract env values. Start from `.env.mainnet.example` to keep the network, WASM, verifier, policy, and indexer settings aligned.
+This demo ships with testnet defaults. Do not change only the network passphrase. Another network requires matching RPC, WASM, verifier, policy, indexer, and relayer values.
 
 ## Agent-Browser Passkey Testing
 
@@ -101,7 +105,9 @@ The helper attaches to the current page target over Chrome DevTools Protocol, ke
 
 1. Click "Connect Existing"
 2. Select a passkey from the browser prompt
-3. Your wallet will be connected
+3. Select one unverified wallet candidate
+4. Wait while the SDK verifies wallet birth, code, live signer state, and passkey ownership
+5. The connection stays closed if the indexer lacks a complete schema-2 response
 
 ### Adding Signers to a Rule
 
@@ -183,4 +189,6 @@ demo/
 - WebAuthn requires HTTPS in production (localhost works for development)
 - Transactions auto-submit to Stellar testnet and wait for confirmation
 - Contract addresses configurable via `.env` (see `.env.example`)
-- Contract discovery prefers the indexer and falls back to the derived contract ID path when no indexed match is found
+- Contract discovery requires a complete schema-2 indexer response for fresh-device connection
+- The demo never auto-selects a wallet candidate
+- The shared default deployer requires the relayer for transaction submission

@@ -11,8 +11,8 @@ import type { contract, rpc } from "@stellar/stellar-sdk";
 import type { AuthenticatorTransportFuture } from "@simplewebauthn/browser";
 import type { SmartAccountEventEmitter } from "../events.js";
 import type { PolicyConfig, StorageAdapter, StoredCredential, SubmissionMethod, SubmissionOptions, TransactionResult } from "../types.js";
-import { isCredentialSafeToDelete } from "../utils.js";
 import {
+  describeDeploymentBirth,
   prepareDeploymentArtifacts,
   type DeployTransaction,
   type RelayerDeploymentPayload,
@@ -56,6 +56,8 @@ export interface CredentialManagerDeps {
   submitDeploymentTx: (tx: DeployTransaction, credentialId: string, options?: SubmissionOptions) => Promise<TransactionResult>;
   /** Derive contract address from credential ID */
   deriveContractAddress: (credentialIdBuffer: Buffer) => string;
+  /** Test seam for extracting the exact deployment descriptor. */
+  describeDeploymentBirth?: typeof describeDeploymentBirth;
 }
 
 /**
@@ -82,12 +84,15 @@ export class CredentialManager {
     return this.deps.storage.getByContract(contractId);
   }
 
-  /**
-   * Get credentials that are pending deployment.
-   */
+  /** Get unresolved credentials that still require user attention. */
   async getPending(): Promise<StoredCredential[]> {
     const all = await this.deps.storage.getAll();
-    return all.filter(c => c.deploymentStatus === "pending" || c.deploymentStatus === "failed");
+    return all.filter(
+      (credential) =>
+        credential.deploymentStatus === "pending" ||
+        credential.deploymentStatus === "failed" ||
+        credential.deploymentStatus === "occupied"
+    );
   }
 
   /**
@@ -181,6 +186,10 @@ export class CredentialManager {
       credential.publicKey,
       options?.policies
     );
+    await this.deps.storage.update(
+      credentialId,
+      (this.deps.describeDeploymentBirth ?? describeDeploymentBirth)(deployTx)
+    );
 
     const submissionOpts = { forceMethod: options?.forceMethod };
     const deploymentArtifacts = await prepareDeploymentArtifacts(
@@ -209,7 +218,7 @@ export class CredentialManager {
 
   /**
    * Sync a credential with on-chain state.
-   * If deployed, removes from storage. Returns true if deployed.
+   * Occupancy without verified local birth data never becomes a deployment.
    */
   async sync(credentialId: string): Promise<boolean> {
     const credential = await this.deps.storage.get(credentialId);
@@ -225,8 +234,19 @@ export class CredentialManager {
         credential.contractId || derivedContractId,
         xdr.ScVal.scvLedgerKeyContractInstance()
       );
-      if (isCredentialSafeToDelete(credential, derivedContractId)) {
-        await this.deps.storage.delete(credentialId);
+      const hasVerifiedBirth =
+        credential.deploymentStatus === "deployed" &&
+        credential.birthWasmHash !== undefined &&
+        credential.creationTransactionHash !== undefined &&
+        credential.creationLedger !== undefined &&
+        credential.birthConstructorArgsHash !== undefined;
+      if (!hasVerifiedBirth) {
+        await this.deps.storage.update(credentialId, {
+          deploymentStatus: "occupied",
+          deploymentError:
+            "The derived address is occupied, but wallet birth is unverified.",
+        });
+        return false;
       }
       return true;
     } catch {

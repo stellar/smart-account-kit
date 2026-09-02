@@ -18,12 +18,24 @@ function makeDeps() {
     emit: vi.fn(),
   };
   const requireWallet = vi.fn(() => ({ wallet, contractId: "CCONTRACT" }));
+  const getVerifiedCredential = vi.fn().mockResolvedValue({
+    credentialId: "primary",
+    publicKey: Buffer.alloc(65, 1),
+    contractId: "CCONTRACT",
+    createdAt: 1,
+    deploymentStatus: "deployed",
+    birthWasmHash: "ab".repeat(32),
+    creationTransactionHash: "12".repeat(32),
+    creationLedger: 123,
+    birthConstructorArgsHash: "cd".repeat(32),
+  });
 
   return {
     wallet,
     storage,
     events,
     requireWallet,
+    getVerifiedCredential,
   };
 }
 
@@ -54,6 +66,12 @@ describe("SignerManager", () => {
         contractId: "CCONTRACT",
         nickname: "Backup",
         contextRuleId: 7,
+        deploymentStatus: "deployed",
+        associationVerified: true,
+        birthWasmHash: "ab".repeat(32),
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 123,
+        birthConstructorArgsHash: "cd".repeat(32),
       })
     );
     expect(deps.events.emit).toHaveBeenCalledWith(
@@ -74,6 +92,24 @@ describe("SignerManager", () => {
       publicKey,
       transaction: { result: 31 },
     });
+  });
+
+  it("checks wallet birth before creating a secondary passkey", async () => {
+    const deps = makeDeps();
+    const createPasskey = vi.fn();
+    deps.getVerifiedCredential.mockResolvedValue(undefined);
+    const manager = new SignerManager({
+      ...deps,
+      createPasskey,
+      webauthnVerifierAddress: "CCAAAAA",
+    });
+
+    await expect(manager.addPasskey(7, "App", "User")).rejects.toThrow(
+      /wallet birth is verified/i
+    );
+
+    expect(createPasskey).not.toHaveBeenCalled();
+    expect(deps.storage.save).not.toHaveBeenCalled();
   });
 
   it("adds a delegated signer", async () => {

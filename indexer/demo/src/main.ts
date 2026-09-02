@@ -2,11 +2,11 @@
  * Smart Account Indexer Demo
  *
  * This demo shows how to:
- * 1. Authenticate with a passkey
- * 2. Extract the public key from the authentication response
- * 3. Query the indexer for associated smart account contracts
- * 4. Display contracts with balances and activity
- * 5. Allow user to select which contract to connect to
+ * 1. Request a passkey response
+ * 2. Read the credential ID from the authentication response
+ * 3. Query the indexer for unverified wallet candidates
+ * 4. Display candidate activity without selecting one
+ * 5. Let the user choose one candidate to inspect
  */
 
 import { rpc, xdr, Address } from "@stellar/stellar-sdk";
@@ -308,7 +308,7 @@ async function lookupContractsByCredentialIdWithRetry(
 
     if (attempt < attempts) {
       showStatus(
-        `Authentication successful! Waiting for indexer sync (${attempt}/${attempts - 1})...`,
+        `Passkey response received. Waiting for indexer sync (${attempt}/${attempts - 1})...`,
         "info"
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -414,11 +414,6 @@ function renderContracts(contracts: SmartAccountInfo[]) {
     return;
   }
 
-  // Auto-select first contract if none selected (before rendering so selected class is applied)
-  if (contracts.length > 0 && !selectedContract) {
-    selectedContract = contracts[0].contractId;
-  }
-
   contractsList.innerHTML = contracts
     .map(
       (contract, index) => {
@@ -430,6 +425,7 @@ function renderContracts(contracts: SmartAccountInfo[]) {
         <div style="display: flex; justify-content: space-between; align-items: flex-start;">
           <div>
             <div class="contract-id">${escapeHtml(truncateAddress(contract.contractId))}</div>
+            <div class="activity">Unverified indexer candidate</div>
             <div style="margin-top: 0.5rem; display: flex; gap: 1rem; flex-wrap: wrap;">
               <span class="activity">${contract.contextRuleCount} context rule${contract.contextRuleCount !== 1 ? 's' : ''}</span>
               <span class="activity">${contract.externalSignerCount + contract.delegatedSignerCount} signer${(contract.externalSignerCount + contract.delegatedSignerCount) !== 1 ? 's' : ''}</span>
@@ -438,8 +434,8 @@ function renderContracts(contracts: SmartAccountInfo[]) {
               Last activity: ledger ${contract.lastSeenLedger.toLocaleString()}
             </div>
           </div>
-          ${isSelected && contract.contractExists !== undefined ?
-            `<span class="${contract.contractExists ? 'balance' : 'activity'}" style="white-space: nowrap;">${contract.contractExists ? '✓ Active' : '✗ Expired'}</span>`
+              ${isSelected && contract.contractExists !== undefined ?
+            `<span class="${contract.contractExists ? 'balance' : 'activity'}" style="white-space: nowrap;">${contract.contractExists ? '✓ Instance visible' : '✗ Instance unavailable'}</span>`
             : ''}
         </div>
       </div>
@@ -448,14 +444,14 @@ function renderContracts(contracts: SmartAccountInfo[]) {
     )
     .join("");
 
-  // Add click handlers - directly load contract details
+  // Load details only after the user selects a candidate.
   document.querySelectorAll(".contract-card").forEach((card) => {
     card.addEventListener("click", async () => {
       const contractId = card.getAttribute("data-contract-id");
       if (contractId) {
         selectedContract = contractId;
         renderContracts(discoveredContracts);
-        await connectToContract(contractId);
+        await viewContractDetails(contractId);
       }
     });
   });
@@ -507,10 +503,10 @@ async function renderContractDetails(details: ContractDetails) {
             <div class="signer-group-items">
         `;
         for (const signer of signers) {
-          const isMyCredential = currentCredentialId && signer.credential_id?.toLowerCase() === currentCredentialId.toLowerCase();
+          const matchesLookup = currentCredentialId && signer.credential_id?.toLowerCase() === currentCredentialId.toLowerCase();
           html += `
-            <div class="credential-item ${isMyCredential ? 'highlight' : ''}">
-              ${isMyCredential ? '<span class="you-badge">YOU</span>' : ''}
+            <div class="credential-item ${matchesLookup ? 'highlight' : ''}">
+              ${matchesLookup ? '<span class="match-badge">LOOKUP MATCH</span>' : ''}
               <span class="address-full">${escapeHtml(signer.credential_id)}</span>
             </div>
           `;
@@ -532,10 +528,10 @@ async function renderContractDetails(details: ContractDetails) {
           <div class="signer-group-items">
       `;
       for (const signer of delegatedSigners) {
-        const isMyAddress = currentSignerAddress && signer.signer_address === currentSignerAddress;
+        const matchesLookup = currentSignerAddress && signer.signer_address === currentSignerAddress;
         html += `
-          <div class="credential-item ${isMyAddress ? 'highlight' : ''}">
-            ${isMyAddress ? '<span class="you-badge">YOU</span>' : ''}
+          <div class="credential-item ${matchesLookup ? 'highlight' : ''}">
+            ${matchesLookup ? '<span class="match-badge">LOOKUP MATCH</span>' : ''}
             <span class="address-full">${escapeHtml(signer.signer_address)}</span>
           </div>
         `;
@@ -556,10 +552,10 @@ async function renderContractDetails(details: ContractDetails) {
           <div class="signer-group-items">
       `;
       for (const signer of nativeSigners) {
-        const isMyAddress = currentSignerAddress && signer.signer_address === currentSignerAddress;
+        const matchesLookup = currentSignerAddress && signer.signer_address === currentSignerAddress;
         html += `
-          <div class="credential-item ${isMyAddress ? 'highlight' : ''}">
-            ${isMyAddress ? '<span class="you-badge">YOU</span>' : ''}
+          <div class="credential-item ${matchesLookup ? 'highlight' : ''}">
+            ${matchesLookup ? '<span class="match-badge">LOOKUP MATCH</span>' : ''}
             <span class="address-full">${escapeHtml(signer.signer_address)}</span>
           </div>
         `;
@@ -632,18 +628,15 @@ authBtn.addEventListener("click", async () => {
     const { credentialId: credentialIdBase64Url } =
       await getAuthKit().authenticatePasskey();
 
-    showStatus("Authentication successful! Looking up contracts...", "info");
+    showStatus("Passkey response received. Looking up candidates...", "info");
 
     // Reset selection for new lookup
     selectedContract = null;
 
-    // Match the SDK flow: convert the authenticated credential into hex
+    // Match the SDK flow: convert the returned credential ID into hex
     // for the indexer lookup API and UI display.
     const rawIdBytes = base64UrlToBytes(credentialIdBase64Url);
     const credentialIdHex = bytesToHex(rawIdBytes);
-
-    console.log("Credential ID (base64url):", credentialIdBase64Url);
-    console.log("Credential ID (hex):", credentialIdHex);
 
     // Store for highlighting in contract details
     currentCredentialId = credentialIdHex;
@@ -661,20 +654,15 @@ authBtn.addEventListener("click", async () => {
       return;
     }
 
-    showStatus(`Found ${discoveredContracts.length} contract(s) for your passkey!`, "success");
+    showStatus(`Found ${discoveredContracts.length} unverified candidate(s)`, "success");
 
     // Check if contracts still exist on-chain
     discoveredContracts = await Promise.all(
       discoveredContracts.map(enrichWithContractCheck)
     );
 
-    // Always render contracts list first (this also auto-selects first contract)
+    // Wait for an explicit user selection before loading details.
     renderContracts(discoveredContracts);
-
-    // Auto-connect to selected contract
-    if (selectedContract) {
-      await connectToContract(selectedContract);
-    }
   } catch (error) {
     console.error("Authentication error:", error);
     showStatus(`Authentication failed: ${(error as Error).message}`, "error");
@@ -735,13 +723,8 @@ lookupBtn.addEventListener("click", async () => {
       discoveredContracts.map(enrichWithContractCheck)
     );
 
-    // Always render contracts list first (this also auto-selects first contract)
+    // Wait for an explicit user selection before loading details.
     renderContracts(discoveredContracts);
-
-    // Auto-connect to selected contract
-    if (selectedContract) {
-      await connectToContract(selectedContract);
-    }
   } catch (error) {
     console.error("Lookup error:", error);
     showStatus(`Lookup failed: ${(error as Error).message}`, "error");
@@ -769,7 +752,7 @@ contractLookupBtn.addEventListener("click", async () => {
     discoveredContracts = [enrichedContract];
 
     renderContracts(discoveredContracts);
-    await connectToContract(contractId);
+    await viewContractDetails(contractId);
   } catch (error) {
     console.error("Contract lookup error:", error);
     showStatus(`Lookup failed: ${(error as Error).message}`, "error");
@@ -778,8 +761,8 @@ contractLookupBtn.addEventListener("click", async () => {
   }
 });
 
-// Helper function to connect to a contract and show details
-async function connectToContract(contractId: string) {
+// Load indexed details. This action does not connect to a wallet.
+async function viewContractDetails(contractId: string) {
   showStatus(`Loading contract details for ${truncateAddress(contractId)}...`, "info");
 
   try {
@@ -826,13 +809,8 @@ addressLookupBtn.addEventListener("click", async () => {
       discoveredContracts.map(enrichWithContractCheck)
     );
 
-    // Always render contracts list first (this also auto-selects first contract)
+    // Wait for an explicit user selection before loading details.
     renderContracts(discoveredContracts);
-
-    // Auto-connect to selected contract
-    if (selectedContract) {
-      await connectToContract(selectedContract);
-    }
   } catch (error) {
     console.error("Address lookup error:", error);
     showStatus(`Lookup failed: ${(error as Error).message}`, "error");

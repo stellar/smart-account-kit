@@ -3,6 +3,7 @@ import type {
   IndexerClient,
   IndexedContractSummary,
   ContractDetailsResponse,
+  WalletCandidateLookup,
 } from "../indexer.js";
 
 export async function discoverContractsByCredential(
@@ -23,6 +24,16 @@ export async function discoverContractsByAddress(
   if (!indexer) return null;
   const result = await indexer.lookupByAddress(address);
   return result.contracts;
+}
+
+export async function lookupWalletCandidates(
+  indexer: IndexerClient | null,
+  credentialId: string
+): Promise<WalletCandidateLookup | null> {
+  if (!indexer) return null;
+  return indexer.lookupWalletCandidates(
+    normalizeCredentialIdToHex(credentialId)
+  );
 }
 
 export async function getContractDetailsFromIndexer(

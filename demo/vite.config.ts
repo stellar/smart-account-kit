@@ -24,11 +24,6 @@ export default defineConfig({
       "@stellar/stellar-sdk",
       "@stellar/stellar-sdk/rpc",
     ],
-    esbuildOptions: {
-      define: {
-        global: "globalThis",
-      },
-    },
   },
   build: {
     commonjsOptions: {

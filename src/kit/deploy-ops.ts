@@ -1,5 +1,12 @@
-import { Address, hash, xdr } from "@stellar/stellar-sdk";
+import {
+  Address,
+  FeeBumpTransaction,
+  TransactionBuilder,
+  hash,
+  xdr,
+} from "@stellar/stellar-sdk";
 import { contract, type rpc } from "@stellar/stellar-sdk";
+import { Api } from "@stellar/stellar-sdk/rpc";
 import type { SubmissionOptions, TransactionResult } from "../types.js";
 import type { RelayerClient } from "../relayer.js";
 import type { StorageAdapter } from "../types.js";
@@ -19,6 +26,7 @@ import {
   createAddressCredentials,
   randomAuthEntryNonce,
 } from "./auth-payload.js";
+import { constructorArgsHash } from "./wallet-provenance.js";
 
 export interface AuthEntryDeployment {
   kind: "auth-entry";
@@ -39,6 +47,117 @@ export function isAuthEntryDeployment(
   deployment: DeployTransaction
 ): deployment is AuthEntryDeployment {
   return "kind" in deployment && deployment.kind === "auth-entry";
+}
+
+/** Immutable birth facts extracted from the exact deployment operation. */
+export interface DeploymentBirthDescriptor {
+  birthWasmHash: string;
+  birthConstructorArgsHash: string;
+}
+
+/** Extract immutable birth facts from either supported deployment carrier. */
+export function describeDeploymentBirth(
+  deployment: DeployTransaction
+): DeploymentBirthDescriptor {
+  let func: xdr.HostFunction | undefined;
+  if (isAuthEntryDeployment(deployment)) {
+    func = deployment.func;
+  } else {
+    const operation = deployment.built?.operations[0];
+    if (
+      deployment.built?.operations.length === 1 &&
+      operation?.type === "invokeHostFunction"
+    ) {
+      func = operation.func;
+    }
+  }
+  if (!func || func.switch().name !== "hostFunctionTypeCreateContractV2") {
+    throw new SubmissionError("Deployment does not contain one CreateContractV2 operation");
+  }
+  const create = func.createContractV2();
+  const executable = create.executable();
+  if (executable.switch().name !== "contractExecutableWasm") {
+    throw new SubmissionError("Deployment does not create a WASM contract");
+  }
+  return {
+    birthWasmHash: Buffer.from(executable.wasmHash()).toString("hex"),
+    birthConstructorArgsHash: constructorArgsHash(create.constructorArgs()),
+  };
+}
+
+function deploymentCreateArgs(
+  deployment: DeployTransaction
+): xdr.CreateContractArgsV2 {
+  let func: xdr.HostFunction | undefined;
+  if (isAuthEntryDeployment(deployment)) {
+    func = deployment.func;
+  } else {
+    const operation = deployment.built?.operations[0];
+    if (
+      deployment.built?.operations.length === 1 &&
+      operation?.type === "invokeHostFunction"
+    ) {
+      func = operation.func;
+    }
+  }
+  if (!func || func.switch().name !== "hostFunctionTypeCreateContractV2") {
+    throw new SubmissionError("Deployment does not contain CreateContractV2");
+  }
+  return func.createContractV2();
+}
+
+export async function confirmSubmittedDeployment(
+  rpcServer: rpc.Server,
+  networkPassphrase: string,
+  deployment: DeployTransaction,
+  transactionHash: string,
+  ledger: number | undefined
+): Promise<number> {
+  const response = await rpcServer.getTransaction(transactionHash);
+  if (
+    response.status !== Api.GetTransactionStatus.SUCCESS ||
+    (ledger !== undefined && response.ledger !== ledger)
+  ) {
+    throw new SubmissionError(
+      "The confirmed deployment transaction is unavailable or has the wrong ledger",
+      transactionHash
+    );
+  }
+  const parsed = TransactionBuilder.fromXDR(
+    response.envelopeXdr,
+    networkPassphrase
+  );
+  if (parsed.hash().toString("hex") !== transactionHash.toLowerCase()) {
+    throw new SubmissionError(
+      "The confirmed deployment envelope has the wrong transaction hash",
+      transactionHash
+    );
+  }
+  const transaction =
+    parsed instanceof FeeBumpTransaction ? parsed.innerTransaction : parsed;
+  const expected = deploymentCreateArgs(deployment).toXDR();
+  const matchingCreates = transaction.operations.filter(
+    (operation) =>
+      operation.type === "invokeHostFunction" &&
+      operation.func.switch().name === "hostFunctionTypeCreateContractV2" &&
+      Buffer.from(operation.func.createContractV2().toXDR()).equals(expected)
+  );
+  if (matchingCreates.length !== 1) {
+    throw new SubmissionError(
+      "The confirmed transaction does not contain the expected wallet deployment",
+      transactionHash
+    );
+  }
+  return response.ledger;
+}
+
+function requireCreationLedger(value: number | undefined): number {
+  if (!Number.isSafeInteger(value) || value === undefined || value < 1) {
+    throw new SubmissionError(
+      "The confirmed deployment did not return a valid creation ledger"
+    );
+  }
+  return value;
 }
 
 export async function prepareDeploymentArtifacts(
@@ -144,6 +263,8 @@ export async function submitDeploymentTx(
     relayer: RelayerClient | null;
     deployerKeypair: Keypair;
     usingSharedDeployer: boolean;
+    networkPassphrase: string;
+    confirmDeployment?: typeof confirmSubmittedDeployment;
   },
   deployment: DeployTransaction,
   credentialId: string,
@@ -181,8 +302,25 @@ export async function submitDeploymentTx(
         throw transactionConfirmationError(txResult.status, submittedHash);
       }
 
-      await deps.storage.delete(credentialId);
-      return { success: true, hash: submittedHash, ledger: txResult.ledger };
+      const confirmedLedger = await (deps.confirmDeployment ?? confirmSubmittedDeployment)(
+        deps.rpc,
+        deps.networkPassphrase,
+        deployment,
+        submittedHash,
+        txResult.ledger
+      );
+      const creationLedger = requireCreationLedger(
+        confirmedLedger ?? txResult.ledger
+      );
+
+      await deps.storage.update(credentialId, {
+        deploymentStatus: "deployed",
+        deploymentError: undefined,
+        deploymentTransactionHash: submittedHash,
+        creationTransactionHash: submittedHash,
+        creationLedger,
+      });
+      return { success: true, hash: submittedHash, ledger: creationLedger };
     } catch (err) {
       const error =
         decodeContractError(err) ??
@@ -194,6 +332,7 @@ export async function submitDeploymentTx(
         deploymentStatus:
           confirmation?.deploymentStatus ?? (knownHash ? "pending" : "failed"),
         deploymentError: error.message,
+        ...(knownHash ? { deploymentTransactionHash: knownHash } : {}),
       });
       return failedTransaction(error, knownHash);
     }
@@ -235,11 +374,26 @@ export async function submitDeploymentTx(
     }
     submittedHash = hashValue;
 
-    await deps.storage.delete(credentialId);
+    const confirmedLedger = await (deps.confirmDeployment ?? confirmSubmittedDeployment)(
+      deps.rpc,
+      deps.networkPassphrase,
+      deployment,
+      hashValue,
+      ledger
+    );
+    const creationLedger = requireCreationLedger(confirmedLedger ?? ledger);
+
+    await deps.storage.update(credentialId, {
+      deploymentStatus: "deployed",
+      deploymentError: undefined,
+      deploymentTransactionHash: hashValue,
+      creationTransactionHash: hashValue,
+      creationLedger,
+    });
     return {
       success: true,
       hash: hashValue,
-      ledger,
+      ledger: creationLedger,
     };
   } catch (err) {
     const error =
@@ -252,6 +406,7 @@ export async function submitDeploymentTx(
       deploymentStatus:
         confirmation?.deploymentStatus ?? (knownHash ? "pending" : "failed"),
       deploymentError: error.message,
+      ...(knownHash ? { deploymentTransactionHash: knownHash } : {}),
     });
     return failedTransaction(error, knownHash);
   }

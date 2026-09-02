@@ -18,6 +18,8 @@ import {
   xdr,
   Keypair,
   Transaction,
+  Horizon,
+  Networks,
   rpc,
   contract,
 } from "@stellar/stellar-sdk";
@@ -115,6 +117,7 @@ import {
   discoverContractsByCredential,
   discoverContractsByAddress,
   getContractDetailsFromIndexer,
+  lookupWalletCandidates,
 } from "./kit/indexer-ops.js";
 import {
   createPasskey,
@@ -148,10 +151,16 @@ import { convertPolicyParams, buildPoliciesScVal, buildConstructorPolicies } fro
 import {
   findWebAuthnSignerForCredential,
   listContextRules,
+  readContextRule,
   resolveContextRuleIdsForEntry,
 } from "./kit/context-rules.js";
 import { normalizeSignatureExpirationLedger } from "./kit/auth-payload.js";
-import { validateAddress, validateAmount, xlmToStroops } from "./utils.js";
+import {
+  generateChallenge,
+  validateAddress,
+  validateAmount,
+  xlmToStroops,
+} from "./utils.js";
 
 /**
  * Per-operation memo shared across all auth entries of a single sign/submit so
@@ -170,7 +179,7 @@ type ConnectedContextRuleCache = {
  *
  * Provides unified management of G-address signers (Stellar accounts) for
  * multi-signature operations. Supports two methods:
- * 1. Raw secret key - stored in memory only (never persisted)
+ * 1. Raw secret key - stored in memory only, without isolation from application code
  * 2. External wallet via StellarWalletsKit (optional)
  *
  * @example
@@ -221,6 +230,8 @@ export class SmartAccountKit {
   private readonly accountWasmHash: string;
   /** Accepted code identities, lowercase hex. Never empty. */
   readonly acceptedWasmHashes: readonly string[];
+  /** Accepted immutable birth code identities, lowercase hex. Never empty. */
+  readonly acceptedBirthWasmHashes: readonly string[];
   private readonly webauthnVerifierAddress: string;
   /** Deployed Ed25519 verifier contract address, if configured. */
   public readonly ed25519VerifierAddress?: string;
@@ -235,6 +246,7 @@ export class SmartAccountKit {
 
   // WebAuthn configuration
   private readonly rpId?: string;
+  private readonly allowedOrigins?: readonly string[];
   private readonly rpName: string;
   private readonly webAuthn: {
     startRegistration: typeof startRegistration;
@@ -243,6 +255,7 @@ export class SmartAccountKit {
 
   // Storage
   private readonly storage: StorageAdapter;
+  private readonly history?: Horizon.Server;
 
   // External wallet adapter (optional)
   private readonly externalWalletAdapter?: ExternalWalletAdapter;
@@ -325,7 +338,7 @@ export class SmartAccountKit {
    * multi-signature operations.
    *
    * Supports two methods of adding signers:
-   * 1. Raw secret key (Keypair) - stored in memory only
+   * 1. Raw secret key (Keypair) - stored in memory only, without application isolation
    * 2. External wallet via StellarWalletsKit (if configured)
    *
    * @example
@@ -350,8 +363,8 @@ export class SmartAccountKit {
   /**
    * Indexer client for discovering smart account contracts.
    *
-   * The indexer enables reverse lookups from signer credentials to contracts,
-   * which is essential for discovering which contracts a user has access to.
+   * The indexer returns unverified candidates for signer identifiers.
+   * A candidate is not a wallet until connection verification succeeds.
    *
    * This is automatically configured for known networks (testnet and mainnet) if not
    * explicitly disabled via `indexerUrl: false` in the config.
@@ -429,6 +442,11 @@ export class SmartAccountKit {
         ? config.acceptedWasmHashes
         : [config.accountWasmHash]
     ).map((h) => h.toLowerCase());
+    this.acceptedBirthWasmHashes = (
+      config.acceptedBirthWasmHashes?.length
+        ? config.acceptedBirthWasmHashes
+        : [config.accountWasmHash]
+    ).map((h) => h.toLowerCase());
     this.webauthnVerifierAddress = config.webauthnVerifierAddress;
     this.ed25519VerifierAddress = config.ed25519VerifierAddress;
     this.defaultPolicies = config.defaultPolicies;
@@ -436,12 +454,32 @@ export class SmartAccountKit {
     this.signatureExpirationLedgers = config.signatureExpirationLedgers ?? LEDGERS_PER_HOUR; // ~1 hour
 
     // WebAuthn
-    this.rpId = config.rpId;
+    this.rpId =
+      config.rpId ??
+      (typeof globalThis.location !== "undefined"
+        ? globalThis.location.hostname
+        : undefined);
+    this.allowedOrigins =
+      config.allowedOrigins ??
+      (typeof globalThis.location !== "undefined"
+        ? [globalThis.location.origin]
+        : undefined);
     this.rpName = config.rpName ?? "Smart Account";
     this.webAuthn = config.webAuthn ?? { startRegistration, startAuthentication };
 
     // Storage (default to memory if not provided)
     this.storage = config.storage ?? new MemoryStorage();
+    const defaultHorizonUrl =
+      this.networkPassphrase === Networks.TESTNET
+        ? "https://horizon-testnet.stellar.org"
+        : this.networkPassphrase === Networks.PUBLIC
+          ? "https://horizon.stellar.org"
+          : undefined;
+    const horizonUrl =
+      config.horizonUrl === false
+        ? undefined
+        : config.horizonUrl ?? defaultHorizonUrl;
+    this.history = horizonUrl ? new Horizon.Server(horizonUrl) : undefined;
 
     // External wallet adapter (optional)
     this.externalWalletAdapter = config.externalWallet;
@@ -513,6 +551,17 @@ export class SmartAccountKit {
       events: this.events,
       webauthnVerifierAddress: this.webauthnVerifierAddress,
       createPasskey: (appName, userName) => this.createPasskey(appName, userName),
+      getVerifiedCredential: async (contractId) => {
+        const credentials = await this.storage.getByContract(contractId);
+        return credentials.find(
+          (credential) =>
+            credential.deploymentStatus === "deployed" &&
+            credential.birthWasmHash !== undefined &&
+            credential.creationTransactionHash !== undefined &&
+            credential.creationLedger !== undefined &&
+            credential.birthConstructorArgsHash !== undefined
+        );
+      },
     });
 
     this.rules = new ContextRuleManagerClass({
@@ -605,10 +654,10 @@ export class SmartAccountKit {
   // ==========================================================================
 
   /**
-   * Discover smart account contracts associated with a credential ID.
+   * Discover unverified smart account candidates associated with a credential ID.
    *
    * This uses the indexer to perform a reverse lookup from the credential ID
-   * to find all contracts where this credential is registered as a signer.
+   * to find contracts that claim this credential as a signer.
    *
    * @param credentialId - The credential ID to look up (hex or base64url encoded)
    * @returns Array of contract summaries, or null if indexer is not available
@@ -618,8 +667,8 @@ export class SmartAccountKit {
    * // After WebAuthn authentication, find contracts for the credential
    * const contracts = await kit.discoverContractsByCredential(credentialId);
    * if (contracts && contracts.length > 0) {
-   *   // User has access to these contracts
-   *   console.log(`Found ${contracts.length} smart accounts`);
+   *   // Require user selection and SDK verification before connection.
+   *   console.log(`Found ${contracts.length} unverified candidates`);
    * }
    * ```
    */
@@ -630,7 +679,7 @@ export class SmartAccountKit {
   }
 
   /**
-   * Discover smart account contracts associated with a Stellar address.
+   * Discover unverified smart account candidates associated with a Stellar address.
    *
    * This works for both G-addresses (Delegated signers) and C-addresses
    * (External signer verifier contracts).
@@ -747,7 +796,7 @@ export class SmartAccountKit {
 
   /**
    * Submit a deployment transaction and update credential storage.
-   * On success, deletes the credential from storage.
+   * On success, stores the verified creation transaction and ledger.
    * On failure, marks it as failed for retry.
    *
    * Shared deployers submit signed address auth via `{func,auth}`; custom
@@ -767,6 +816,7 @@ export class SmartAccountKit {
         relayer: this.relayer,
         deployerKeypair: this.deployerKeypair,
         usingSharedDeployer: this.usingSharedDeployer,
+        networkPassphrase: this.networkPassphrase,
       },
       tx,
       credentialId,
@@ -900,27 +950,31 @@ export class SmartAccountKit {
   // ==========================================================================
 
   /**
-   * Authenticate with a passkey without connecting to a specific contract.
+   * Request a passkey response without connecting to a specific contract.
+   *
+   * This method does not verify wallet ownership against an on-chain signer.
+   * `connectWallet()` performs that verification before connection.
    *
    * This is useful when you need to:
    * 1. Get the credential ID first
-   * 2. Use the indexer to discover which contracts the passkey has access to
+   * 2. Use the indexer to discover unverified wallet candidates
    * 3. Then connect to a specific contract using connectWallet({ contractId, credentialId })
    *
    * @returns The credential ID from the selected passkey
    *
    * @example
    * ```typescript
-   * // Step 1: Authenticate to get credential ID
+   * // Step 1: Request a passkey response to get the credential ID
    * const { credentialId } = await kit.authenticatePasskey();
    *
    * // Step 2: Discover contracts via indexer
    * const contracts = await kit.discoverContractsByCredential(credentialId);
    *
-   * // Step 3: Let user choose or connect to the first one
+   * // Step 3: Let the user choose one candidate
    * if (contracts && contracts.length > 0) {
+   *   const chosen = await chooseWalletCandidate(contracts);
    *   await kit.connectWallet({
-   *     contractId: contracts[0].contract_id,
+   *     contractId: chosen.contract_id,
    *     credentialId
    *   });
    * }
@@ -976,8 +1030,18 @@ export class SmartAccountKit {
         events: this.events,
         rpId: this.rpId,
         webAuthn: this.webAuthn,
-        connectWithCredentials: (credentialId, contractId) =>
-          this.connectWithCredentials(credentialId, contractId),
+        connectWithCredentials: (
+          credentialId,
+          contractId,
+          proof,
+          allowAuthentication
+        ) =>
+          this.connectWithCredentials(
+            credentialId,
+            contractId,
+            proof,
+            allowAuthentication
+          ),
       },
       options
     );
@@ -988,7 +1052,9 @@ export class SmartAccountKit {
    */
   private async connectWithCredentials(
     credentialId?: string,
-    contractId?: string
+    contractId?: string,
+    proof?: import("./kit/wallet-ops.js").FreshOwnershipProof,
+    allowAuthentication = true
   ): Promise<ConnectWalletResult> {
     return connectWithCredentials(
       {
@@ -998,12 +1064,52 @@ export class SmartAccountKit {
         networkPassphrase: this.networkPassphrase,
         sessionExpiryMs: this.sessionExpiryMs,
         acceptedWasmHashes: this.acceptedWasmHashes,
+        acceptedBirthWasmHashes: this.acceptedBirthWasmHashes,
+        webauthnVerifierAddress: this.webauthnVerifierAddress,
+        rpId: this.rpId,
+        allowedOrigins: this.allowedOrigins,
+        history: this.history,
+        expectedPolicies: this.defaultPolicies,
+        lookupWalletCandidates: (nextCredentialId) =>
+          lookupWalletCandidates(this.indexer, nextCredentialId),
+        readContextRule: (nextContractId, contextRuleId) => {
+          const wallet = new SmartAccountClient({
+            contractId: nextContractId,
+            networkPassphrase: this.networkPassphrase,
+            rpcUrl: this.rpcUrl,
+          });
+          return readContextRule(wallet, contextRuleId, {
+            rpc: this.rpc,
+            contractId: nextContractId,
+            networkPassphrase: this.networkPassphrase,
+            timeoutInSeconds: this.timeoutInSeconds,
+          });
+        },
+        authenticateCredential: async (expectedCredentialId) => {
+          const challenge = generateChallenge();
+          const response = await this.webAuthn.startAuthentication({
+            optionsJSON: {
+              challenge,
+              rpId: this.rpId,
+              userVerification: "preferred",
+              timeout: 60_000,
+            },
+          });
+          if (response.id !== expectedCredentialId) {
+            throw new ValidationError(
+              "The passkey returned a different credential during ownership verification"
+            );
+          }
+          return { response, challenge };
+        },
         events: this.events,
         setConnectedState: (nextContractId, nextCredentialId) =>
           this.setConnectedState(nextContractId, nextCredentialId),
       },
       credentialId,
-      contractId
+      contractId,
+      proof,
+      allowAuthentication
     );
   }
 

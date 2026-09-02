@@ -489,7 +489,46 @@ function validateDeployFunction(
   ) {
     throw new RequestError("Deploy preimage address is not allowlisted", 403);
   }
+  validateDeployConstructor(deploy);
   return deployer;
+}
+
+/**
+ * Validate the SDK's one-passkey constructor shape as deploy-spam defense.
+ * This check is not an ownership proof or a trust boundary.
+ */
+function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
+  const args = deploy.constructorArgs();
+  if (
+    args.length !== 2 ||
+    args[0]?.switch().name !== "scvVec" ||
+    args[1]?.switch().name !== "scvMap"
+  ) {
+    throw new RequestError("Deploy constructor has an invalid argument shape", 403);
+  }
+  const signers = args[0].vec() ?? [];
+  if (signers.length !== 1 || signers[0]?.switch().name !== "scvVec") {
+    throw new RequestError("Deploy must contain exactly one initial signer", 403);
+  }
+  const signer = signers[0].vec() ?? [];
+  if (
+    signer.length !== 3 ||
+    signer[0]?.switch().name !== "scvSymbol" ||
+    signer[0].sym().toString() !== "External" ||
+    signer[1]?.switch().name !== "scvAddress" ||
+    signer[2]?.switch().name !== "scvBytes"
+  ) {
+    throw new RequestError("Deploy initial signer must be External", 403);
+  }
+  const keyData = signer[2].bytes();
+  if (keyData.length <= 65 || keyData[0] !== 0x04) {
+    throw new RequestError("Deploy initial signer has invalid WebAuthn key data", 403);
+  }
+  const credentialId = keyData.subarray(65);
+  const salt = deploy.contractIdPreimage().fromAddress().salt();
+  if (!bytesEqual(hash(credentialId), salt)) {
+    throw new RequestError("Deploy salt does not match the signer credential id", 403);
+  }
 }
 
 async function validateWalletInvocation(

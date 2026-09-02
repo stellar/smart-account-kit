@@ -68,6 +68,6 @@ This is a clean-cut migration. The SDK no longer preserves the legacy `Signature
 
 ## State at Migration Completion
 
-At migration completion, the SDK was aligned to that regenerated contract surface, the signing flow used `AuthPayload`, and indexer-backed rule discovery supplied active rule IDs. The current SDK additionally has a bounded on-chain fallback for fresh low-numbered rules. The remaining raw contract methods are intentionally left on `kit.wallet` rather than wrapped, and the root package continues to export the helper utilities that the demo and downstream consumers rely on.
+At migration completion, the SDK matched that regenerated contract surface. The signing flow used `AuthPayload`, and indexer-backed discovery supplied active rule IDs. Some raw contract methods still remained on `kit.wallet` at that time. Version `0.4.0` later added wrappers for every entry point and a bounded on-chain rule probe.
 
 Any future cleanup should be treated as normal product work rather than migration debt.

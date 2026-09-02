@@ -4,14 +4,17 @@ TypeScript SDK for deploying and managing OpenZeppelin smart account contracts o
 
 ## Security status
 
-> [!WARNING]
-> This SDK, demo, relayer proxy, and integration code have not undergone an independent security audit.
+> [!CAUTION]
+> **Unaudited integration software.**
+> This SDK, demo, relayer proxy, and indexer integration have not received an independent third-party security audit.
+> Defects can cause unauthorized transactions, loss of access, or permanent asset loss.
 > The underlying OpenZeppelin Stellar contracts have a [separate audit](https://www.openzeppelin.com/news/stellar-contracts-rc-v0.7.0-audit) with a different scope.
 > The [deployed artifacts](docs/deployments-protocol-27-2026-07-09.md) use a later source revision than that audit scope.
-> Security fixes and tests do not guarantee safety.
-> Use this software on mainnet at your own risk.
-> Do not store assets you cannot afford to lose in accounts managed through this software.
-> Report suspected vulnerabilities privately through [SECURITY.md](./SECURITY.md).
+> Do not store or control assets you cannot afford to lose.
+> Limit balances, signer permissions, policy allowances, and relayer permissions.
+> Monitor wallets and maintain recovery and authorized upgrade paths.
+> You use this software and related services at your own risk.
+> The software has no warranty. See [LICENSE](./LICENSE) and [SECURITY.md](./SECURITY.md).
 
 ## Features
 
@@ -26,7 +29,9 @@ TypeScript SDK for deploying and managing OpenZeppelin smart account contracts o
 - **Fee sponsoring** — optional relayer proxy for gasless transactions
 - **Storage adapters** — flexible credential storage (IndexedDB, localStorage, memory, custom)
 
-> **Upgrading from 0.3.0?** See the [v0.4.0 migration guide](docs/migration-v0.4.0.md) for the full list of breaking changes.
+> **Upgrading from 0.6.x?** See the [v0.7.0 migration guide](docs/migration-v0.7.0.md) before you update.
+>
+> **Upgrading from 0.3.0?** See the [v0.4.0 migration guide](docs/migration-v0.4.0.md).
 
 ## Concepts
 
@@ -77,7 +82,7 @@ const { contractId, credentialId } = await kit.createWallet('My App', 'user@exam
   autoSubmit: true,
 });
 
-// User clicks "Connect Wallet" — prompts for passkey selection
+// User clicks "Connect Wallet". Fresh-device connection also requires schema 2.
 await kit.connectWallet({ prompt: true });
 
 // Sign and submit a transaction (returns a discriminated result, does not throw
@@ -101,7 +106,10 @@ The current Protocol 27 testnet/mainnet deployed contract IDs and WASM hashes ar
 | `rpcUrl` | `string` | Yes | Stellar RPC URL |
 | `networkPassphrase` | `string` | Yes | Network passphrase |
 | `accountWasmHash` | `string` | Yes | Smart account WASM hash for deployment |
-| `acceptedWasmHashes` | `string[]` | No | Code identities accepted when connecting to an account resolved from an untrusted source (derivation, or a discovery result). Defaults to `[accountWasmHash]`. Add each hash as upgrades roll out — see [security notes](./docs/security-deterministic-deployer.md) |
+| `acceptedWasmHashes` | `string[]` | No | Current code identities accepted for every connection. Defaults to `[accountWasmHash]`. Add each approved upgrade hash — see [security notes](./docs/security-deterministic-deployer.md) |
+| `acceptedBirthWasmHashes` | `string[]` | No | Code identities accepted in immutable wallet creation history. Defaults to `[accountWasmHash]`. Keep this list constructor-compatible and narrow |
+| `horizonUrl` | `string \| false` | No | Full-history fallback for birth verification. Known public networks use official Horizon services by default |
+| `allowedOrigins` | `string[]` | No | Origins accepted during fresh WebAuthn ownership verification. Defaults to the current browser origin. Required outside a browser |
 | `webauthnVerifierAddress` | `string` | Yes | Deployed WebAuthn verifier contract address |
 | `ed25519VerifierAddress` | `string` | No | Deployed Ed25519 verifier — required only for Ed25519 external signers |
 | `defaultPolicies` | `PolicyConfig[]` | No | Constructor policies installed on the default rule of newly created wallets |
@@ -131,7 +139,7 @@ The deployer salts wallet deployment (the contract address is derived from it). 
 > - **Submit it yourself:** call `createWallet(..., { autoSubmit: false })` and submit the returned `relayerPayload: { func, auth }` through any funded source you control. Building it needs no relayer. The kit remains disconnected until you confirm submission and call `connectWallet()`.
 > - **Dedicated deployer:** set `deployerSecret` to a key you control. It becomes the fee payer. *Note: a custom deployer changes the derived contract addresses, so a wallet created with one deployer cannot be re-derived with another.*
 
-The shared default deployer accounts use on-chain controls on mainnet. These controls protect identity configuration, not account balances. **Do not fund them.** See [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md) for the guarantees and residual risks.
+The shared default deployer accounts use on-chain controls on mainnet. These controls protect identity configuration, not account balances. **Do not fund them.** See [`docs/security-deterministic-deployer.md`](docs/security-deterministic-deployer.md) for the controls and residual risks.
 
 ### Fee sponsoring
 
@@ -146,9 +154,11 @@ const kit = new SmartAccountKit({
 // Transactions automatically use the relayer when configured
 await kit.transfer(tokenContract, recipient, amount);
 
-// Bypass the relayer for a specific operation
-await kit.transfer(tokenContract, recipient, amount, { forceMethod: 'rpc' });
+// Do not force direct RPC while using the shared default deployer.
 ```
+
+`forceMethod: 'rpc'` requires a funded dedicated `deployerSecret`.
+The shared default deployer never signs a transaction envelope or pays a fee.
 
 ### Storage adapters
 
@@ -189,7 +199,7 @@ import { SmartAccountKit } from 'smart-account-kit';
 | `createWallet(appName, userName, options?)` | Create + deploy a new smart wallet with a passkey |
 | `connectWallet(options?)` | Connect to an existing wallet |
 | `disconnect()` | Disconnect and clear stored session |
-| `authenticatePasskey()` | Authenticate with a passkey without connecting |
+| `authenticatePasskey()` | Request a passkey response for discovery without connecting or verifying wallet ownership |
 | `discoverContractsByCredential(credentialId)` | Find contracts by credential ID via the indexer |
 | `discoverContractsByAddress(address)` | Find contracts by G/C-address via the indexer |
 | `sign(transaction, options?)` | Sign auth entries only (prefer `signAndSubmit`) |
@@ -208,7 +218,7 @@ Submission methods (`transfer`, `signAndSubmit`, `executeAndSubmit`, `fundWallet
 
 #### Wallet lifecycle
 
-`createWallet()` creates deployment artifacts for a new smart account tied to a freshly generated passkey. With `autoSubmit: true`, it connects only after deployment succeeds. With manual submission, confirm the transaction and call `connectWallet()`. `connectWallet()` restores or prompts into an existing wallet, `authenticatePasskey()` gives you passkey auth without connecting, and `disconnect()` only clears session state.
+`createWallet()` creates deployment artifacts for a new smart account tied to a freshly generated passkey. With `autoSubmit: true`, it connects only after deployment succeeds. With manual submission, confirm the transaction and call `connectWallet()`. `connectWallet()` restores or prompts into an existing wallet. `authenticatePasskey()` returns an unverified response for discovery. `disconnect()` only clears session state.
 
 For transactions, `signAndSubmit()` is the default for smart-account auth flows and the canonical way to submit an assembled transaction returned by any of the sub-managers (`kit.rules.*`, `kit.signers.*`, `kit.policies.*`, `kit.upgrade`, and the policy clients). `executeAndSubmit()` is the one-shot path for arbitrary smart-account-mediated contract calls, and `sign()` / `signAuthEntry()` remain available when you need to inspect or compose around signed auth entries directly.
 
@@ -425,18 +435,18 @@ await kit.signAndSubmit(removeTx);
 
 #### CredentialManager (`kit.credentials`)
 
-Manage stored credentials (pending deployments).
+Manage stored credential and deployment records.
 
 | Method | Description |
 |--------|-------------|
 | `getAll()` | All stored credentials |
 | `getForWallet()` | Credentials for the current wallet |
-| `getPending()` | Pending/failed deployments |
+| `getPending()` | Pending, failed, or occupied deployment records |
 | `create(options?)` | Create a new local pending credential |
 | `save(credential)` | Save a credential to storage |
 | `deploy(credentialId, options?)` | Deploy a pending credential |
 | `sync(credentialId)` | Reconcile one credential against on-chain state |
-| `syncAll()` | Reconcile all credentials; returns `{ deployed, pending, failed }` |
+| `syncAll()` | Reconcile all credentials; returns `{ deployed, pending, failed }` (`occupied` counts as pending) |
 | `delete(credentialId)` | Delete a pending (never-deployed) credential |
 
 ```typescript
@@ -448,7 +458,7 @@ const { contractId, submitResult } = await kit.credentials.deploy('credential-id
   autoSubmit: true,
 });
 
-// Reconcile local state with chain (deployed credentials are removed from storage)
+// Reconcile local state with chain. Verified deployment records remain stored.
 const { deployed, pending: stillPending, failed } = await kit.credentials.syncAll();
 
 // Delete a pending credential (throws if it is actually deployed on-chain)
@@ -490,6 +500,8 @@ The single-signer `kit.transfer()` / `kit.signAndSubmit()` convenience path is *
 ### Ed25519 & External Signers
 
 `kit.externalSigners` manages signers that are held client-side: raw Stellar keypairs (Delegated G-address signers), Ed25519 external signers, and connected external wallets. Keypair and Ed25519 signers are stored **in memory only** and are never persisted; wallet connections can be persisted for auto-restore.
+
+Memory-only storage prevents persistence. It does not isolate a secret from application code or browser extensions. Never enter a production secret into the demo or an untrusted application.
 
 | Method | Description |
 |--------|-------------|
@@ -648,7 +660,7 @@ import type { SmartAccountConfig, PolicyConfig } from 'smart-account-kit';
 import type {
   StoredCredential,
   StoredSession,
-  CredentialDeploymentStatus, // "pending" | "failed"
+  CredentialDeploymentStatus, // "pending" | "failed" | "deployed" | "occupied"
   StorageAdapter,
 } from 'smart-account-kit';
 
@@ -791,6 +803,10 @@ import {
   SmartAccountError,        // Base error (has .code and .context)
   SmartAccountErrorCode,    // Error codes enum
   WalletNotConnectedError,  // No wallet connected
+  WalletCodeNotAcceptedError, // Current wallet code is not accepted
+  WalletProvenanceError,    // Immutable wallet birth is not verified
+  WalletOwnershipError,     // The passkey does not match one live signer
+  WalletAmbiguousError,     // Discovery requires an explicit wallet selection
   CredentialNotFoundError,  // Credential not found in storage
   SignerNotFoundError,      // Signer not registered on-chain
   PolicyNotFoundError,      // Policy not found on a context rule
@@ -907,8 +923,7 @@ const kit = new SmartAccountKit({
 // Transactions automatically use the relayer when configured
 await kit.transfer(tokenContract, recipient, amount);
 
-// Bypass the relayer for a specific operation
-await kit.transfer(tokenContract, recipient, amount, { forceMethod: 'rpc' });
+// Do not force direct RPC while using the shared default deployer.
 
 // Access the relayer client directly
 const { relayerPayload } = await kit.createWallet('My App', 'user@example.com');
@@ -916,6 +931,9 @@ if (kit.relayer && relayerPayload) {
   const result = await kit.relayer.send(relayerPayload.func, relayerPayload.auth);
 }
 ```
+
+`forceMethod: 'rpc'` requires a funded dedicated `deployerSecret`.
+It fails closed when the kit uses the shared default deployer.
 
 #### Directly
 
@@ -939,7 +957,7 @@ if (result.success) {
 
 ### Indexer Client
 
-The SDK includes an indexer client for reverse lookups from signer credentials to smart account contracts. As of v0.4.0 the built-in default provider is **[Mercury](https://mercurydata.app)**, a hosted managed indexer. Its read endpoints are public and cover both live and historical activity for every smart-account-kit contract (a global backfill means there is no per-contract catch-up step), so discovery works **zero-config with no token**. Point `indexerUrl` at any wire-compatible provider to override.
+The SDK includes an indexer client for reverse lookups from signer credentials to wallet candidates. The built-in provider is **[Mercury](https://mercurydata.app)**. Signer discovery is public. Fresh-device connection requires the schema-2 birth response in [`indexer/README.md`](indexer/README.md). The SDK fails closed when that response is unavailable.
 
 | Network | Built-in default (Mercury) |
 |---------|----------------------------|
@@ -951,6 +969,9 @@ import { IndexerClient, IndexerError, DEFAULT_INDEXER_URLS } from 'smart-account
 import type {
   IndexerConfig,
   IndexedContractSummary,
+  IndexedWalletCandidate,
+  WalletCandidate,
+  WalletCandidateLookup,
   IndexedSigner,
   IndexedPolicy,
   IndexedContextRule,
@@ -981,6 +1002,10 @@ if (kit.indexer) {
 }
 ```
 
+Treat every discovery row as an unverified candidate.
+Do not auto-select one result or display it as a deposit address.
+`connectWallet` checks immutable birth, current code, one exact live signer, and fresh passkey ownership.
+
 `indexerAuthToken` is optional (Mercury's read endpoints are public); supply one only for gated/admin operations or a provider that requires it. When set, it (and `authToken` on a directly-constructed client) is sent on every request as `Authorization: Bearer <token>`. Browser bundles expose their environment variables to users, so only embed public or tightly scoped tokens there; keep privileged and catch-up/admin credentials server-side.
 
 #### Directly
@@ -995,6 +1020,7 @@ const custom = new IndexerClient({
 });
 
 const { contracts } = await custom.lookupByCredentialId(credentialIdHex);
+const candidates = await custom.lookupWalletCandidates(credentialIdHex);
 const { contracts: byAddress } = await custom.lookupByAddress('GABC...');
 const details = await custom.getContractDetails('CABC...');
 ```
@@ -1079,13 +1105,16 @@ The Smart Account Kit uses contracts from [OpenZeppelin's stellar-contracts](htt
 
 ### Publishing
 
-Publish `smart-account-kit-bindings` before `smart-account-kit`, because the SDK package resolves its workspace dependency to the published bindings version. The exact authenticated dry-run, publish, and verification commands are in [`docs/releasing.md`](docs/releasing.md).
+Publish `smart-account-kit-bindings` first only when its generated code changed. The SDK resolves its workspace dependency to that published version. The exact release commands are in [`docs/releasing.md`](docs/releasing.md).
 
 ## Documentation
 
 - [Security policy](SECURITY.md) — supported versions and private vulnerability reporting
 - [Changelog](CHANGELOG.md) — release history
+- [v0.7.0 migration guide](docs/migration-v0.7.0.md) — verified wallet connection and storage changes
 - [v0.4.0 migration guide](docs/migration-v0.4.0.md) — breaking changes from 0.3.0
+- [Deterministic deployer security model](docs/security-deterministic-deployer.md) — connection and deployer controls
+- [Indexer response contract](indexer/README.md) — required discovery and provenance schema
 - [Protocol 27 deployments](docs/deployments-protocol-27-2026-07-09.md) — testnet/mainnet contract IDs and WASM hashes
 - [Releasing](docs/releasing.md) — npm publish flow
 
@@ -1093,7 +1122,7 @@ Publish `smart-account-kit-bindings` before `smart-account-kit`, because the SDK
 
 - [OpenZeppelin stellar-contracts](https://github.com/OpenZeppelin/stellar-contracts) — the smart account contracts this SDK interacts with
 - [Demo Application](./demo) — interactive demo for testing the SDK
-- [Indexer](./indexer) — backend service for contract discovery
+- [Indexer](./indexer) — provider requirements and a lookup demo
 
 ## License
 

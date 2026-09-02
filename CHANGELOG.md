@@ -2,10 +2,65 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## Unreleased
+## 0.7.0 — 2026-09-02
+
+This release changes the SDK, demos, documentation, and relayer proxy.
+It does not change or deploy smart contracts.
+It keeps `smart-account-kit-bindings@0.4.0` unchanged.
+See the [v0.7.0 migration guide](docs/migration-v0.7.0.md) before updating.
+
+### Breaking security changes
+
+- `connectWallet` now rejects every wallet without verified immutable birth,
+  accepted current code, and one exact live signer.
+- Fresh-device connections require a complete schema-2 indexer response.
+  Legacy indexer responses remain available for display, but cannot establish a connection.
+- Stored sessions no longer bypass current-code, birth, or signer checks.
+  The SDK clears a session that cannot pass those checks.
+- `acceptedWasmHashes` now applies to every connection, including stored sessions.
+  Add each approved current upgrade hash before this release.
+- Fresh-device recovery accepts only the immutable primary passkey.
+  A verified local secondary association remains usable on the same device.
+- `credentials.sync()` no longer treats address occupancy as a successful deployment.
+  It retains the record with the `occupied` status.
+- `credentials.getPending()` now includes `occupied` records.
+- Successful deployments remain in credential storage with verified birth metadata.
+- The relayer deployment endpoint now rejects constructors outside the SDK shape.
+  It requires one External signer and a credential-derived salt.
+
+### Added
 
 - Added a private vulnerability-reporting policy without publishing issue details.
 - Included the security policy in future SDK package artifacts.
+- Added immutable wallet-birth verification before every untrusted connection.
+- Added fresh WebAuthn ownership checks and exact live-signer matching.
+- Required an accepted WebAuthn origin for every fresh ownership proof.
+- Retained confirmed birth metadata instead of deleting deployed credentials.
+- Changed credential sync so address occupancy never counts as deployment.
+- Added the fail-closed schema-2 indexer response contract.
+- Removed demo fallback and automatic connection for unverified candidates.
+- Verified the confirmed deployment envelope before trusting relayer results.
+- Retained known transaction hashes for pending deployment submissions.
+- Added relayer constructor-shape checks as deployment-spam protection.
+- Added `WalletProvenanceError`, `WalletOwnershipError`, and `WalletAmbiguousError`.
+- Added typed schema-2 wallet candidate responses to the public indexer API.
+
+### Fixed
+
+- Rejected malformed DER ECDSA signatures before compact-signature conversion.
+- Removed stale demo statements about derived-address fallback and direct-RPC shared deployments.
+- Removed automatic candidate selection from the standalone indexer demo.
+- Removed internal deployment labels and temporary provider incidents from public deployment records.
+- Cleaned `dist` before builds and excluded test helpers from npm package contents.
+- Removed a deprecated Vite dependency-optimization option from the demo build.
+
+### Migration
+
+- Deploy the schema-2 credential lookup response before enabling fresh-device recovery.
+- Configure `acceptedWasmHashes` with every approved current wallet implementation.
+- Keep `acceptedBirthWasmHashes` limited to constructor-compatible wallet implementations.
+- Expect legacy local records to remain disconnected until birth verification succeeds.
+- Update interfaces that assume successful sync deletes a credential record.
 
 ## 0.6.2 — 2026-08-19
 

@@ -2,10 +2,12 @@
 
 Cloudflare Worker that proxies transaction submission to the [OpenZeppelin Relayer Channels](https://docs.openzeppelin.com/relayer) service, so frontend apps can submit **fee-sponsored** Stellar transactions without exposing a Relayer API key.
 
-> [!WARNING]
-> This reference proxy has not undergone an independent security audit.
-> Review and test its configuration before production use.
-> Limit its fee balance and spending capacity to an acceptable loss.
+> [!CAUTION]
+> **Unaudited reference service.**
+> This proxy has not received an independent third-party security audit.
+> Defects or bad configuration can spend the relayer balance or interrupt submission.
+> Review every allowlist and limit before deployment.
+> Limit the fee balance and spending capacity to an acceptable loss.
 > Report suspected vulnerabilities through the [project security policy](../SECURITY.md).
 
 This is a **separate concern from the [indexer](../indexer)**: the indexer answers discovery/read queries (which contracts a passkey signs for), while the relayer proxy submits transactions. They are deployed and operated independently.
@@ -33,7 +35,11 @@ POST /
 Body: { "func": "base64-encoded-func", "auth": ["base64-auth-entry", ...] }
 Body: { "xdr": "base64-signed-transaction-envelope" }
 ```
-`func` submissions may contain an allowlisted wallet invocation with address-bound V2 credentials, an allowlisted direct token transfer authorized by an allowlisted wallet, or one `createContractV2` function with one matching legacy V1 deploy authorization entry. Signed `xdr` is restricted to one source-signed dedicated-deployer `createContractV2` operation whose source equals its preimage deployer; the shared deterministic deployer is explicitly forbidden as an XDR source.
+`func` submissions may contain an allowlisted wallet invocation with address-bound V2 credentials or an allowlisted direct token transfer. They may also contain one `createContractV2` function with one matching legacy V1 deploy authorization entry. A deployment must contain one External WebAuthn signer and a credential-derived salt.
+
+Signed `xdr` accepts one source-signed dedicated-deployer `createContractV2` operation. Its source must equal its preimage deployer. The shared deterministic deployer cannot be an XDR source.
+
+These checks constrain relayer spending. They do not prove wallet ownership. The SDK performs wallet-birth, code, signer, and passkey verification before connection.
 
 **Status**
 ```

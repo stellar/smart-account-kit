@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { StrKey } from "@stellar/stellar-sdk";
 import { SmartAccountKit } from "./kit";
 import { DEFAULT_INDEXER_URLS, IndexerClient } from "./indexer";
 
@@ -152,5 +153,85 @@ describe("IndexerClient network defaults", () => {
         }),
       })
     );
+  });
+
+  it("accepts only a complete schema-2 wallet-candidate response", async () => {
+    const contractId = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const contract = {
+      contract_id: contractId,
+      context_rule_count: "1",
+      external_signer_count: "1",
+      delegated_signer_count: "0",
+      native_signer_count: "0",
+      first_seen_ledger: "100",
+      last_seen_ledger: "200",
+      context_rule_ids: [0],
+      birth_wasm_hash: "ab".repeat(32),
+      creation_transaction_hash: "12".repeat(32),
+      creation_ledger: "100",
+      current_wasm_hash: "cd".repeat(32),
+      derived_address: true,
+      collision: false,
+      incomplete: false,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schema: 2,
+          complete: true,
+          indexed_through_ledger: 200,
+          credentialId: "0102",
+          contracts: [contract],
+          count: 1,
+        })
+      )
+    );
+    const indexer = new IndexerClient({ baseUrl: "https://indexer.example" });
+
+    await expect(indexer.lookupWalletCandidates("0102")).resolves.toEqual({
+      schema: 2,
+      complete: true,
+      indexedThroughLedger: 200,
+      candidates: [
+        {
+          contractId,
+          birthWasmHash: "ab".repeat(32),
+          creationTransactionHash: "12".repeat(32),
+          creationLedger: 100,
+          currentWasmHash: "cd".repeat(32),
+          derivedAddress: true,
+          collision: false,
+        },
+      ],
+    });
+  });
+
+  it("keeps legacy or incomplete candidate responses untrusted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          credentialId: "0102",
+          contracts: [{
+            contract_id: "CLEGACY",
+            context_rule_count: 1,
+            external_signer_count: 1,
+            delegated_signer_count: 0,
+            native_signer_count: 0,
+            first_seen_ledger: 100,
+            last_seen_ledger: 200,
+            context_rule_ids: [0],
+          }],
+          count: 1,
+        })
+      )
+    );
+    const indexer = new IndexerClient({ baseUrl: "https://indexer.example" });
+
+    await expect(indexer.lookupWalletCandidates("0102")).resolves.toEqual({
+      complete: false,
+      candidates: [],
+    });
   });
 });

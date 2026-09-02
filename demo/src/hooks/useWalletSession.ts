@@ -279,26 +279,25 @@ export function useWalletSession({
     log("Prompting for passkey selection...");
 
     try {
-      // Step 1: Authenticate to get the credential ID (no contract yet)
+      // Step 1: Request a passkey response to get the credential ID.
       const { credentialId: authCredentialId } = await kit.authenticatePasskey();
-      log(`Authenticated with credential: ${authCredentialId.slice(0, 20)}...`, "success");
+      log(`Passkey response received: ${authCredentialId.slice(0, 20)}...`, "success");
 
-      // Step 2: Discover contracts via indexer. Best-effort: a failing or
-      // unreachable indexer (e.g. a 500) must NOT hard-fail the connect — fall
-      // through to the derived-contract-ID path with a visible warning instead.
+      // Step 2: Discover candidates. An address is not a wallet until the SDK
+      // verifies its immutable birth, current code, and live signer.
       let contracts: IndexedContractSummary[] | null = null;
       try {
         contracts = await kit.discoverContractsByCredential(authCredentialId);
       } catch (discoveryError) {
         const message =
           discoveryError instanceof Error ? discoveryError.message : String(discoveryError);
-        console.warn("Indexer discovery failed, falling back to derived contract ID:", discoveryError);
-        log(`⚠️ Indexer discovery failed (${message}); falling back to derived contract ID`, "info");
-        contracts = null;
+        console.warn("Indexer discovery failed:", discoveryError);
+        log(`Indexer discovery failed (${message}); connection remains closed`, "error");
+        return;
       }
 
-      if (contracts && contracts.length > 1) {
-        log(`Found ${contracts.length} smart accounts for this passkey`, "info");
+      if (contracts && contracts.length > 0) {
+        log(`Found ${contracts.length} unverified wallet candidate${contracts.length === 1 ? "" : "s"}`, "info");
         setDiscoveredContracts(contracts);
         setPendingCredentialForPicker(authCredentialId);
         setShowContractPicker(true);
@@ -306,29 +305,7 @@ export function useWalletSession({
         return;
       }
 
-      if (contracts && contracts.length === 1) {
-        log(`Found 1 smart account via indexer, connecting...`, "info");
-        const result = await kit.connectWallet({
-          contractId: contracts[0].contract_id,
-          credentialId: authCredentialId,
-        });
-        if (result) {
-          const shapeRules = await ensureCurrentWalletShape(kit, result.contractId, result.credentialId);
-          log(`Contract ID: ${result.contractId}`, "success");
-          applyConnection(result.contractId, result.credentialId, shapeRules);
-        }
-        return;
-      }
-
-      // Step 3: No indexed contracts (or indexer unavailable) - fall back to the
-      // derived contract ID.
-      log(`No indexed contracts found, trying derived contract ID...`, "info");
-      const result = await kit.connectWallet({ credentialId: authCredentialId });
-      if (result) {
-        const shapeRules = await ensureCurrentWalletShape(kit, result.contractId, result.credentialId);
-        log(`Contract ID: ${result.contractId}`, "success");
-        applyConnection(result.contractId, result.credentialId, shapeRules);
-      }
+      log("No complete wallet candidate is available. Connection remains closed.", "error");
     } catch (error) {
       await kit.disconnect().catch(() => undefined);
       log(`Failed to connect: ${error}`, "error");
@@ -349,7 +326,7 @@ export function useWalletSession({
 
       setShowContractPicker(false);
       setLoading("Connecting to selected account...");
-      log(`Connecting to contract: ${selectedContract.contract_id.slice(0, 10)}...`);
+      log(`Verifying wallet candidate: ${selectedContract.contract_id.slice(0, 10)}...`);
 
       try {
         const result = await kit.connectWallet({

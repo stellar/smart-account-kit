@@ -81,11 +81,11 @@ export function useKit(log: LogFn) {
           log("Relayer fee sponsoring enabled", "success");
         }
 
-        // Clean up already-deployed credentials, keep pending ones for retry
+        // Sync local records and keep unresolved credentials visible.
         const { deployed } = await newKit.credentials.syncAll();
         if (cancelled) return;
         if (deployed > 0) {
-          log(`Cleaned up ${deployed} deployed credential(s)`, "info");
+          log(`Confirmed ${deployed} deployed credential(s)`, "info");
         }
         const pendingCreds = await newKit.credentials.getPending();
         if (cancelled) return;

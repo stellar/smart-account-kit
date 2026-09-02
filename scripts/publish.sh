@@ -53,8 +53,8 @@ if [ -n "$EXACT_VERSION" ] && [ "$BUMP_TYPE" != "patch" ]; then
     exit 1
 fi
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo -e "${RED}Error: Working tree is not clean. Commit or stash changes before publishing.${NC}"
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+    echo -e "${RED}Error: Working tree is not clean. Commit or stash every change before publishing.${NC}"
     exit 1
 fi
 

@@ -470,7 +470,7 @@ export function SignerPicker({
                             </button>
                           </div>
                           <p className="secret-key-warning">
-                            ⚠️ Your secret key is stored in memory only and will be cleared on refresh.
+                            ⚠️ Use an isolated test key only. Page code can read a key while it is in memory.
                           </p>
                         </div>
                       )}
@@ -572,7 +572,7 @@ export function SignerPicker({
                             </button>
                           </div>
                           <p className="secret-key-warning">
-                            ⚠️ Your secret key is stored in memory only and will be cleared on refresh.
+                            ⚠️ Use an isolated test key only. Page code can read a key while it is in memory.
                           </p>
                         </div>
                       )}

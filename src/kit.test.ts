@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { Address, Keypair, Networks, xdr } from "@stellar/stellar-sdk";
+import {
+  Address,
+  Keypair,
+  Networks,
+  Operation,
+  hash,
+  xdr,
+} from "@stellar/stellar-sdk";
 import { SmartAccountKit } from "./kit";
 
 function makeAuthEntry(): xdr.SorobanAuthorizationEntry {
@@ -37,10 +44,25 @@ describe("SmartAccountKit top-level surface", () => {
   it("createWallet wires storage, events, and deploy signing", async () => {
     const storage = {
       save: vi.fn(async () => undefined),
+      update: vi.fn(async () => undefined),
       saveSession: vi.fn(async () => undefined),
     };
     const events = { emit: vi.fn() };
+    const createOperation = Operation.createCustomContract({
+      address: Address.fromString(Keypair.random().publicKey()),
+      wasmHash: Buffer.from("ab".repeat(32), "hex"),
+      salt: hash(Buffer.from("kit-test")),
+      constructorArgs: [xdr.ScVal.scvVec([]), xdr.ScVal.scvMap([])],
+    });
     const deployTx = {
+      built: {
+        operations: [
+          {
+            type: "invokeHostFunction",
+            func: createOperation.body().invokeHostFunctionOp().hostFunction(),
+          },
+        ],
+      },
       signed: { toXDR: () => "SIGNED_XDR" },
     };
     const setConnectedState = vi.fn();
@@ -116,7 +138,12 @@ describe("SmartAccountKit top-level surface", () => {
       { credentialId: "cred-789" },
     );
 
-    expect(connectWithCredentials).toHaveBeenCalledWith("cred-789", undefined);
+    expect(connectWithCredentials).toHaveBeenCalledWith(
+      "cred-789",
+      undefined,
+      undefined,
+      true
+    );
     expect(result).toEqual({
       credentialId: "cred-789",
       contractId: "CABC",

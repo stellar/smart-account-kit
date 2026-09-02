@@ -4,9 +4,11 @@ Generated TypeScript client and contract types for the OpenZeppelin smart accoun
 
 Most applications should install [`smart-account-kit`](https://www.npmjs.com/package/smart-account-kit), which wraps these bindings with passkey, signer, policy, discovery, and transaction workflows. Use this package directly when you need the generated contract client or exact contract types.
 
-> [!WARNING]
+> [!CAUTION]
+> **Unaudited integration software.**
 > These bindings can build state-changing transactions.
-> This integration package has not undergone an independent security audit.
+> This package has not received an independent third-party security audit.
+> Defects can cause unauthorized transactions or permanent asset loss.
 > Review each transaction before signing or submitting it.
 > See the [project security status](https://github.com/stellar/smart-account-kit#security-status) and [security policy](https://github.com/stellar/smart-account-kit/blob/main/SECURITY.md).
 
@@ -39,7 +41,7 @@ The repository wrapper preserves package metadata, formatting, and this README a
 
 ```bash
 ACCOUNT_WASM=/path/to/multisig_account_example.wasm \
-BINDINGS_VERSION=0.3.0 \
+BINDINGS_VERSION=0.4.0 \
 pnpm build:bindings
 ```
 

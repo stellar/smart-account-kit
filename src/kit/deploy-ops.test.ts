@@ -1,8 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Address, Keypair, Operation, StrKey, hash, xdr } from "@stellar/stellar-sdk";
+import {
+  Account,
+  Address,
+  Keypair,
+  Networks,
+  Operation,
+  StrKey,
+  TransactionBuilder,
+  hash,
+  xdr,
+} from "@stellar/stellar-sdk";
+import { Api } from "@stellar/stellar-sdk/rpc";
 import { Client as SmartAccountClient } from "smart-account-kit-bindings";
 import {
   buildDeployTransaction,
+  confirmSubmittedDeployment,
   isAuthEntryDeployment,
   prepareDeploymentArtifacts,
   submitDeploymentTx,
@@ -28,6 +40,8 @@ function makeDeps() {
     // Default to a custom deployer so existing tests never trip the shared-
     // deployer fee guard; guard tests override these explicitly.
     usingSharedDeployer: false,
+    networkPassphrase: "Test SDF Network ; September 2015",
+    confirmDeployment: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -90,6 +104,58 @@ function makeTx(sendResult?: {
   };
 }
 
+describe("confirmSubmittedDeployment", () => {
+  it("rejects a relayer envelope that contains another deployment", async () => {
+    const deployer = Keypair.random();
+    const expectedOperation = Operation.createCustomContract({
+      address: Address.fromString(deployer.publicKey()),
+      wasmHash: Buffer.alloc(32, 2),
+      salt: Buffer.alloc(32, 3),
+      constructorArgs: [],
+    });
+    const actualOperation = Operation.createCustomContract({
+      address: Address.fromString(deployer.publicKey()),
+      wasmHash: Buffer.alloc(32, 2),
+      salt: Buffer.alloc(32, 4),
+      constructorArgs: [],
+    });
+    const transaction = new TransactionBuilder(
+      new Account(Keypair.random().publicKey(), "0"),
+      { fee: "100", networkPassphrase: Networks.TESTNET }
+    )
+      .addOperation(actualOperation)
+      .setTimeout(0)
+      .build();
+    const expectedFunc = expectedOperation
+      .body()
+      .invokeHostFunctionOp()
+      .hostFunction();
+    const deployment = {
+      built: {
+        operations: [{ type: "invokeHostFunction", func: expectedFunc }],
+      },
+    };
+    const transactionHash = transaction.hash().toString("hex");
+    const rpc = {
+      getTransaction: vi.fn().mockResolvedValue({
+        status: Api.GetTransactionStatus.SUCCESS,
+        ledger: 123,
+        envelopeXdr: transaction.toEnvelope(),
+      }),
+    };
+
+    await expect(
+      confirmSubmittedDeployment(
+        rpc as never,
+        Networks.TESTNET,
+        deployment as never,
+        transactionHash,
+        123
+      )
+    ).rejects.toThrow(/expected wallet deployment/i);
+  });
+});
+
 describe("submitDeploymentTx", () => {
   it("submits deployments through relayer when relayer succeeds", async () => {
     const deps = makeDeps();
@@ -103,7 +169,13 @@ describe("submitDeploymentTx", () => {
     expect(deps.relayer.sendXdr).toHaveBeenCalledWith(tx.signed);
     expect(tx.send).not.toHaveBeenCalled();
     expect(deps.rpc.pollTransaction).toHaveBeenCalledWith("relayer-hash", { attempts: 10 });
-    expect(deps.storage.delete).toHaveBeenCalledWith("cred-1");
+    expect(deps.storage.update).toHaveBeenCalledWith("cred-1", {
+      deploymentStatus: "deployed",
+      deploymentError: undefined,
+      deploymentTransactionHash: "relayer-hash",
+      creationTransactionHash: "relayer-hash",
+      creationLedger: 123,
+    });
     expect(result).toEqual({
       success: true,
       hash: "relayer-hash",
@@ -137,6 +209,7 @@ describe("submitDeploymentTx", () => {
       expect(deps.storage.update).toHaveBeenCalledWith("cred-unconfirmed", {
         deploymentStatus,
         deploymentError: expect.stringMatching(/failed|timed out/i),
+        deploymentTransactionHash: "relayer-hash",
       });
     }
   );
@@ -168,6 +241,7 @@ describe("submitDeploymentTx", () => {
         {
           deploymentStatus,
           deploymentError: expect.stringMatching(/failed|timed out/i),
+          deploymentTransactionHash: "rpc-hash",
         }
       );
     }
@@ -229,7 +303,13 @@ describe("submitDeploymentTx", () => {
     expect(deps.relayer.sendXdr).toHaveBeenCalledWith(tx.signed);
     expect(tx.send).toHaveBeenCalledTimes(1);
     expect(deps.rpc.pollTransaction).not.toHaveBeenCalled();
-    expect(deps.storage.delete).toHaveBeenCalledWith("cred-2");
+    expect(deps.storage.update).toHaveBeenCalledWith("cred-2", {
+      deploymentStatus: "deployed",
+      deploymentError: undefined,
+      deploymentTransactionHash: "rpc-hash",
+      creationTransactionHash: "rpc-hash",
+      creationLedger: 456,
+    });
     expect(result).toEqual({
       success: true,
       hash: "rpc-hash",
@@ -332,6 +412,7 @@ describe("submitDeploymentTx", () => {
       expect(deps.storage.update).toHaveBeenCalledWith("cred-timeout", {
         deploymentStatus: "pending",
         deploymentError: "Transaction confirmation timed out",
+        deploymentTransactionHash: "relayer-hash",
       });
     });
 

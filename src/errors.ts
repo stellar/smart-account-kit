@@ -19,6 +19,9 @@ export enum SmartAccountErrorCode {
   WALLET_ALREADY_EXISTS = 2002,
   WALLET_NOT_FOUND = 2003,
   WALLET_CODE_NOT_ACCEPTED = 2004,
+  WALLET_PROVENANCE_UNVERIFIED = 2005,
+  WALLET_OWNERSHIP_UNVERIFIED = 2006,
+  WALLET_AMBIGUOUS = 2007,
 
   // Credential errors (3xxx)
   CREDENTIAL_NOT_FOUND = 3001,
@@ -161,10 +164,8 @@ export class SignerNotFoundError extends SmartAccountError {
  * Error thrown when a resolved smart account runs code that is not on the
  * accepted allowlist.
  *
- * An address reached from an untrusted source — an indexer reverse lookup or
- * address derivation — is a claim, not a fact. Binding accepted code identity is
- * what makes the account's on-chain signer state meaningful, because arbitrary
- * code can present whatever state a client expects.
+ * Every connection checks current code identity.
+ * Local storage and indexer data cannot bypass the accepted-code list.
  */
 export class WalletCodeNotAcceptedError extends SmartAccountError {
   constructor(contractId: string, actual: string, accepted: readonly string[]) {
@@ -175,6 +176,44 @@ export class WalletCodeNotAcceptedError extends SmartAccountError {
       { context: { contractId, actual, accepted } }
     );
     this.name = "WalletCodeNotAcceptedError";
+  }
+}
+
+/** Error thrown when immutable wallet birth cannot be verified. */
+export class WalletProvenanceError extends SmartAccountError {
+  constructor(
+    contractId: string,
+    message: string,
+    context?: Record<string, unknown>
+  ) {
+    super(
+      `Wallet ${contractId} has unverified birth provenance. ${message}`,
+      SmartAccountErrorCode.WALLET_PROVENANCE_UNVERIFIED,
+      { context: { contractId, ...context } }
+    );
+    this.name = "WalletProvenanceError";
+  }
+}
+
+/** Error thrown when a passkey cannot prove control of a wallet signer. */
+export class WalletOwnershipError extends SmartAccountError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, SmartAccountErrorCode.WALLET_OWNERSHIP_UNVERIFIED, {
+      context,
+    });
+    this.name = "WalletOwnershipError";
+  }
+}
+
+/** Error thrown when discovery requires an explicit wallet selection. */
+export class WalletAmbiguousError extends SmartAccountError {
+  constructor(contractIds: readonly string[]) {
+    super(
+      "Multiple wallet candidates require an explicit contract selection",
+      SmartAccountErrorCode.WALLET_AMBIGUOUS,
+      { context: { contractIds } }
+    );
+    this.name = "WalletAmbiguousError";
   }
 }
 

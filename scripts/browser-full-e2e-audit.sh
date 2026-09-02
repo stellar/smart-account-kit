@@ -397,19 +397,18 @@ ROOT_FINAL_LOG="$(log_box)"
 echo "Opening indexer demo"
 agent-browser --session "$SESSION_NAME" open "$INDEXER_DEMO_URL" >/dev/null
 INDEXER_SNAP="$(snapshot)"
-LOGIN_REF="$(extract_ref 'button "Login with Passkey" \[ref=(e[0-9]+)\]' "$INDEXER_SNAP")"
+LOGIN_REF="$(extract_ref 'button "Find with Passkey" \[ref=(e[0-9]+)\]' "$INDEXER_SNAP")"
 if [[ -z "$LOGIN_REF" ]]; then
-  echo "Unable to locate Login with Passkey button" >&2
+  echo "Unable to locate Find with Passkey button" >&2
   printf '%s\n' "$INDEXER_SNAP" >&2
   exit 1
 fi
 agent-browser --session "$SESSION_NAME" click "@$LOGIN_REF"
-# The demo shows a static "No contracts found yet" empty-state until the passkey
-# login resolves, so the generic phrase would false-match on the first poll.
-# The success status renders the contract id truncated (first 8 + "..." + last
-# 8), so assert THIS wallet by the truncated form rather than the full id (which
-# never appears in body text) or the generic phrase.
-wait_for_body_pattern "Viewing details for ${CONTRACT_ID:0:8}" "Authentication failed|Lookup failed|Indexer lookup failed|No contracts found for" 120 >/dev/null
+# Wait for this wallet candidate. The demo never selects a candidate automatically.
+wait_for_body_pattern "${CONTRACT_ID:0:8}...${CONTRACT_ID: -8}" "Authentication failed|Lookup failed|Indexer lookup failed|No contracts found for" 120 >/dev/null
+agent-browser --session "$SESSION_NAME" eval \
+  "document.querySelector('[data-contract-id=\"$CONTRACT_ID\"]')?.click()" >/dev/null
+wait_for_body_pattern "Viewing details for ${CONTRACT_ID:0:8}" "Failed to load contract details" 120 >/dev/null
 
 FINAL_BODY="$(body_text)"
 

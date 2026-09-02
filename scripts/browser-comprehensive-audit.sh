@@ -189,9 +189,9 @@ fi
 echo "Opening indexer demo"
 agent-browser --session "$SESSION_NAME" open "$INDEXER_DEMO_URL" >/dev/null
 INDEXER_SNAP="$(snapshot)"
-LOGIN_REF="$(extract_ref 'button "Login with Passkey" \[ref=(e[0-9]+)\]' "$INDEXER_SNAP")"
+LOGIN_REF="$(extract_ref 'button "Find with Passkey" \[ref=(e[0-9]+)\]' "$INDEXER_SNAP")"
 if [[ -z "$LOGIN_REF" ]]; then
-  echo "Unable to locate Login with Passkey button" >&2
+  echo "Unable to locate Find with Passkey button" >&2
   printf '%s\n' "$INDEXER_SNAP" >&2
   exit 1
 fi

@@ -38,6 +38,10 @@ export interface SignerManagerDeps {
     credentialId: string;
     publicKey: Uint8Array;
   }>;
+  /** Get one locally verified credential for the connected wallet. */
+  getVerifiedCredential: (
+    contractId: string
+  ) => Promise<StoredCredential | undefined>;
 }
 
 /**
@@ -57,6 +61,12 @@ export class SignerManager {
     options?: { nickname?: string }
   ) {
     const { wallet, contractId } = this.deps.requireWallet();
+    const verifiedWallet = await this.deps.getVerifiedCredential(contractId);
+    if (!verifiedWallet) {
+      throw new Error(
+        "Cannot add a passkey before the connected wallet birth is verified"
+      );
+    }
 
     // Create the passkey
     const { rawResponse, credentialId, publicKey } = await this.deps.createPasskey(
@@ -74,6 +84,12 @@ export class SignerManager {
       transports: rawResponse.response.transports,
       isPrimary: false,
       contextRuleId,
+      deploymentStatus: "deployed",
+      associationVerified: true,
+      birthWasmHash: verifiedWallet.birthWasmHash,
+      creationTransactionHash: verifiedWallet.creationTransactionHash,
+      creationLedger: verifiedWallet.creationLedger,
+      birthConstructorArgsHash: verifiedWallet.birthConstructorArgsHash,
     };
 
     await this.deps.storage.save(storedCredential);

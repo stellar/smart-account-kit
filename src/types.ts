@@ -22,10 +22,13 @@ import type { WalletStorage } from "./external-signers.js";
 
 /**
  * Deployment status for a stored credential.
- * Note: Successfully deployed credentials are deleted from storage,
- * so only "pending" and "failed" credentials remain stored.
+ * Verified deployments remain stored with their immutable birth metadata.
  */
-export type CredentialDeploymentStatus = "pending" | "failed";
+export type CredentialDeploymentStatus =
+  | "pending"
+  | "failed"
+  | "deployed"
+  | "occupied";
 
 /**
  * Stored session data for auto-reconnect functionality.
@@ -92,12 +95,31 @@ export interface StoredCredential {
    * Deployment status:
    * - "pending": Credential created locally, deployment not yet attempted or in progress
    * - "failed": Deployment was attempted but failed
-   * Note: Successfully deployed credentials are deleted from storage.
+   * - "deployed": Deployment and immutable birth are verified
+   * - "occupied": The predicted address exists, but its birth is not verified
    */
   deploymentStatus?: CredentialDeploymentStatus;
 
   /** Error message if deployment failed */
   deploymentError?: string;
+
+  /** Lowercase WASM hash from the verified creation transaction. */
+  birthWasmHash?: string;
+
+  /** Hash of the successful transaction that created the wallet. */
+  creationTransactionHash?: string;
+
+  /** Hash returned for the latest deployment submission attempt. */
+  deploymentTransactionHash?: string;
+
+  /** Ledger that contains the successful creation transaction. */
+  creationLedger?: number;
+
+  /** Hash of the complete immutable constructor argument vector. */
+  birthConstructorArgsHash?: string;
+
+  /** A secondary association created from a wallet with verified birth. */
+  associationVerified?: boolean;
 }
 
 // ============================================================================
@@ -118,21 +140,35 @@ export interface SmartAccountConfig {
   accountWasmHash: string;
 
   /**
-   * Code identities (hex WASM hashes) accepted when connecting to an account
-   * whose address came from an untrusted source — an indexer reverse lookup or
-   * address derivation. Defaults to `[accountWasmHash]`.
+   * Current code identities accepted for every wallet connection.
+   * Defaults to `[accountWasmHash]`.
    *
-   * Check code identity before trusting account state from an external source.
-   * This check does not prove deployment provenance.
+   * This check complements immutable birth and live signer verification.
    *
    * A list rather than a single value because a legitimately upgraded account
-   * runs different code — add each accepted hash as upgrades roll out. A
-   * distinct explicitly non-primary address from trusted local association
-   * state is not checked, so returning users with upgraded accounts are unaffected.
-   * Empty addresses, deterministic deployment addresses, and primary deployment
-   * predictions are checked because they do not confirm a successful deployment.
+   * runs different code. Add each accepted hash as upgrades roll out.
+   * Every connection checks current code, including local session restores.
    */
   acceptedWasmHashes?: string[];
+
+  /**
+   * WASM hashes accepted at immutable wallet birth.
+   *
+   * This list is more restrictive than `acceptedWasmHashes`. Add only code
+   * whose constructor shape this SDK verifies. The default is
+   * `[accountWasmHash]`.
+   */
+  acceptedBirthWasmHashes?: string[];
+
+  /**
+   * Horizon URL for immutable transaction history after RPC retention expires.
+   * Known public networks use the official Horizon service by default.
+   * Set `false` to disable the history fallback.
+   */
+  horizonUrl?: string | false;
+
+  /** Origins accepted during fresh WebAuthn ownership verification. */
+  allowedOrigins?: string[];
 
   /** Deployed WebAuthn verifier contract address */
   webauthnVerifierAddress: string;
@@ -257,8 +293,8 @@ export interface SmartAccountConfig {
    *
    * Not needed for the default Mercury provider (its read endpoints are
    * anonymous); supply one only for a provider that requires it. Browser
-   * applications expose this value to end users; never use a privileged
-   * credential (such as a Mercury account JWT) here.
+   * applications expose this value to end users; never use a privileged token
+   * or account credential here.
    */
   indexerAuthToken?: string;
 

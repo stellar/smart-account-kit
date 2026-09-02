@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Keypair, xdr } from "@stellar/stellar-sdk";
+import { Address, Keypair, Operation, hash, xdr } from "@stellar/stellar-sdk";
 import {
   connectWallet,
   connectWithCredentials,
@@ -8,6 +8,7 @@ import {
 } from "./wallet-ops";
 import { deriveContractAddress, generateChallenge } from "../utils";
 import { MemoryStorage } from "../storage/memory";
+import { WalletProvenanceError } from "../errors";
 import type { RegistrationResponseJSON, AuthenticationResponseJSON } from "@simplewebauthn/browser";
 
 vi.mock("../utils", async () => {
@@ -42,7 +43,15 @@ function createEventMock() {
 }
 
 function createDeployTxMock() {
+  const operation = Operation.createCustomContract({
+    address: Address.fromString(Keypair.random().publicKey()),
+    wasmHash: Buffer.from("ab".repeat(32), "hex"),
+    salt: hash(Buffer.from("wallet-ops-test")),
+    constructorArgs: [xdr.ScVal.scvVec([]), xdr.ScVal.scvMap([])],
+  });
+  const func = operation.body().invokeHostFunctionOp().hostFunction();
   return {
+    built: { operations: [{ type: "invokeHostFunction", func }] },
     signed: {
       toXDR: vi.fn(() => "signed-xdr"),
     },
@@ -284,7 +293,12 @@ describe("wallet-ops", () => {
       {}
     );
 
-    expect(connectWithCredentialsMock).toHaveBeenCalledWith("cred", "contract");
+    expect(connectWithCredentialsMock).toHaveBeenCalledWith(
+      "cred",
+      "contract",
+      undefined,
+      false
+    );
     expect(result).toEqual({ credentialId: "cred", contractId: "contract" });
   });
 
@@ -323,7 +337,14 @@ describe("wallet-ops", () => {
         timeout: expect.any(Number),
       }),
     });
-    expect(connectWithCredentialsMock).toHaveBeenCalledWith("cred-from-auth");
+    expect(connectWithCredentialsMock).toHaveBeenCalledWith(
+      "cred-from-auth",
+      undefined,
+      {
+        response: expect.objectContaining({ id: "cred-from-auth" }),
+        challenge: "generated-challenge",
+      }
+    );
     expect(result).toEqual({
       credentialId: "cred-from-auth",
       contractId: "contract-from-auth",
@@ -365,13 +386,44 @@ describe("wallet-ops", () => {
     expect(result).toBeNull();
   });
 
-  it("keeps a secondary credential mapping across reconnects", async () => {
+  it("clears an unverified session without starting authentication", async () => {
+    const storage = createStorageMock();
+    const events = createEventMock();
+    const startAuthentication = vi.fn();
+    const connectWithCredentialsMock = vi
+      .fn()
+      .mockRejectedValue(new WalletProvenanceError("Ccontract", "unverified"));
+    storage.getSession.mockResolvedValue({
+      credentialId: "cred",
+      contractId: "Ccontract",
+      connectedAt: 1,
+      expiresAt: Date.now() + 10_000,
+    });
+
+    const result = await connectWallet(
+      {
+        storage: storage as never,
+        events: events as never,
+        webAuthn: { startAuthentication },
+        connectWithCredentials: connectWithCredentialsMock,
+      },
+      {}
+    );
+
+    expect(storage.clearSession).toHaveBeenCalledTimes(1);
+    expect(startAuthentication).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
+  it("rejects an unverified secondary credential mapping", async () => {
     vi.spyOn(Date, "now").mockReturnValue(9_000);
 
     const storage = new MemoryStorage();
     const events = createEventMock();
     const rpc = {
-      getContractData: vi.fn().mockResolvedValue({}),
+      getContractData: vi
+        .fn()
+        .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
     };
     const credential = {
       credentialId: "cred",
@@ -388,36 +440,23 @@ describe("wallet-ops", () => {
       deployerKeypair: Keypair.random(),
       networkPassphrase: "Test SDF Network ; September 2015",
       sessionExpiryMs: 7_000,
+      acceptedWasmHashes: [ACCEPTED_WASM_HASH],
+      acceptedBirthWasmHashes: [ACCEPTED_WASM_HASH],
+      webauthnVerifierAddress: "CVERIFIER",
       events: events as never,
       setConnectedState,
     };
 
-    await connectWithCredentials(deps, "cred");
-    await storage.clearSession();
-    const result = await connectWithCredentials(deps, "cred");
-
-    expect(rpc.getContractData).toHaveBeenCalledTimes(2);
-    expect(rpc.getContractData).toHaveBeenNthCalledWith(
-      2,
-      "Cstoredcontract",
-      xdr.ScVal.scvLedgerKeyContractInstance()
+    await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+      /birth provenance/i
     );
+
     expect(await storage.get("cred")).toEqual(credential);
-    expect(setConnectedState).toHaveBeenCalledWith("Cstoredcontract", "cred");
-    expect(await storage.getSession()).toEqual({
-      contractId: "Cstoredcontract",
-      credentialId: "cred",
-      connectedAt: 9_000,
-      expiresAt: 16_000,
-    });
-    expect(result).toEqual({
-      credentialId: "cred",
-      contractId: "Cstoredcontract",
-      credential,
-    });
+    expect(setConnectedState).not.toHaveBeenCalled();
+    expect(await storage.getSession()).toBeNull();
   });
 
-  it("cleans up a pending credential that maps to its derived contract", async () => {
+  it("keeps a pending credential when occupancy has no birth claim", async () => {
     const storage = new MemoryStorage();
     const events = createEventMock();
     const credential = {
@@ -428,7 +467,7 @@ describe("wallet-ops", () => {
     } as const;
     await storage.save(credential);
 
-    await connectWithCredentials(
+    await expect(connectWithCredentials(
       {
         storage,
         rpc: {
@@ -440,13 +479,15 @@ describe("wallet-ops", () => {
         networkPassphrase: "Test SDF Network ; September 2015",
         sessionExpiryMs: 7_000,
         acceptedWasmHashes: [ACCEPTED_WASM_HASH],
+        acceptedBirthWasmHashes: [ACCEPTED_WASM_HASH],
+        webauthnVerifierAddress: "CVERIFIER",
         events: events as never,
         setConnectedState: vi.fn(),
       },
       "cred"
-    );
+    )).rejects.toThrow(/birth provenance/i);
 
-    expect(await storage.get("cred")).toBeNull();
+    expect(await storage.get("cred")).toEqual(credential);
   });
 
   it("marks a stored credential pending when on-chain lookup fails", async () => {
@@ -492,6 +533,8 @@ describe("wallet-ops", () => {
       networkPassphrase: "Test SDF Network ; September 2015",
       sessionExpiryMs: 7_000,
       acceptedWasmHashes: [ACCEPTED_WASM_HASH],
+      acceptedBirthWasmHashes: [ACCEPTED_WASM_HASH],
+      webauthnVerifierAddress: "CVERIFIER",
       events: createEventMock() as never,
       setConnectedState: vi.fn(),
     });
@@ -573,7 +616,7 @@ describe("wallet-ops", () => {
       }
     );
 
-    it("connects an empty pending row only after accepted code passes", async () => {
+    it("keeps an empty pending row after accepted code passes without birth proof", async () => {
       const storage = new MemoryStorage();
       await storage.save({
         credentialId: "cred",
@@ -591,18 +634,12 @@ describe("wallet-ops", () => {
         storage
       );
 
-      const result = await connectWithCredentials(deps, "cred");
-
-      expect(result.contractId).toBe(DERIVED_CONTRACT_ID);
-      expect(deps.setConnectedState).toHaveBeenCalledWith(
-        DERIVED_CONTRACT_ID,
-        "cred"
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /birth provenance/i
       );
-      expect(await storage.get("cred")).toBeNull();
-      expect(await storage.getSession()).toMatchObject({
-        contractId: DERIVED_CONTRACT_ID,
-        credentialId: "cred",
-      });
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+      expect(await storage.get("cred")).not.toBeNull();
+      expect(await storage.getSession()).toBeNull();
     });
 
     it("REJECTS a primary predicted row after the deployer changes", async () => {
@@ -636,7 +673,7 @@ describe("wallet-ops", () => {
       expect(await storage.get("cred")).not.toBeNull();
     });
 
-    it("connects when the derived address runs accepted code", async () => {
+    it("REJECTS accepted code at a derived address without verified birth", async () => {
       const storage = new MemoryStorage();
       const deps = makeDeps(
         {
@@ -647,16 +684,59 @@ describe("wallet-ops", () => {
         storage
       );
 
-      const result = await connectWithCredentials(deps, "cred");
-
-      expect(result.contractId).toBe(DERIVED_CONTRACT_ID);
-      expect(deps.setConnectedState).toHaveBeenCalledWith(
-        DERIVED_CONTRACT_ID,
-        "cred"
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /birth|provenance|unverified/i
       );
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+      expect(await storage.getSession()).toBeNull();
     });
 
-    it("does NOT check a storage-resolved address, so an upgraded account opens", async () => {
+    it("requires explicit selection when discovery returns multiple candidates", async () => {
+      const storage = new MemoryStorage();
+      const deps = {
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+          },
+          storage
+        ),
+        lookupWalletCandidates: vi.fn().mockResolvedValue({
+          schema: 2,
+          complete: true,
+          indexedThroughLedger: 100,
+          candidates: [
+            {
+              contractId: DERIVED_CONTRACT_ID,
+              birthWasmHash: ACCEPTED_WASM_HASH,
+              creationTransactionHash: "12".repeat(32),
+              creationLedger: 90,
+              currentWasmHash: ACCEPTED_WASM_HASH,
+              derivedAddress: true,
+              collision: true,
+            },
+            {
+              contractId: "Cothercontract",
+              birthWasmHash: ACCEPTED_WASM_HASH,
+              creationTransactionHash: "34".repeat(32),
+              creationLedger: 91,
+              currentWasmHash: ACCEPTED_WASM_HASH,
+              derivedAddress: false,
+              collision: true,
+            },
+          ],
+        }),
+      };
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /explicit contract selection/i
+      );
+
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+    });
+
+    it("REJECTS unaccepted code at a storage-resolved address", async () => {
       const storage = new MemoryStorage();
       await storage.save({
         credentialId: "cred",
@@ -664,16 +744,102 @@ describe("wallet-ops", () => {
         contractId: "Cstoredcontract",
         isPrimary: false,
       } as never);
-      // Unaccepted code on purpose: a returning user whose account legitimately
-      // upgraded must not be locked out of their own wallet.
+      // An upgrade must remain on the explicit current-code allowlist.
       const deps = makeDeps(
         { getContractData: vi.fn().mockResolvedValue(instanceWithWasm("cd".repeat(32))) },
         storage
       );
 
-      const result = await connectWithCredentials(deps, "cred");
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /unaccepted code/i
+      );
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+    });
 
-      expect(result.contractId).toBe("Cstoredcontract");
+    it("uses an explicit address instead of a stored address", async () => {
+      const storage = new MemoryStorage();
+      await storage.save({
+        credentialId: "cred",
+        publicKey: new Uint8Array(65).fill(9),
+        contractId: "Cstoredcontract",
+        createdAt: 1,
+      });
+      const getContractData = vi
+        .fn()
+        .mockResolvedValue(instanceWithWasm("cd".repeat(32)));
+      const deps = makeDeps({ getContractData }, storage);
+
+      await expect(
+        connectWithCredentials(deps, "cred", "Cexplicitcontract")
+      ).rejects.toThrow(/unaccepted code/i);
+
+      expect(getContractData).toHaveBeenCalledWith(
+        "Cexplicitcontract",
+        expect.anything()
+      );
+    });
+
+    it("connects only after stored birth and the live signer verify", async () => {
+      const storage = new MemoryStorage();
+      const credentialId = "cred";
+      const publicKey = new Uint8Array(65).fill(9);
+      publicKey[0] = 0x04;
+      const signer = {
+        tag: "External" as const,
+        values: [
+          "CVERIFIER",
+          Buffer.concat([
+            Buffer.from(publicKey),
+            Buffer.from(credentialId, "base64url"),
+          ]),
+        ] as [string, Buffer],
+      };
+      await storage.save({
+        credentialId,
+        publicKey,
+        contractId: DERIVED_CONTRACT_ID,
+        createdAt: 1,
+        isPrimary: true,
+        deploymentStatus: "deployed",
+        birthWasmHash: ACCEPTED_WASM_HASH,
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 123,
+        birthConstructorArgsHash: "34".repeat(32),
+      });
+      const deps = {
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+          },
+          storage
+        ),
+        readContextRule: vi.fn().mockResolvedValue({ signers: [signer] }),
+        verifyBirth: vi.fn().mockResolvedValue({
+          ok: true,
+          birth: {
+            contractId: DERIVED_CONTRACT_ID,
+            birthWasmHash: ACCEPTED_WASM_HASH,
+            creationTransactionHash: "12".repeat(32),
+            creationLedger: 123,
+            constructorArgsHash: "34".repeat(32),
+            birthSigner: signer,
+          },
+        }),
+      };
+
+      const result = await connectWithCredentials(deps, credentialId);
+
+      expect(result.contractId).toBe(DERIVED_CONTRACT_ID);
+      expect(deps.setConnectedState).toHaveBeenCalledWith(
+        DERIVED_CONTRACT_ID,
+        credentialId
+      );
+      expect(await storage.getSession()).toMatchObject({
+        contractId: DERIVED_CONTRACT_ID,
+        credentialId,
+      });
     });
 
     it("REJECTS an unmarked legacy mapping instead of assuming trust", async () => {

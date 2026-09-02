@@ -52,7 +52,7 @@ vi.mock("@openzeppelin/relayer-plugin-channels", () => {
 });
 
 const CLIENT_IP = "203.0.113.7";
-const API_KEY = "sk_seededapikey123456";
+const API_KEY = "unit-test-api-value";
 const KV_KEY = `api-key:${CLIENT_IP}`;
 const DEPLOYER_KEYPAIR = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(3));
 const DEPLOYER = DEPLOYER_KEYPAIR.publicKey();
@@ -182,6 +182,24 @@ function hexBytes(value: string): Uint8Array {
   return Uint8Array.from(value.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
 }
 
+const DEPLOY_CREDENTIAL_ID = Buffer.from("relayer-test-credential");
+
+function deployConstructorArgs(extraSigner = false): xdr.ScVal[] {
+  const publicKey = Buffer.alloc(65, 7);
+  publicKey[0] = 0x04;
+  const signer = xdr.ScVal.scvVec([
+    xdr.ScVal.scvSymbol("External"),
+    Address.fromString(WALLET).toScVal(),
+    xdr.ScVal.scvBytes(
+      Buffer.concat([publicKey, DEPLOY_CREDENTIAL_ID])
+    ),
+  ]);
+  return [
+    xdr.ScVal.scvVec(extraSigner ? [signer, signer] : [signer]),
+    xdr.ScVal.scvMap([]),
+  ];
+}
+
 function deploySubmission(
   opts: {
     deployer?: string;
@@ -193,6 +211,8 @@ function deploySubmission(
     subInvocation?: boolean;
     assetPreimage?: boolean;
     sacExecutable?: boolean;
+    invalidConstructor?: boolean;
+    extraSigner?: boolean;
   } = {}
 ) {
   const deployer = opts.deployer ?? DEPLOYER;
@@ -200,8 +220,12 @@ function deploySubmission(
     Operation.createCustomContract({
       address: Address.fromString(deployer),
       wasmHash: hexBytes(wasmHash),
-      salt: new Uint8Array(32).fill(4),
-      constructorArgs: [xdr.ScVal.scvVoid()],
+      salt: opts.invalidConstructor
+        ? new Uint8Array(32).fill(4)
+        : hash(DEPLOY_CREDENTIAL_ID),
+      constructorArgs: opts.invalidConstructor
+        ? [xdr.ScVal.scvVoid()]
+        : deployConstructorArgs(opts.extraSigner),
     })
       .body()
       .invokeHostFunctionOp()
@@ -364,8 +388,8 @@ function deployXdr(
       Operation.createCustomContract({
         address: Address.fromString(keypair.publicKey()),
         wasmHash: hexBytes(wasmHash),
-        salt: new Uint8Array(32).fill(4),
-        constructorArgs: [xdr.ScVal.scvVoid()],
+        salt: hash(DEPLOY_CREDENTIAL_ID),
+        constructorArgs: deployConstructorArgs(),
       })
     )
     .setSorobanData(
@@ -555,6 +579,17 @@ describe("sign-only deployment validation", () => {
     await expectRejected(
       deploySubmission({ assetPreimage: true }),
       "Deploy must use an address contract-id preimage"
+    );
+  });
+
+  it("requires the SDK constructor shape and one initial signer", async () => {
+    await expectRejected(
+      deploySubmission({ invalidConstructor: true }),
+      "Deploy constructor has an invalid argument shape"
+    );
+    await expectRejected(
+      deploySubmission({ extraSigner: true }),
+      "Deploy must contain exactly one initial signer"
     );
   });
 
@@ -827,14 +862,16 @@ describe("existing proxy behavior", () => {
   it("mints a key only for a validated request", async () => {
     const kv = createKV();
     const fetchMock = stubFetch({
-      gen: () => Response.json({ apiKey: "sk_generatedkey1234" }),
+      gen: () => Response.json({ apiKey: "unit-test-generated-value" }),
     });
     const res = await post(deploySubmission(), makeEnv({ kv }));
     expect(res.status).toBe(200);
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/gen"))).toBe(
       true
     );
-    expect(JSON.parse(kv.store.get(KV_KEY)!).apiKey).toBe("sk_generatedkey1234");
+    expect(JSON.parse(kv.store.get(KV_KEY)!).apiKey).toBe(
+      "unit-test-generated-value"
+    );
   });
 
   it("maps plugin errors", async () => {

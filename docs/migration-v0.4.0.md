@@ -228,6 +228,8 @@ The following were removed in this release (they were dead or never meant to be 
 
 ## Indexer (Mercury)
 
+> **Historical behavior.** Version `0.7.0` requires a complete schema-2 response for fresh-device connection. See the [v0.7.0 migration guide](migration-v0.7.0.md).
+
 The default indexer provider changed to **[Mercury](https://mercurydata.app)**, a hosted managed service. This is a config-default change, not an API change — `IndexerClient`, `kit.indexer`, and the discovery methods are unchanged.
 
 - **New default endpoints** (`DEFAULT_INDEXER_URLS` / `IndexerClient.forNetwork`):

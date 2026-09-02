@@ -1,8 +1,8 @@
 /**
  * Indexer Client for Smart Account Kit
  *
- * Provides reverse lookups from signers (credential IDs, addresses) to smart account contracts.
- * This enables discovering which contracts a user has access to based on their signer credentials.
+ * Provides reverse lookups from signer identifiers to unverified wallet candidates.
+ * A caller must verify a candidate before treating it as a wallet.
  */
 
 import {
@@ -12,6 +12,7 @@ import {
   API_PATH_CONTRACT,
   API_PATH_STATS,
 } from "./constants.js";
+import { StrKey } from "@stellar/stellar-sdk";
 
 // ============================================================================
 // Indexer Response Types
@@ -37,7 +38,51 @@ export interface IndexedContractSummary {
   last_seen_ledger: number;
   /** Array of context rule IDs on this contract */
   context_rule_ids: number[];
+  /** WASM hash from the immutable creation transaction. */
+  birth_wasm_hash?: string;
+  /** Transaction hash that created this contract. */
+  creation_transaction_hash?: string;
+  /** Ledger that created this contract. */
+  creation_ledger?: number;
+  /** Current WASM hash confirmed by the indexer through RPC. */
+  current_wasm_hash?: string;
+  /** Whether this address matches the configured deployer and credential salt. */
+  derived_address?: boolean;
+  /** Whether another candidate exists for the same credential. */
+  collision?: boolean;
+  /** True when any required indexer or RPC fact is unavailable. */
+  incomplete?: boolean;
 }
+
+/** Minimum immutable facts needed to verify a wallet birth. */
+export interface WalletCandidate {
+  contractId: string;
+  birthWasmHash: string;
+  creationTransactionHash: string;
+  creationLedger: number;
+}
+
+/** A complete schema-2 reverse-lookup result. */
+export interface IndexedWalletCandidate extends WalletCandidate {
+  currentWasmHash: string;
+  derivedAddress: boolean;
+  collision: boolean;
+}
+
+/** A lookup is usable only when every candidate is complete and current. */
+export type WalletCandidateLookup =
+  | {
+      schema: 2;
+      complete: true;
+      indexedThroughLedger: number;
+      candidates: IndexedWalletCandidate[];
+    }
+  | {
+      schema?: number;
+      complete: false;
+      indexedThroughLedger?: number;
+      candidates: Partial<IndexedWalletCandidate>[];
+    };
 
 /**
  * A signer as stored in the indexer
@@ -83,6 +128,12 @@ export interface CredentialLookupResponse {
   contracts: IndexedContractSummary[];
   /** Number of contracts found */
   count: number;
+  /** Security schema version. Only schema 2 carries wallet-birth facts. */
+  schema?: number;
+  /** True only after a complete scan and live RPC confirmation. */
+  complete?: boolean;
+  /** Latest ledger fully reflected by this response. */
+  indexed_through_ledger?: number;
 }
 
 /**
@@ -143,8 +194,8 @@ export interface IndexerConfig {
    *
    * The default provider (Mercury) serves its read endpoints anonymously, so
    * this is optional — supply one only for a provider that requires it. Browser
-   * applications expose this value to end users; never use a privileged
-   * credential (such as a Mercury account JWT) here.
+   * applications expose this value to end users; never use a privileged token
+   * or account credential here.
    */
   authToken?: string;
 }
@@ -167,8 +218,8 @@ export const DEFAULT_INDEXER_URLS: Record<string, string> = {
 /**
  * Client for querying the smart account indexer.
  *
- * The indexer enables reverse lookups from signer credentials to smart account contracts,
- * which is essential for discovering which contracts a user has access to.
+ * The indexer returns unverified candidates associated with signer identifiers.
+ * Use SDK connection verification before trusting a candidate.
  *
  * @example
  * ```typescript
@@ -236,6 +287,63 @@ export class IndexerClient {
     return {
       ...response,
       contracts: response.contracts.map(this.normalizeContractSummary),
+    };
+  }
+
+  /**
+   * Resolve schema-2 wallet candidates without inventing missing birth data.
+   * Legacy and malformed responses remain incomplete and cannot connect.
+   */
+  async lookupWalletCandidates(
+    credentialId: string
+  ): Promise<WalletCandidateLookup> {
+    const normalizedCredentialId = credentialId.toLowerCase().replace(/^0x/, "");
+    const response = await this.lookupByCredentialId(normalizedCredentialId);
+    const indexedThroughLedger = normalizePositiveInteger(
+      response.indexed_through_ledger
+    );
+    const candidates = response.contracts
+      .map(parseWalletCandidate)
+      .filter(
+        (candidate): candidate is IndexedWalletCandidate =>
+          candidate !== undefined
+      );
+    const contractIds = new Set(
+      candidates.map((candidate) => candidate.contractId)
+    );
+    const responseCount = Number(response.count);
+    const collisionExpected = candidates.length > 1;
+    const complete =
+      response.schema === 2 &&
+      response.complete === true &&
+      indexedThroughLedger !== undefined &&
+      typeof response.credentialId === "string" &&
+      response.credentialId.toLowerCase().replace(/^0x/, "") ===
+        normalizedCredentialId &&
+      Number.isSafeInteger(responseCount) &&
+      responseCount >= 0 &&
+      responseCount === response.contracts.length &&
+      candidates.length === response.contracts.length &&
+      contractIds.size === candidates.length &&
+      candidates.every(
+        (candidate) =>
+          candidate.creationLedger <= indexedThroughLedger &&
+          candidate.collision === collisionExpected
+      );
+
+    if (!complete) {
+      return {
+        ...(response.schema !== undefined ? { schema: response.schema } : {}),
+        complete: false,
+        ...(indexedThroughLedger !== undefined ? { indexedThroughLedger } : {}),
+        candidates,
+      };
+    }
+    return {
+      schema: 2,
+      complete: true,
+      indexedThroughLedger,
+      candidates,
     };
   }
 
@@ -376,6 +484,57 @@ export class IndexerClient {
       last_seen_ledger: Number(summary.last_seen_ledger),
     };
   }
+}
+
+const HASH_HEX = /^[0-9a-f]{64}$/;
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 1) {
+    return value;
+  }
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function normalizeHash(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.toLowerCase().replace(/^0x/, "");
+  return HASH_HEX.test(normalized) ? normalized : undefined;
+}
+
+function parseWalletCandidate(
+  contract: IndexedContractSummary
+): IndexedWalletCandidate | undefined {
+  const birthWasmHash = normalizeHash(contract.birth_wasm_hash);
+  const creationTransactionHash = normalizeHash(
+    contract.creation_transaction_hash
+  );
+  const creationLedger = normalizePositiveInteger(contract.creation_ledger);
+  const currentWasmHash = normalizeHash(contract.current_wasm_hash);
+  if (
+    !StrKey.isValidContract(contract.contract_id) ||
+    !birthWasmHash ||
+    !creationTransactionHash ||
+    creationLedger === undefined ||
+    !currentWasmHash ||
+    typeof contract.derived_address !== "boolean" ||
+    typeof contract.collision !== "boolean" ||
+    contract.incomplete !== false
+  ) {
+    return undefined;
+  }
+  return {
+    contractId: contract.contract_id,
+    birthWasmHash,
+    creationTransactionHash,
+    creationLedger,
+    currentWasmHash,
+    derivedAddress: contract.derived_address,
+    collision: contract.collision,
+  };
 }
 
 // ============================================================================

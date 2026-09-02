@@ -27,7 +27,7 @@ deploys its own account instance with signer and policy constructor arguments.
 
 ## Testnet
 
-Deployment source: `sak-deployer` (`GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N`).
+Deployment source: `GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N`.
 
 | Component | Contract ID | Upload transaction | Deploy transaction |
 |---|---|---|---|
@@ -38,15 +38,12 @@ Deployment source: `sak-deployer` (`GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7U
 | Weighted-threshold policy | `CCMZ6X4KM3RC7HXWCZDTH7CMWIJXFPN6HLGKJBM63MCOW2AJ2V5W7YXY` | `01bd841bd9b89f603c296db5399b15fc0c4a07f0d2cf7fb210fafa79236ddde3` | `83ed13b6b9fd163dcea6614cbf6842376082d4a4cca73a73c752b61443062444` |
 | Spending-limit policy | `CABXBYJNZ7IUW4G3D6BND5YCAQF3ASSDMDAOKQQ63UYFSO7WUU2TIP5G` | `6bb44a445d2a622b32b29f19de65a6e742f3e8d5998bcb2475eb9d7891eac154` | `1fe0363caf86b062e27e1c50ea66349aef298bf4ac6926d66f403224731d1743` |
 
-A browser-driven WebAuthn smoke deployed and funded fresh account
-`CCKO2C3CBOP7NRZAEJJ7VZLRKICFTF3UZTN57IFNXLACR43ZS27JG4YP`, then completed
-an authenticated XLM transfer. Mercury returned transient HTTP 500 responses
-during this run, so the SDK's direct on-chain context-rule probe supplied the
-best-effort fallback.
+A browser-driven WebAuthn smoke test deployed and funded a fresh account.
+It then completed an authenticated XLM transfer.
 
 ## Mainnet
 
-Deployment source: `sak-deployer` (`GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N`). The account was funded with 120 XLM from the locally configured `rich` funding identity in transaction `c1d701a753d7bd7efc33bc8ce0f736f5cd065873daa8f174fbf60716bafb11ea`; `rich` was not used as the contract deployment source.
+Deployment source: `GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N`. A separate account supplied 120 XLM in transaction `c1d701a753d7bd7efc33bc8ce0f736f5cd065873daa8f174fbf60716bafb11ea`. It was not a contract deployment source.
 
 | Component | Contract ID | Upload transaction | Deploy transaction |
 |---|---|---|---|
@@ -57,9 +54,8 @@ Deployment source: `sak-deployer` (`GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7U
 | Weighted-threshold policy | `CDY6CPMPVGQ6GI5UG4BK2HHTQF5ASFYTV23CLFUZJB43DSKZVD5HN4UT` | `6d88893bb51dfa5c981ea1cba3c2f6f3cb053b683f117ea2f8c76e48b6cb8b26` | `93439d62cbe26b41e582a605f2f04b18c0b552055755f3747163685bb1d77e69` |
 | Spending-limit policy | `CBCGTERZ6W2M6SMKVKQDTNKWFQXEPXEQO6ZCEKNZHT3QMA4X7Z2IYUS4` | `f385236c54e670a2bbb708a72d6341e1f08391275759108b18b1ffea09cec912` | `7a6aa0cd1ae15e8e6d4dc83971fea0f5e69ddffec0e5b0d367a8c7cd2e94eda9` |
 
-Mainnet uploads charged 90.6817757 XLM after resource-fee refunds. The five
-instance deployments charged another 0.0915088 XLM. The deployment account
-finished with 30.8730513 XLM.
+Mainnet uploads charged 90.6817757 XLM after resource-fee refunds.
+The five instance deployments charged another 0.0915088 XLM.
 
 ## Deterministic deployment and verification
 

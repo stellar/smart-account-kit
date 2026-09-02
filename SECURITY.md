@@ -2,7 +2,9 @@
 
 ## Security status
 
-The SDK, demo, relayer proxy, and integration code have not received an independent security audit.
+The SDK, demo, relayer proxy, and indexer integration have not received an independent third-party security audit.
+
+Defects can cause unauthorized transactions, loss of access, or permanent asset loss.
 
 The OpenZeppelin Stellar contracts have a [separate audit](https://www.openzeppelin.com/news/stellar-contracts-rc-v0.7.0-audit) with a different scope.
 The deployed artifacts use a later source revision than that audit.
@@ -10,9 +12,12 @@ The deployed artifacts use a later source revision than that audit.
 Tests and reviews reduce risk.
 They do not prove that the software has no defects.
 
-Do not store assets you cannot afford to lose.
+Do not store or control assets you cannot afford to lose.
 Limit balances, signer permissions, policy allowances, and relayer permissions.
 Monitor accounts and maintain recovery and authorized upgrade paths.
+
+You use this software and related services at your own risk.
+The software has no warranty under the terms in [`LICENSE`](./LICENSE).
 
 ## Supported versions
 

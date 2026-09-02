@@ -1,5 +1,6 @@
 import type { AuthenticationResponseJSON, PublicKeyCredentialRequestOptionsJSON, RegistrationResponseJSON, AuthenticatorTransportFuture } from "@simplewebauthn/browser";
-import { Keypair, xdr } from "@stellar/stellar-sdk";
+import { Keypair, hash, xdr } from "@stellar/stellar-sdk";
+import type { Horizon } from "@stellar/stellar-sdk";
 import base64url from "../base64url.js";
 import type {
   StorageAdapter,
@@ -12,18 +13,42 @@ import type {
 } from "../types.js";
 import type { SmartAccountEventEmitter } from "../events.js";
 import type { contract, rpc } from "@stellar/stellar-sdk";
+import type { ContextRule } from "smart-account-kit-bindings";
+import type {
+  WalletCandidate,
+  WalletCandidateLookup,
+} from "../indexer.js";
 import { WEBAUTHN_TIMEOUT_MS, DEFAULT_SESSION_EXPIRY_MS } from "../constants.js";
 import {
   deriveContractAddress,
   generateChallenge,
-  isCredentialSafeToDelete,
 } from "../utils.js";
-import { ValidationError, WalletCodeNotAcceptedError } from "../errors.js";
+import {
+  ValidationError,
+  WalletAmbiguousError,
+  WalletCodeNotAcceptedError,
+  WalletOwnershipError,
+  WalletProvenanceError,
+} from "../errors.js";
 import { failedTransaction } from "../contract-errors.js";
 import {
+  describeDeploymentBirth,
   prepareDeploymentArtifacts,
   type DeployTransaction,
 } from "./deploy-ops.js";
+import {
+  publicKeyFromExternalSigner,
+  signerMatchesCredential,
+  verifyFreshAssertion,
+  verifyWalletBirth,
+  type WalletBirthVerificationDeps,
+  type WalletBirthResult,
+} from "./wallet-provenance.js";
+
+export interface FreshOwnershipProof {
+  response: AuthenticationResponseJSON;
+  challenge: string;
+}
 
 export async function createWallet(
   deps: {
@@ -117,6 +142,10 @@ export async function createWallet(
     credentialIdBuffer,
     publicKey
   );
+  await deps.storage.update(
+    credentialId,
+    describeDeploymentBirth(deployTx)
+  );
 
   const submissionOpts: SubmissionOptions = { forceMethod: options?.forceMethod };
   const deploymentArtifacts = await prepareDeploymentArtifacts(
@@ -175,7 +204,9 @@ export async function connectWallet(
     };
     connectWithCredentials: (
       credentialId?: string,
-      contractId?: string
+      contractId?: string,
+      proof?: FreshOwnershipProof,
+      allowAuthentication?: boolean
     ) => Promise<ConnectWalletResult>;
   },
   options?: {
@@ -190,7 +221,7 @@ export async function connectWallet(
   let rawResponse: AuthenticationResponseJSON | undefined;
 
   if (credentialId || contractId) {
-    return deps.connectWithCredentials(credentialId, contractId);
+    return deps.connectWithCredentials(credentialId, contractId, undefined, true);
   }
 
   if (!options?.fresh) {
@@ -203,7 +234,24 @@ export async function connectWallet(
         });
         await deps.storage.clearSession();
       } else {
-        return deps.connectWithCredentials(session.credentialId, session.contractId);
+        try {
+          return await deps.connectWithCredentials(
+            session.credentialId,
+            session.contractId,
+            undefined,
+            false
+          );
+        } catch (error) {
+          if (
+            !(error instanceof WalletProvenanceError) &&
+            !(error instanceof WalletOwnershipError) &&
+            !(error instanceof WalletCodeNotAcceptedError)
+          ) {
+            throw error;
+          }
+          await deps.storage.clearSession();
+          if (!options?.prompt) return null;
+        }
       }
     }
   }
@@ -212,8 +260,9 @@ export async function connectWallet(
     return null;
   }
 
+  const challenge = generateChallenge();
   const authOptions: PublicKeyCredentialRequestOptionsJSON = {
-    challenge: generateChallenge(),
+    challenge,
     rpId: deps.rpId,
     userVerification: "preferred",
     timeout: WEBAUTHN_TIMEOUT_MS,
@@ -222,7 +271,10 @@ export async function connectWallet(
   rawResponse = await deps.webAuthn.startAuthentication({ optionsJSON: authOptions });
   credentialId = rawResponse.id;
 
-  const result = await deps.connectWithCredentials(credentialId);
+  const result = await deps.connectWithCredentials(credentialId, undefined, {
+    response: rawResponse,
+    challenge,
+  });
   return {
     ...result,
     rawResponse,
@@ -261,29 +313,52 @@ export async function connectWithCredentials(
     sessionExpiryMs: number;
     /** Accepted code identities, lowercase hex. Never empty. */
     acceptedWasmHashes: readonly string[];
+    /** Accepted immutable birth code identities, lowercase hex. */
+    acceptedBirthWasmHashes: readonly string[];
+    webauthnVerifierAddress: string;
+    rpId?: string;
+    allowedOrigins?: readonly string[];
+    history?: Pick<Horizon.Server, "transactions">;
+    expectedPolicies?: readonly import("../types.js").PolicyConfig[];
+    lookupWalletCandidates?: (
+      credentialId: string
+    ) => Promise<WalletCandidateLookup | null>;
+    readContextRule?: (
+      contractId: string,
+      contextRuleId: number
+    ) => Promise<ContextRule>;
+    authenticateCredential?: (
+      credentialId: string
+    ) => Promise<FreshOwnershipProof>;
+    verifyBirth?: (
+      verificationDeps: WalletBirthVerificationDeps,
+      candidate: WalletCandidate
+    ) => Promise<WalletBirthResult>;
     events: SmartAccountEventEmitter;
     setConnectedState: (contractId: string, credentialId: string) => void;
   },
   credentialId?: string,
-  contractId?: string
+  contractId?: string,
+  proof?: FreshOwnershipProof,
+  allowAuthentication = true
 ): Promise<ConnectWalletResult> {
   let credential: StoredCredential | null = null;
-  let derivedContractId: string | undefined;
+  let usedDerivedCandidate = false;
   if (credentialId) {
     credential = await deps.storage.get(credentialId);
-    if (credential) {
+    if (!contractId && credential?.contractId) {
       contractId = credential.contractId;
     }
   }
 
   if (!contractId && credentialId) {
     const credentialIdBuffer = base64url.toBuffer(credentialId);
-    derivedContractId = deriveContractAddress(
+    contractId = deriveContractAddress(
       credentialIdBuffer,
       deps.deployerKeypair.publicKey(),
       deps.networkPassphrase
     );
-    contractId = derivedContractId;
+    usedDerivedCandidate = true;
   }
 
   if (!contractId) {
@@ -293,23 +368,6 @@ export async function connectWithCredentials(
   if (!credentialId) {
     throw new Error("Could not determine credential ID");
   }
-
-  // A pending primary row stores either an empty address or a deterministic
-  // deployment prediction. Neither proves that this SDK deployed the contract.
-  // isPrimary keeps that provenance after a deployer configuration change.
-  // Only a distinct non-primary mapping is trusted local association state.
-  if (credential && !derivedContractId) {
-    derivedContractId = deriveContractAddress(
-      base64url.toBuffer(credentialId),
-      deps.deployerKeypair.publicKey(),
-      deps.networkPassphrase
-    );
-  }
-  const resolvedFromTrustedStorage =
-    credential !== null &&
-    credential.isPrimary === false &&
-    credential.contractId !== "" &&
-    credential.contractId !== derivedContractId;
 
   let instance: Awaited<ReturnType<typeof deps.rpc.getContractData>>;
   try {
@@ -329,23 +387,186 @@ export async function connectWithCredentials(
     );
   }
 
-  // Bind accepted code identity when the address did NOT come from trusted local
-  // association state. A deterministic pending or failed row is still only an
-  // address prediction. A distinct stored mapping keeps the upgrade exception.
-  // Reuse the instance entry already read above.
-  if (!resolvedFromTrustedStorage) {
-    assertAcceptedCode(instance, contractId, deps.acceptedWasmHashes);
+  // Current code identity is necessary for every connection. Local storage
+  // cannot safely exempt an account from the SDK's accepted-code contract.
+  assertAcceptedCode(instance, contractId, deps.acceptedWasmHashes);
+
+  const storedCandidate = candidateFromStoredCredential(credential, contractId);
+  let candidates: readonly WalletCandidate[] = storedCandidate
+    ? [storedCandidate]
+    : [];
+  if (!storedCandidate) {
+    const lookup = await deps.lookupWalletCandidates?.(credentialId);
+    if (!lookup || !lookup.complete || lookup.schema !== 2) {
+      throw new WalletProvenanceError(
+        contractId,
+        "The indexer did not return one complete schema-2 birth claim."
+      );
+    }
+    if (usedDerivedCandidate) {
+      const contractIds = [
+        ...new Set(lookup.candidates.map((candidate) => candidate.contractId)),
+      ];
+      if (
+        contractIds.length > 1 ||
+        lookup.candidates.some((candidate) => candidate.collision)
+      ) {
+        throw new WalletAmbiguousError(contractIds);
+      }
+    }
+    candidates = lookup.candidates.filter(
+      (candidate) => candidate.contractId === contractId
+    );
+  }
+  if (candidates.length !== 1) {
+    throw new WalletProvenanceError(
+      contractId,
+      candidates.length === 0
+        ? "No immutable birth claim matches this address."
+        : "The indexer returned duplicate birth claims for this address.",
+      { candidateCount: candidates.length }
+    );
   }
 
-  if (credential) {
-    // A stored credential always has a derived ID by this point.
-    if (!derivedContractId) {
-      throw new Error("Could not derive contract ID");
+  const localPrimary =
+    credential !== null &&
+    credential.isPrimary !== false &&
+    credential.birthConstructorArgsHash !== undefined;
+  const localSecondary =
+    credential !== null &&
+    credential.isPrimary === false &&
+    credential.associationVerified === true &&
+    credential.birthConstructorArgsHash !== undefined;
+  const locallyApproved = localPrimary || localSecondary;
+  const candidate = candidates[0]!;
+  const birth = await (deps.verifyBirth ?? verifyWalletBirth)(
+    {
+      rpc: deps.rpc,
+      history: deps.history,
+      networkPassphrase: deps.networkPassphrase,
+      acceptedBirthWasmHashes: deps.acceptedBirthWasmHashes,
+      webauthnVerifierAddress: deps.webauthnVerifierAddress,
+      ...(locallyApproved
+        ? {
+            expectedConstructorArgsHash:
+              credential!.birthConstructorArgsHash,
+          }
+        : {
+            expectedDeployer: deps.deployerKeypair.publicKey(),
+            expectedSalt: hash(base64url.toBuffer(credentialId)),
+            expectedPolicies: deps.expectedPolicies ?? [],
+          }),
+    },
+    candidate
+  );
+  if (!birth.ok) {
+    throw new WalletProvenanceError(
+      contractId,
+      `Birth verification failed: ${birth.detail}`,
+      { reason: birth.reason }
+    );
+  }
+
+  let publicKey = credential?.publicKey;
+  if (!publicKey) {
+    publicKey = publicKeyFromExternalSigner(birth.birth.birthSigner);
+  }
+  if (!publicKey) {
+    throw new WalletOwnershipError(
+      "The wallet birth does not contain a usable WebAuthn public key",
+      { contractId }
+    );
+  }
+  if (
+    !localSecondary &&
+    !signerMatchesCredential(
+      birth.birth.birthSigner,
+      deps.webauthnVerifierAddress,
+      publicKey,
+      credentialId
+    )
+  ) {
+    throw new WalletOwnershipError(
+      "The passkey is not the wallet's immutable primary signer",
+      { contractId, credentialId }
+    );
+  }
+
+  if (!deps.readContextRule) {
+    throw new WalletOwnershipError(
+      "Current signer state is unavailable and ownership cannot be verified",
+      { contractId }
+    );
+  }
+  const contextRuleId = localSecondary
+    ? credential!.contextRuleId
+    : 0;
+  if (contextRuleId === undefined) {
+    throw new WalletOwnershipError(
+      "The local secondary association has no context rule id",
+      { contractId, credentialId }
+    );
+  }
+  const liveRule = await deps.readContextRule(contractId, contextRuleId);
+  const liveMatches = liveRule.signers.filter((signer) =>
+    signerMatchesCredential(
+      signer,
+      deps.webauthnVerifierAddress,
+      publicKey!,
+      credentialId!
+    )
+  );
+  if (liveMatches.length !== 1) {
+    throw new WalletOwnershipError(
+      "The passkey is not one exact live signer on the expected context rule",
+      { contractId, credentialId, contextRuleId }
+    );
+  }
+
+  if (!locallyApproved) {
+    const ownershipProof =
+      proof ??
+      (allowAuthentication
+        ? await deps.authenticateCredential?.(credentialId)
+        : undefined);
+    if (!ownershipProof || !deps.rpId || !deps.allowedOrigins?.length) {
+      throw new WalletOwnershipError(
+        "A fresh WebAuthn assertion, rpId, and allowed origin are required for this wallet",
+        { contractId, credentialId }
+      );
     }
-    if (isCredentialSafeToDelete(credential, derivedContractId)) {
-      await deps.storage.delete(credentialId);
+    const assertion = await verifyFreshAssertion(ownershipProof.response, {
+      expectedChallenge: ownershipProof.challenge,
+      expectedCredentialId: credentialId,
+      rpId: deps.rpId,
+      publicKey,
+      allowedOrigins: deps.allowedOrigins,
+    });
+    if (!assertion.ok) {
+      throw new WalletOwnershipError(
+        `Fresh WebAuthn ownership verification failed: ${assertion.detail}`,
+        { contractId, credentialId, reason: assertion.reason }
+      );
     }
   }
+
+  const verifiedCredential: StoredCredential = {
+    ...(credential ?? {
+      credentialId,
+      createdAt: Date.now(),
+      isPrimary: true,
+    }),
+    credentialId,
+    publicKey,
+    contractId,
+    deploymentStatus: "deployed",
+    deploymentError: undefined,
+    birthWasmHash: birth.birth.birthWasmHash,
+    creationTransactionHash: birth.birth.creationTransactionHash,
+    creationLedger: birth.birth.creationLedger,
+    birthConstructorArgsHash: birth.birth.constructorArgsHash,
+  };
+  await deps.storage.save(verifiedCredential);
 
   deps.setConnectedState(contractId, credentialId);
 
@@ -362,7 +583,30 @@ export async function connectWithCredentials(
   return {
     credentialId,
     contractId,
-    credential: credential ?? undefined,
+    credential: verifiedCredential,
+  };
+}
+
+function candidateFromStoredCredential(
+  credential: StoredCredential | null,
+  contractId: string
+): WalletCandidate | undefined {
+  if (
+    !credential ||
+    credential.contractId !== contractId ||
+    !credential.birthWasmHash ||
+    !credential.creationTransactionHash ||
+    !Number.isSafeInteger(credential.creationLedger) ||
+    credential.creationLedger === undefined ||
+    credential.creationLedger < 1
+  ) {
+    return undefined;
+  }
+  return {
+    contractId,
+    birthWasmHash: credential.birthWasmHash,
+    creationTransactionHash: credential.creationTransactionHash,
+    creationLedger: credential.creationLedger,
   };
 }
 
