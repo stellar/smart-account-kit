@@ -42,12 +42,13 @@ import {
 import { resolveContextRuleIdsForEntry } from "../kit/context-rules.js";
 import {
   buildDirectTokenTransfer,
+  resolveTokenAmount,
   resimulateAndAssemble,
   resolveResimSource,
   signFeePayer,
 } from "../kit/tx-ops.js";
 import { computeEntryAuthDigest } from "../signers.js";
-import { validateAddress, validateAmount, xlmToStroops } from "../utils.js";
+import { validateAddress, validateAmount } from "../utils.js";
 import {
   SmartAccountErrorCode,
   SignerNotFoundError,
@@ -548,7 +549,11 @@ export class MultiSignerManager {
       return failedTransaction(new ValidationError("Cannot transfer to self"));
     }
 
-    const amountInStroops = xlmToStroops(amount);
+    const { raw: amountRaw } = await resolveTokenAmount(
+      this.deps,
+      tokenContract,
+      amount
+    );
     try {
       // Direct token invocation authorized by the smart account (not wrapped
       // in the account's `execute`), so token-scoped context rules and their
@@ -558,7 +563,7 @@ export class MultiSignerManager {
         tokenContract,
         contractId,
         recipient,
-        amountInStroops
+        amountRaw
       );
 
       return this.operation(

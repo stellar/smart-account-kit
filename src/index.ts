@@ -197,6 +197,9 @@ export { signerToScVal, parseSignerScVal } from "./kit/auth-payload.js";
 export {
   buildDirectTokenTransfer,
   buildI128ScVal,
+  readTokenDecimals,
+  resolveTokenAmount,
+  tokenAmountToRawUnits,
   signFeePayer,
   resimulateAndAssemble,
 } from "./kit/tx-ops.js";

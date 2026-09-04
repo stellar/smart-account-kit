@@ -141,6 +141,7 @@ import {
   signAndSubmit,
   buildDirectTokenTransfer,
   hasSourceAccountAuth,
+  resolveTokenAmount,
   signResimulateAndPrepare,
   shouldUseFeeSponsoring,
   sendAndPoll,
@@ -159,7 +160,6 @@ import {
   generateChallenge,
   validateAddress,
   validateAmount,
-  xlmToStroops,
 } from "./utils.js";
 
 /**
@@ -1302,10 +1302,12 @@ export class SmartAccountKit {
    * A custom `deployerSecret` sources and pays for the transaction. The shared
    * default deployer never does — a relayer/channel account supplies both.
    *
-   * @param tokenContract - Token contract address (SAC address for native assets)
-   * @param recipient - Recipient address (G... or C...)
-   * @param amount - Amount to transfer (in token units, e.g., 10 for 10 XLM)
-   * @param options - Transfer options
+    * @param tokenContract - Token contract address (SAC address for native assets)
+    * @param recipient - Recipient address (G... or C...)
+    * @param amount - Amount to transfer in token units (scaled by the token's
+    * on-chain `decimals()`; amounts with more precision than the token
+    * supports are rejected before any authorization)
+    * @param options - Transfer options
    * @returns Transfer result
    */
   async transfer(
@@ -1332,12 +1334,20 @@ export class SmartAccountKit {
     }
 
     try {
-      const amountInStroops = xlmToStroops(amount);
+      const { raw: amountRaw } = await resolveTokenAmount(
+        {
+          rpc: this.rpc,
+          networkPassphrase: this.networkPassphrase,
+          timeoutInSeconds: this.timeoutInSeconds,
+        },
+        tokenContract,
+        amount
+      );
       const transaction = await this.buildTokenTransfer(
         tokenContract,
         contractId,
         recipient,
-        amountInStroops
+        amountRaw
       );
       const ctxRuleCache: ConnectedContextRuleCache = {};
       return this.signAndSubmit(transaction, {

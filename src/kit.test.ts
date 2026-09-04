@@ -287,7 +287,7 @@ describe("SmartAccountKit top-level surface", () => {
     expect(detailsResult).toEqual({ contractId: "C3" });
   });
 
-  it("transfer builds a direct token invocation plus signAndSubmit with context resolution", async () => {
+  it("transfer resolves token decimals before building the invocation", async () => {
     const contractId = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
     const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 6)).publicKey();
     const transaction = { built: {} };
@@ -302,18 +302,25 @@ describe("SmartAccountKit top-level surface", () => {
         buildTokenTransfer,
         signAndSubmit,
         resolveConnectedContextRuleIds,
+        rpc: {
+          simulateTransaction: vi.fn(async () => ({
+            result: { retval: (await import("@stellar/stellar-sdk")).xdr.ScVal.scvU32(6) },
+          })),
+        },
+        networkPassphrase: "Test SDF Network ; September 2015",
+        timeoutInSeconds: 30,
       } as unknown as SmartAccountKit,
       "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y",
       recipient,
-      1.5,
+      1,
     );
 
-    // Direct invocation: token contract, from = smart account, recipient, stroops.
+    // Six-decimal token: 1 unit resolves to 1_000_000 raw, not 10_000_000.
     expect(buildTokenTransfer).toHaveBeenCalledWith(
       "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y",
       contractId,
       recipient,
-      15_000_000n
+      1_000_000n
     );
     expect(signAndSubmit).toHaveBeenCalledWith(
       transaction,
@@ -329,6 +336,34 @@ describe("SmartAccountKit top-level surface", () => {
     expect(result).toEqual({ success: true, hash: "transfer-hash" });
   });
 
+  it("transfer rejects amounts with more precision than the token supports", async () => {
+    const contractId = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
+    const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 6)).publicKey();
+    const { xdr: sdkXdr } = await import("@stellar/stellar-sdk");
+
+    const result = await SmartAccountKit.prototype.transfer.call(
+      {
+        _contractId: contractId,
+        requireWallet: vi.fn(() => ({ wallet: {} })),
+        buildTokenTransfer: vi.fn(),
+        signAndSubmit: vi.fn(),
+        resolveConnectedContextRuleIds: vi.fn(),
+        rpc: {
+          simulateTransaction: vi.fn(async () => ({
+            result: { retval: sdkXdr.ScVal.scvU32(6) },
+          })),
+        },
+        networkPassphrase: "Test SDF Network ; September 2015",
+        timeoutInSeconds: 30,
+      } as unknown as SmartAccountKit,
+      "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y",
+      recipient,
+      1.1234567,
+    );
+
+    expect(result.success).toBe(false);
+  });
+
   it("transfer propagates credential overrides into context rule resolution", async () => {
     const contractId = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
     const recipient = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 8)).publicKey();
@@ -336,6 +371,7 @@ describe("SmartAccountKit top-level surface", () => {
     const buildTokenTransfer = vi.fn(async () => transaction);
     const signAndSubmit = vi.fn(async () => ({ success: true, hash: "transfer-hash" }));
     const resolveConnectedContextRuleIds = vi.fn(async () => [11]);
+    const { xdr: sdkXdr } = await import("@stellar/stellar-sdk");
 
     await SmartAccountKit.prototype.transfer.call(
       {
@@ -344,6 +380,13 @@ describe("SmartAccountKit top-level surface", () => {
         buildTokenTransfer,
         signAndSubmit,
         resolveConnectedContextRuleIds,
+        rpc: {
+          simulateTransaction: vi.fn(async () => ({
+            result: { retval: sdkXdr.ScVal.scvU32(7) },
+          })),
+        },
+        networkPassphrase: "Test SDF Network ; September 2015",
+        timeoutInSeconds: 30,
       } as unknown as SmartAccountKit,
       contractId,
       recipient,

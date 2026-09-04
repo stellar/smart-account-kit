@@ -22,12 +22,15 @@ import {
   buildI128ScVal,
   getSubmissionMethod,
   hasSourceAccountAuth,
+  readTokenDecimals,
+  resolveTokenAmount,
   resolveResimSource,
   sendAndPoll,
   shouldUseFeeSponsoring,
   sign,
   signAndSubmit,
   signFeePayer,
+  tokenAmountToRawUnits,
 } from "./tx-ops";
 import { fundWallet } from "./fund-ops";
 import { SubmissionError } from "../errors";
@@ -375,6 +378,61 @@ describe("tx-ops", () => {
       hash: "fund-hash",
       amount: 10_000 - FRIENDBOT_RESERVE_XLM,
     });
+  });
+});
+
+describe("token amount scaling", () => {
+  it("scales 1 unit to 1_000_000 raw for 6-decimal tokens", () => {
+    expect(tokenAmountToRawUnits(1, 6)).toBe(1_000_000n);
+  });
+
+  it("scales 1 unit to 10_000_000 raw for 7-decimal tokens", () => {
+    expect(tokenAmountToRawUnits(1, 7)).toBe(10_000_000n);
+  });
+
+  it("rejects amounts with more precision than the token supports", () => {
+    expect(() => tokenAmountToRawUnits(1.1234567, 6)).toThrow(/precision/i);
+  });
+
+  it("rejects sub-precision dust instead of rounding to zero", () => {
+    expect(() => tokenAmountToRawUnits(0.0000001, 6)).toThrow();
+  });
+
+  it("reads token decimals via read-only simulation", async () => {
+    const rpcServer = {
+      simulateTransaction: vi.fn(async () => ({
+        result: { retval: xdr.ScVal.scvU32(6) },
+      })),
+    } as never;
+    await expect(
+      readTokenDecimals(
+        {
+          rpc: rpcServer,
+          networkPassphrase: "Test SDF Network ; September 2015",
+          timeoutInSeconds: 30,
+        },
+        StrKey.encodeContract(Buffer.alloc(32, 7))
+      )
+    ).resolves.toBe(6);
+  });
+
+  it("resolves the reported 6-decimal case to 1_000_000 raw", async () => {
+    const rpcServer = {
+      simulateTransaction: vi.fn(async () => ({
+        result: { retval: xdr.ScVal.scvU32(6) },
+      })),
+    } as never;
+    await expect(
+      resolveTokenAmount(
+        {
+          rpc: rpcServer,
+          networkPassphrase: "Test SDF Network ; September 2015",
+          timeoutInSeconds: 30,
+        },
+        StrKey.encodeContract(Buffer.alloc(32, 7)),
+        1
+      )
+    ).resolves.toEqual({ raw: 1_000_000n, decimals: 6 });
   });
 });
 

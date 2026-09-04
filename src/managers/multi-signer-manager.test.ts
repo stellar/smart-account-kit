@@ -248,8 +248,12 @@ describe("MultiSignerManager", () => {
     });
   });
 
-  it("builds multi-signer transfers as direct token invocations", async () => {
+  it("builds multi-signer transfers with on-chain token decimals", async () => {
     const deps = makeDeps();
+    const { xdr: sdkXdr } = await import("@stellar/stellar-sdk");
+    deps.rpc.simulateTransaction.mockResolvedValue({
+      result: { retval: sdkXdr.ScVal.scvU32(6) },
+    });
     const assembledTx = {
       built: makeBuiltTransaction([makeAddressAuthEntry(makeContract(99))]),
     } as any;
@@ -263,18 +267,18 @@ describe("MultiSignerManager", () => {
     const result = await manager.transfer(
       makeContract(11),
       makeAccount(2),
-      5,
+      1,
       selectedSigners,
       { onLog: vi.fn() }
     );
 
-    // Direct invocation: token contract, from = smart account, recipient, stroops.
+    // Six-decimal token: 1 unit resolves to 1_000_000 raw, not 10_000_000.
     expect(buildDirectTokenTransferMock).toHaveBeenCalledWith(
       deps,
       makeContract(11),
       makeContract(99),
       makeAccount(2),
-      50_000_000n
+      1_000_000n
     );
     expect(operation).toHaveBeenCalledTimes(1);
     expect(operation).toHaveBeenCalledWith(

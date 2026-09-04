@@ -1,4 +1,4 @@
-import { contract, rpc } from "@stellar/stellar-sdk";
+import { contract, rpc, scValToNative } from "@stellar/stellar-sdk";
 import {
   Account,
   Address,
@@ -29,6 +29,7 @@ import {
   submissionFailure,
 } from "../contract-errors.js";
 import { isDefaultDeployer } from "../utils.js";
+import { ValidationError } from "../errors.js";
 
 /**
  * The shared default deployer is a sign-only / address-derivation identity: it
@@ -207,6 +208,140 @@ export function buildTokenTransferHostFunction(
       ],
     })
   );
+}
+
+/**
+ * Deterministic read-only source account for token `decimals()` simulation.
+ */
+const TOKEN_READ_ACCOUNT = new Account(
+  "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+  "0"
+);
+
+/**
+ * Read-only deps shared by token metadata lookups (e.g. `decimals()`).
+ */
+export type TokenReadDeps = {
+  rpc: rpc.Server;
+  networkPassphrase: string;
+  timeoutInSeconds: number;
+};
+
+function readOnlyTokenTx(
+  deps: TokenReadDeps,
+  tokenContract: string,
+  functionName: string,
+  args: xdr.ScVal[]
+): Transaction {
+  return new TransactionBuilder(TOKEN_READ_ACCOUNT, {
+    fee: BASE_FEE,
+    networkPassphrase: deps.networkPassphrase,
+  })
+    .addOperation(
+      Operation.invokeHostFunction({
+        func: xdr.HostFunction.hostFunctionTypeInvokeContract(
+          new xdr.InvokeContractArgs({
+            contractAddress: Address.fromString(tokenContract).toScAddress(),
+            functionName,
+            args,
+          })
+        ),
+        auth: [],
+      })
+    )
+    .setTimeout(deps.timeoutInSeconds)
+    .build();
+}
+
+/**
+ * Read a Soroban fungible token's `decimals()` via read-only simulation.
+ *
+ * Throws a decoded {@link ContractError} (or {@link SimulationError}) when the
+ * call fails, so callers surface the on-chain reason instead of guessing a
+ * scale factor.
+ */
+export async function readTokenDecimals(
+  deps: TokenReadDeps,
+  tokenContract: string
+): Promise<number> {
+  const sim = await deps.rpc.simulateTransaction(
+    readOnlyTokenTx(deps, tokenContract, "decimals", [])
+  );
+  if ("error" in sim && sim.error) {
+    throw (
+      decodeContractError(sim.error) ??
+      new SimulationError(`decimals() simulation failed: ${sim.error}`)
+    );
+  }
+  const retval = "result" in sim ? sim.result?.retval : undefined;
+  if (!retval) {
+    throw new SimulationError("decimals() returned no result");
+  }
+  const decimals = Number(scValToNative(retval));
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+    throw new SimulationError(`Invalid token decimals: ${decimals}`);
+  }
+  return decimals;
+}
+
+/**
+ * Scale a human-readable token amount to raw atomic units.
+ *
+ * Uses exact decimal string arithmetic over the token's declared decimals so
+ * fractional inputs below the token precision fail instead of rounding to a
+ * wrong raw value. Rejects unsafe integers, non-finite values, and amounts
+ * whose requested precision exceeds the token's decimals.
+ */
+export function tokenAmountToRawUnits(amount: number, decimals: number): bigint {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    throw new ValidationError(
+      "amount must be a positive number",
+      SmartAccountErrorCode.INVALID_AMOUNT,
+      { value: amount }
+    );
+  }
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+    throw new SimulationError(`Invalid token decimals: ${decimals}`);
+  }
+  const text = amount.toString();
+  if (!/^\d+(\.\d+)?$/.test(text)) {
+    throw new ValidationError(
+      "amount must be a positive number",
+      SmartAccountErrorCode.INVALID_AMOUNT,
+      { value: amount }
+    );
+  }
+  const [whole, fraction = ""] = text.split(".");
+  if (fraction.length > decimals) {
+    throw new ValidationError(
+      `amount has more precision than the token supports (${decimals} decimals)`,
+      SmartAccountErrorCode.INVALID_AMOUNT,
+      { decimals, fractionDigits: fraction.length }
+    );
+  }
+  const padded = (whole + fraction.padEnd(decimals, "0")).replace(/^0+(?=\d)/, "");
+  const raw = BigInt(padded === "" ? "0" : padded);
+  if (raw <= 0n) {
+    throw new ValidationError(
+      "amount must be positive",
+      SmartAccountErrorCode.INVALID_AMOUNT,
+      { value: amount }
+    );
+  }
+  return raw;
+}
+
+/**
+ * Resolve human-readable token units to raw atomic units using the token's
+ * on-chain `decimals()`. Rejects before building or authorizing any transfer.
+ */
+export async function resolveTokenAmount(
+  deps: TokenReadDeps,
+  tokenContract: string,
+  amount: number
+): Promise<{ raw: bigint; decimals: number }> {
+  const decimals = await readTokenDecimals(deps, tokenContract);
+  return { raw: tokenAmountToRawUnits(amount, decimals), decimals };
 }
 
 /**
