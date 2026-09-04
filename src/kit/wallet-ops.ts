@@ -396,11 +396,25 @@ export async function connectWithCredentials(
     ? [storedCandidate]
     : [];
   if (!storedCandidate) {
-    const lookup = await deps.lookupWalletCandidates?.(credentialId);
+    if (!deps.lookupWalletCandidates) {
+      throw new WalletProvenanceError(
+        contractId,
+        "The indexer did not return one complete schema-2 birth claim."
+      );
+    }
+    const ledgerAtLookupStart = (await deps.rpc.getLatestLedger()).sequence;
+    const lookup = await deps.lookupWalletCandidates(credentialId);
     if (!lookup || !lookup.complete || lookup.schema !== 2) {
       throw new WalletProvenanceError(
         contractId,
         "The indexer did not return one complete schema-2 birth claim."
+      );
+    }
+    if (lookup.indexedThroughLedger < ledgerAtLookupStart) {
+      throw new WalletProvenanceError(
+        contractId,
+        `The indexer is stale at ledger ${lookup.indexedThroughLedger}; ` +
+          `the network was at ledger ${ledgerAtLookupStart} before lookup.`
       );
     }
     if (usedDerivedCandidate) {
@@ -508,6 +522,17 @@ export async function connectWithCredentials(
     );
   }
   const liveRule = await deps.readContextRule(contractId, contextRuleId);
+  const liveLedger = (await deps.rpc.getLatestLedger()).sequence;
+  if (
+    liveRule.valid_until !== undefined &&
+    liveRule.valid_until !== null &&
+    liveRule.valid_until < liveLedger
+  ) {
+    throw new WalletOwnershipError(
+      "The passkey signer belongs to an expired context rule",
+      { contractId, credentialId, contextRuleId, validUntil: liveRule.valid_until }
+    );
+  }
   const liveMatches = liveRule.signers.filter((signer) =>
     signerMatchesCredential(
       signer,

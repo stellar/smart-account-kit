@@ -17,7 +17,7 @@ It requires SDK, indexer, demo, and relayer-proxy updates.
 5. Update interfaces that assume a successful deployment removes its credential record.
 
 Fresh-device recovery stays unavailable until the configured indexer returns a complete schema-2 response.
-Legacy lookup responses remain usable for display only.
+The SDK rejects legacy credential lookup responses.
 
 ## Connection changes
 
@@ -27,6 +27,8 @@ Every `connectWallet()` path now checks:
 - The expected deployer, credential-derived salt, birth WASM, signer, and constructor policies.
 - A current wallet WASM hash in `acceptedWasmHashes`.
 - One exact live signer on the expected context rule.
+- A context rule that has not expired at the current network ledger.
+- An indexer ledger position at or above the ledger recorded before lookup.
 - A fresh WebAuthn assertion for an untrusted candidate.
 
 Stored sessions no longer bypass these checks.

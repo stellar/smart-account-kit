@@ -412,8 +412,18 @@ export async function listContextRules(
     })
   );
 
+  const latestLedger = deps?.rpc
+    ? (await deps.rpc.getLatestLedger()).sequence
+    : undefined;
   return rules
     .filter((rule): rule is ContextRule => rule !== null)
+    .filter(
+      (rule) =>
+        latestLedger === undefined ||
+        rule.valid_until === undefined ||
+        rule.valid_until === null ||
+        rule.valid_until >= latestLedger
+    )
     .sort((a, b) => a.id - b.id);
 }
 

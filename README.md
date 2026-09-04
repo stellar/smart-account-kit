@@ -957,7 +957,7 @@ if (result.success) {
 
 ### Indexer Client
 
-The SDK includes an indexer client for reverse lookups from signer credentials to wallet candidates. The built-in provider is **[Mercury](https://mercurydata.app)**. Signer discovery is public. Fresh-device connection requires the schema-2 birth response in [`indexer/README.md`](indexer/README.md). The SDK fails closed when that response is unavailable.
+The SDK includes an indexer client for reverse lookups from signer credentials to wallet candidates. The built-in provider is **[Mercury](https://mercurydata.app)**. Signer discovery is public. Credential discovery requires the schema-2 birth response in [`indexer/README.md`](indexer/README.md). The SDK rejects legacy credential responses.
 
 | Network | Built-in default (Mercury) |
 |---------|----------------------------|
@@ -1004,7 +1004,7 @@ if (kit.indexer) {
 
 Treat every discovery row as an unverified candidate.
 Do not auto-select one result or display it as a deposit address.
-`connectWallet` checks immutable birth, current code, one exact live signer, and fresh passkey ownership.
+`connectWallet` checks immutable birth, current code, one exact live signer, rule expiration, indexer freshness, and fresh passkey ownership.
 
 `indexerAuthToken` is optional (Mercury's read endpoints are public); supply one only for gated/admin operations or a provider that requires it. When set, it (and `authToken` on a directly-constructed client) is sent on every request as `Authorization: Bearer <token>`. Browser bundles expose their environment variables to users, so only embed public or tightly scoped tokens there; keep privileged and catch-up/admin credentials server-side.
 

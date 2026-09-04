@@ -699,6 +699,7 @@ describe("wallet-ops", () => {
             getContractData: vi
               .fn()
               .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 100 }),
           },
           storage
         ),
@@ -733,6 +734,32 @@ describe("wallet-ops", () => {
         /explicit contract selection/i
       );
 
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+    });
+
+    it("rejects a complete indexer response that is behind the network", async () => {
+      const storage = new MemoryStorage();
+      const deps = {
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 101 }),
+          },
+          storage
+        ),
+        lookupWalletCandidates: vi.fn().mockResolvedValue({
+          schema: 2,
+          complete: true,
+          indexedThroughLedger: 100,
+          candidates: [],
+        }),
+      };
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /indexer is stale at ledger 100/i
+      );
       expect(deps.setConnectedState).not.toHaveBeenCalled();
     });
 
@@ -812,10 +839,14 @@ describe("wallet-ops", () => {
             getContractData: vi
               .fn()
               .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 500 }),
           },
           storage
         ),
-        readContextRule: vi.fn().mockResolvedValue({ signers: [signer] }),
+        readContextRule: vi.fn().mockResolvedValue({
+          signers: [signer],
+          valid_until: undefined,
+        }),
         verifyBirth: vi.fn().mockResolvedValue({
           ok: true,
           birth: {
@@ -840,6 +871,66 @@ describe("wallet-ops", () => {
         contractId: DERIVED_CONTRACT_ID,
         credentialId,
       });
+    });
+
+    it("rejects a stored signer on an expired context rule", async () => {
+      const storage = new MemoryStorage();
+      const credentialId = "cred";
+      const publicKey = new Uint8Array(65).fill(9);
+      publicKey[0] = 0x04;
+      const signer = {
+        tag: "External" as const,
+        values: [
+          "CVERIFIER",
+          Buffer.concat([
+            Buffer.from(publicKey),
+            Buffer.from(credentialId, "base64url"),
+          ]),
+        ] as [string, Buffer],
+      };
+      await storage.save({
+        credentialId,
+        publicKey,
+        contractId: DERIVED_CONTRACT_ID,
+        createdAt: 1,
+        isPrimary: true,
+        deploymentStatus: "deployed",
+        birthWasmHash: ACCEPTED_WASM_HASH,
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 123,
+        birthConstructorArgsHash: "34".repeat(32),
+      });
+      const deps = {
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 500 }),
+          },
+          storage
+        ),
+        readContextRule: vi.fn().mockResolvedValue({
+          signers: [signer],
+          valid_until: 499,
+        }),
+        verifyBirth: vi.fn().mockResolvedValue({
+          ok: true,
+          birth: {
+            contractId: DERIVED_CONTRACT_ID,
+            birthWasmHash: ACCEPTED_WASM_HASH,
+            creationTransactionHash: "12".repeat(32),
+            creationLedger: 123,
+            constructorArgsHash: "34".repeat(32),
+            birthSigner: signer,
+          },
+        }),
+      };
+
+      await expect(connectWithCredentials(deps, credentialId)).rejects.toThrow(
+        /expired context rule/i
+      );
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
     });
 
     it("REJECTS an unmarked legacy mapping instead of assuming trust", async () => {

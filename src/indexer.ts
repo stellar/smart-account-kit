@@ -78,9 +78,9 @@ export type WalletCandidateLookup =
       candidates: IndexedWalletCandidate[];
     }
   | {
-      schema?: number;
+      schema: 2;
       complete: false;
-      indexedThroughLedger?: number;
+      indexedThroughLedger: number;
       candidates: Partial<IndexedWalletCandidate>[];
     };
 
@@ -128,12 +128,12 @@ export interface CredentialLookupResponse {
   contracts: IndexedContractSummary[];
   /** Number of contracts found */
   count: number;
-  /** Security schema version. Only schema 2 carries wallet-birth facts. */
-  schema?: number;
+  /** Security schema version. */
+  schema: 2;
   /** True only after a complete scan and live RPC confirmation. */
-  complete?: boolean;
+  complete: boolean;
   /** Latest ledger fully reflected by this response. */
-  indexed_through_ledger?: number;
+  indexed_through_ledger: number;
 }
 
 /**
@@ -280,28 +280,51 @@ export class IndexerClient {
   ): Promise<CredentialLookupResponse> {
     // Ensure credential ID is lowercase hex
     const normalizedId = credentialId.toLowerCase().replace(/^0x/, "");
-    const response = await this.fetch<CredentialLookupResponse>(
+    const response = await this.fetch<Partial<CredentialLookupResponse>>(
       `${API_PATH_LOOKUP}/${normalizedId}`
     );
+    const indexedThroughLedger = normalizePositiveInteger(
+      response.indexed_through_ledger
+    );
+    const responseCount = Number(response.count);
+    if (
+      response.schema !== 2 ||
+      typeof response.complete !== "boolean" ||
+      indexedThroughLedger === undefined ||
+      typeof response.credentialId !== "string" ||
+      response.credentialId.toLowerCase().replace(/^0x/, "") !== normalizedId ||
+      !Array.isArray(response.contracts) ||
+      !Number.isSafeInteger(responseCount) ||
+      responseCount < 0 ||
+      responseCount !== response.contracts.length
+    ) {
+      throw new IndexerError(
+        "Indexer returned an invalid schema-2 credential response",
+        0
+      );
+    }
     // Convert string counts to numbers (postgres returns strings for bigint)
     return {
       ...response,
+      schema: 2,
+      complete: response.complete,
+      indexed_through_ledger: indexedThroughLedger,
+      credentialId: normalizedId,
+      count: responseCount,
       contracts: response.contracts.map(this.normalizeContractSummary),
     };
   }
 
   /**
    * Resolve schema-2 wallet candidates without inventing missing birth data.
-   * Legacy and malformed responses remain incomplete and cannot connect.
+   * Malformed responses remain incomplete and cannot connect.
    */
   async lookupWalletCandidates(
     credentialId: string
   ): Promise<WalletCandidateLookup> {
     const normalizedCredentialId = credentialId.toLowerCase().replace(/^0x/, "");
     const response = await this.lookupByCredentialId(normalizedCredentialId);
-    const indexedThroughLedger = normalizePositiveInteger(
-      response.indexed_through_ledger
-    );
+    const indexedThroughLedger = response.indexed_through_ledger;
     const candidates = response.contracts
       .map(parseWalletCandidate)
       .filter(
@@ -314,12 +337,7 @@ export class IndexerClient {
     const responseCount = Number(response.count);
     const collisionExpected = candidates.length > 1;
     const complete =
-      response.schema === 2 &&
       response.complete === true &&
-      indexedThroughLedger !== undefined &&
-      typeof response.credentialId === "string" &&
-      response.credentialId.toLowerCase().replace(/^0x/, "") ===
-        normalizedCredentialId &&
       Number.isSafeInteger(responseCount) &&
       responseCount >= 0 &&
       responseCount === response.contracts.length &&
@@ -333,9 +351,9 @@ export class IndexerClient {
 
     if (!complete) {
       return {
-        ...(response.schema !== undefined ? { schema: response.schema } : {}),
+        schema: 2,
         complete: false,
-        ...(indexedThroughLedger !== undefined ? { indexedThroughLedger } : {}),
+        indexedThroughLedger,
         candidates,
       };
     }

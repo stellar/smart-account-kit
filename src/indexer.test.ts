@@ -207,7 +207,50 @@ describe("IndexerClient network defaults", () => {
     });
   });
 
-  it("keeps legacy or incomplete candidate responses untrusted", async () => {
+  it("keeps an incomplete schema-2 response untrusted", async () => {
+    const contractId = StrKey.encodeContract(Buffer.alloc(32, 8));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schema: 2,
+          complete: false,
+          indexed_through_ledger: 200,
+          credentialId: "0102",
+          contracts: [
+            {
+              contract_id: contractId,
+              context_rule_count: 1,
+              external_signer_count: 1,
+              delegated_signer_count: 0,
+              native_signer_count: 0,
+              first_seen_ledger: 100,
+              last_seen_ledger: 200,
+              context_rule_ids: [0],
+              birth_wasm_hash: null,
+              creation_transaction_hash: null,
+              creation_ledger: null,
+              current_wasm_hash: "cd".repeat(32),
+              derived_address: false,
+              collision: false,
+              incomplete: true,
+            },
+          ],
+          count: 1,
+        })
+      )
+    );
+    const indexer = new IndexerClient({ baseUrl: "https://indexer.example" });
+
+    await expect(indexer.lookupWalletCandidates("0102")).resolves.toEqual({
+      schema: 2,
+      complete: false,
+      indexedThroughLedger: 200,
+      candidates: [],
+    });
+  });
+
+  it("rejects legacy credential responses", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -229,9 +272,8 @@ describe("IndexerClient network defaults", () => {
     );
     const indexer = new IndexerClient({ baseUrl: "https://indexer.example" });
 
-    await expect(indexer.lookupWalletCandidates("0102")).resolves.toEqual({
-      complete: false,
-      candidates: [],
-    });
+    await expect(indexer.lookupWalletCandidates("0102")).rejects.toThrow(
+      /invalid schema-2 credential response/i
+    );
   });
 });

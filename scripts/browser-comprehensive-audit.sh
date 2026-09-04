@@ -212,6 +212,9 @@ if [[ -z "$CREDENTIAL_INPUT_REF" || -z "$LOOKUP_REF" ]]; then
 fi
 agent-browser --session "$SESSION_NAME" fill "@$CREDENTIAL_INPUT_REF" "$CREDENTIAL_ID_HEX"
 agent-browser --session "$SESSION_NAME" click "@$LOOKUP_REF"
+CONTRACT_CARD=".contract-card[data-contract-id='$CONTRACT_ID']"
+agent-browser --session "$SESSION_NAME" wait "$CONTRACT_CARD"
+agent-browser --session "$SESSION_NAME" click "$CONTRACT_CARD"
 
 INDEXER_RESULT=0
 INDEXER_BODY="$(wait_for_body_pattern "$CONTRACT_ID" "Lookup failed|Indexer lookup failed|No contracts found" 120)" || INDEXER_RESULT=$?

@@ -2,7 +2,7 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## 0.7.0 — 2026-09-02
+## 0.7.0 — Unreleased
 
 This release changes the SDK, demos, documentation, and relayer proxy.
 It does not change or deploy smart contracts.
@@ -14,7 +14,7 @@ See the [v0.7.0 migration guide](docs/migration-v0.7.0.md) before updating.
 - `connectWallet` now rejects every wallet without verified immutable birth,
   accepted current code, and one exact live signer.
 - Fresh-device connections require a complete schema-2 indexer response.
-  Legacy indexer responses remain available for display, but cannot establish a connection.
+  The SDK rejects legacy credential lookup responses.
 - Stored sessions no longer bypass current-code, birth, or signer checks.
   The SDK clears a session that cannot pass those checks.
 - `acceptedWasmHashes` now applies to every connection, including stored sessions.
@@ -44,10 +44,12 @@ See the [v0.7.0 migration guide](docs/migration-v0.7.0.md) before updating.
 - Added relayer constructor-shape checks as deployment-spam protection.
 - Added `WalletProvenanceError`, `WalletOwnershipError`, and `WalletAmbiguousError`.
 - Added typed schema-2 wallet candidate responses to the public indexer API.
+- Added an indexer-ledger freshness check before candidate selection.
 
 ### Fixed
 
 - Rejected malformed DER ECDSA signatures before compact-signature conversion.
+- Rejected expired context rules during connection and signer discovery.
 - Removed stale demo statements about derived-address fallback and direct-RPC shared deployments.
 - Removed automatic candidate selection from the standalone indexer demo.
 - Removed internal deployment labels and temporary provider incidents from public deployment records.

@@ -2,13 +2,13 @@
 
 Discovery layer for smart account contracts on Stellar. It enables reverse lookups from a passkey credential (or signer address) to the smart account contracts a user can access, and supplies active context-rule state to the SDK.
 
-The built-in provider is **[Mercury](https://mercurydata.app/)**. This repository does not contain an indexer service. Mercury or another provider must deploy the schema-2 response below before fresh-device connection can succeed.
+The built-in provider is **[Mercury](https://mercurydata.app/)**. This repository does not contain an indexer service. Mercury or another provider must serve the schema-2 response below before credential discovery can succeed.
 
 > [!IMPORTANT]
 > Treat every discovery result as untrusted.
 > Never present a discovery result as a wallet or deposit address.
 > `SmartAccountKit` verifies immutable birth, current code, and live ownership.
-> A legacy or incomplete response cannot connect.
+> The SDK rejects a legacy response. An incomplete schema-2 response cannot connect.
 
 > **History:** before v0.4.0 this directory also shipped a self-hosted reference stack (a Goldsky Turbo pipeline → PostgreSQL → Cloudflare Worker). That path was removed in v0.4.0 (too expensive to operate, and Mercury indexes the same events as a managed service). The old pipeline configs, SQL schema, and Worker live in git history if you need them.
 
@@ -39,8 +39,9 @@ An optional provider token can be supplied through `indexerAuthToken` or `VITE_I
 ### Coverage
 
 Mercury indexes signer events on both public networks.
-Fresh-device connection also needs the schema-2 birth fields below.
-The SDK fails closed until a provider deploys that response.
+Mercury testnet served schema 2 during validation on 2026-09-04.
+Mercury mainnet still served the legacy response during that validation.
+The SDK rejects the legacy mainnet response until Mercury completes its deployment.
 
 ## REST surface the SDK uses
 
@@ -56,8 +57,7 @@ The SDK's `IndexerClient` uses these public Mercury routes:
 
 `getContractDetails()` treats a `404` as "not indexed yet" and returns `null`. The SDK can then use its bounded on-chain rule probe. Any provider that serves these routes can replace Mercury through `indexerUrl`.
 
-The route list does not mean that Mercury already returns schema 2.
-Fresh-device connection fails closed until the credential route returns the complete schema below.
+The credential route must return the complete schema below.
 
 ## Required credential lookup schema
 
@@ -100,6 +100,7 @@ The provider must follow these rules:
 - Set `collision` when the credential resolves to more than one contract.
 - Set `incomplete` when any birth, current-code, signer, or RPC fact is unavailable.
 - Set `complete` only after a finished scan through `indexed_through_ledger`.
+- Keep `indexed_through_ledger` current with the network ledger at request time.
 - Never rank or select an owner.
 - Return `complete: false` after an RPC failure or partial scan.
 

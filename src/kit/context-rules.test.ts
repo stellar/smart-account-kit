@@ -261,6 +261,48 @@ describe("context-rules", () => {
     expect(rules.map((rule) => rule.id)).toEqual([0]);
   });
 
+  it("filters out context rules that expired before the current ledger", async () => {
+    const delegated: Signer = {
+      tag: "Delegated",
+      values: [makeAccount(8)],
+    };
+    const expired = {
+      ...makeRule(0, { tag: "Default", values: undefined }, [delegated]),
+      valid_until: 99,
+    };
+    const current = {
+      ...makeRule(1, { tag: "Default", values: undefined }, [delegated]),
+      valid_until: 100,
+    };
+    const wallet = makeWallet({ 0: expired, 1: current });
+
+    const rules = await listContextRules(wallet, {
+      rpc: {
+        getLatestLedger: async () => ({ sequence: 100 }),
+      } as never,
+      getContractDetailsFromIndexer: async () =>
+        ({
+          contractId: "C...",
+          summary: {
+            contract_id: "C...",
+            context_rule_count: 2,
+            external_signer_count: 0,
+            delegated_signer_count: 1,
+            native_signer_count: 0,
+            first_seen_ledger: 1,
+            last_seen_ledger: 2,
+            context_rule_ids: [0, 1],
+          },
+          contextRules: [
+            { context_rule_id: 0, signers: [], policies: [] },
+            { context_rule_id: 1, signers: [], policies: [] },
+          ],
+        }),
+    });
+
+    expect(rules.map((rule) => rule.id)).toEqual([1]);
+  });
+
   it("resolves a unique context rule by exact signer set", async () => {
     const contractId = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
     const signerA: Signer = {
