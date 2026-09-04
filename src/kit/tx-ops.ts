@@ -291,7 +291,7 @@ export async function readTokenDecimals(
  * above 1e21, which naive decimal-string scaling rejects or misreads. This
  * keeps exact decimal-string arithmetic valid across the full supported range.
  */
-function expandDecimal(amount: number, decimals: number): string {
+function expandDecimal(amount: number): string {
   const text = amount.toString();
   if (/^\d+(\.\d+)?$/.test(text)) {
     return text;
@@ -335,24 +335,14 @@ export function tokenAmountToRawUnits(amount: number, decimals: number): bigint 
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
     throw new SimulationError(`Invalid token decimals: ${decimals}`);
   }
-  if (!Number.isSafeInteger(Math.floor(amount)) && amount >= 1) {
-    const wholeText = expandDecimal(Math.floor(amount), decimals).split(".")[0] ?? "";
-    if (wholeText.length > 15) {
-      throw new ValidationError(
-        "amount exceeds safe integer precision; use a smaller value",
-        SmartAccountErrorCode.INVALID_AMOUNT,
-        { value: amount }
-      );
-    }
-  }
-  const text = expandDecimal(amount, decimals);
-  if (!/^\d+(\.\d+)?$/.test(text)) {
+  if (amount >= 1 && !Number.isSafeInteger(Math.floor(amount))) {
     throw new ValidationError(
-      "amount must be a positive number",
+      "amount exceeds safe integer precision; use a smaller value",
       SmartAccountErrorCode.INVALID_AMOUNT,
       { value: amount }
     );
   }
+  const text = expandDecimal(amount);
   const [whole, fraction = ""] = text.split(".");
   if (fraction.length > decimals) {
     throw new ValidationError(

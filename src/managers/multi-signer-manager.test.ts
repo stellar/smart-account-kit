@@ -117,6 +117,7 @@ describe("MultiSignerManager", () => {
     vi.restoreAllMocks();
     assembleTransactionMock.mockReset();
     resolveContextRuleIdsForEntryMock.mockReset();
+    buildDirectTokenTransferMock.mockReset();
   });
 
   it("returns no signers when disconnected and deduplicates connected signers", async () => {
@@ -287,6 +288,43 @@ describe("MultiSignerManager", () => {
       expect.objectContaining({ onLog: expect.any(Function) })
     );
     expect(result).toEqual({ success: true, hash: "transfer-hash" });
+  });
+
+  it("returns failedTransaction when decimals lookup fails", async () => {
+    const deps = makeDeps();
+    deps.rpc.simulateTransaction.mockRejectedValue(new Error("rpc down"));
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.transfer(
+      makeContract(11),
+      makeAccount(2),
+      1,
+      [makeDelegatedSigner(1)],
+      { onLog: vi.fn() }
+    );
+
+    expect(result.success).toBe(false);
+    expect(buildDirectTokenTransferMock).not.toHaveBeenCalled();
+  });
+
+  it("returns failedTransaction for over-precision amounts", async () => {
+    const deps = makeDeps();
+    const { xdr: sdkXdr } = await import("@stellar/stellar-sdk");
+    deps.rpc.simulateTransaction.mockResolvedValue({
+      result: { retval: sdkXdr.ScVal.scvU32(6) },
+    });
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.transfer(
+      makeContract(11),
+      makeAccount(2),
+      1.1234567,
+      [makeDelegatedSigner(1)],
+      { onLog: vi.fn() }
+    );
+
+    expect(result.success).toBe(false);
+    expect(buildDirectTokenTransferMock).not.toHaveBeenCalled();
   });
 
   it("fails fast on unsupported external auth entries", async () => {
