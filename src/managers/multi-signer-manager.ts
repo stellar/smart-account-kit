@@ -549,12 +549,12 @@ export class MultiSignerManager {
       return failedTransaction(new ValidationError("Cannot transfer to self"));
     }
 
-    const { raw: amountRaw } = await resolveTokenAmount(
-      this.deps,
-      tokenContract,
-      amount
-    );
     try {
+      const { raw: amountRaw } = await resolveTokenAmount(
+        this.deps,
+        tokenContract,
+        amount
+      );
       // Direct token invocation authorized by the smart account (not wrapped
       // in the account's `execute`), so token-scoped context rules and their
       // policies match the transfer. See buildDirectTokenTransfer.

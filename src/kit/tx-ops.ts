@@ -285,6 +285,38 @@ export async function readTokenDecimals(
 }
 
 /**
+ * Expand a positive finite number to plain decimal notation.
+ *
+ * `Number.prototype.toString()` emits exponential form below 1e-6 and at or
+ * above 1e21, which naive decimal-string scaling rejects or misreads. This
+ * keeps exact decimal-string arithmetic valid across the full supported range.
+ */
+function expandDecimal(amount: number, decimals: number): string {
+  const text = amount.toString();
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    return text;
+  }
+  const match = /^(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/.exec(text);
+  if (!match) {
+    throw new ValidationError(
+      "amount must be a positive number",
+      SmartAccountErrorCode.INVALID_AMOUNT,
+      { value: amount }
+    );
+  }
+  const digits = (match[1] ?? "") + (match[2] ?? "");
+  const exponent = Number(match[3]);
+  const point = (match[1] ?? "").length + exponent;
+  if (point <= 0) {
+    return `0.${"0".repeat(-point)}${digits}`;
+  }
+  if (point >= digits.length) {
+    return digits + "0".repeat(point - digits.length);
+  }
+  return `${digits.slice(0, point)}.${digits.slice(point)}`;
+}
+
+/**
  * Scale a human-readable token amount to raw atomic units.
  *
  * Uses exact decimal string arithmetic over the token's declared decimals so
@@ -303,7 +335,17 @@ export function tokenAmountToRawUnits(amount: number, decimals: number): bigint 
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
     throw new SimulationError(`Invalid token decimals: ${decimals}`);
   }
-  const text = amount.toString();
+  if (!Number.isSafeInteger(Math.floor(amount)) && amount >= 1) {
+    const wholeText = expandDecimal(Math.floor(amount), decimals).split(".")[0] ?? "";
+    if (wholeText.length > 15) {
+      throw new ValidationError(
+        "amount exceeds safe integer precision; use a smaller value",
+        SmartAccountErrorCode.INVALID_AMOUNT,
+        { value: amount }
+      );
+    }
+  }
+  const text = expandDecimal(amount, decimals);
   if (!/^\d+(\.\d+)?$/.test(text)) {
     throw new ValidationError(
       "amount must be a positive number",

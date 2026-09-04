@@ -394,8 +394,20 @@ describe("token amount scaling", () => {
     expect(() => tokenAmountToRawUnits(1.1234567, 6)).toThrow(/precision/i);
   });
 
-  it("rejects sub-precision dust instead of rounding to zero", () => {
-    expect(() => tokenAmountToRawUnits(0.0000001, 6)).toThrow();
+  it("accepts the smallest unit of a 7-decimal token", () => {
+    expect(tokenAmountToRawUnits(0.0000001, 7)).toBe(1n);
+  });
+
+  it("accepts small units of an 18-decimal token", () => {
+    expect(tokenAmountToRawUnits(0.000000000000000001, 18)).toBe(1n);
+  });
+
+  it("rejects sub-precision dust with a precision error", () => {
+    expect(() => tokenAmountToRawUnits(0.0001, 3)).toThrow(/precision/i);
+  });
+
+  it("rejects unsafe integer amounts", () => {
+    expect(() => tokenAmountToRawUnits(9007199254740993, 0)).toThrow(/safe integer/i);
   });
 
   it("reads token decimals via read-only simulation", async () => {
