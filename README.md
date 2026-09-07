@@ -1117,6 +1117,7 @@ Publish `smart-account-kit-bindings` first only when its generated code changed.
 - [Indexer response contract](indexer/README.md) — required discovery and provenance schema
 - [Protocol 27 deployments](docs/deployments-protocol-27-2026-07-09.md) — testnet/mainnet contract IDs and WASM hashes
 - [Releasing](docs/releasing.md) — npm publish flow
+- [First-principles review (2026-09)](docs/research/2026-09-06-first-principles-review/00-README.md) — security, API, architecture, contract-parity, tooling and services findings with a rewrite blueprint and open decisions
 
 ## Related
 
