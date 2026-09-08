@@ -8,7 +8,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-describe("RelayerClient response compatibility", () => {
+describe("RelayerClient responses", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -39,7 +39,7 @@ describe("RelayerClient response compatibility", () => {
     });
   });
 
-  it("accepts legacy success responses without success field", async () => {
+  it("rejects responses without an explicit success field", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -54,10 +54,8 @@ describe("RelayerClient response compatibility", () => {
     const client = new RelayerClient("https://relay.example");
     const result = await client.sendXdr("AAAA");
 
-    expect(result.success).toBe(true);
-    expect(result.transactionId).toBe("tx-2");
-    expect(result.hash).toBe("def456");
-    expect(result.status).toBe("submitted");
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Relayer request failed with status 200");
   });
 
   it("prefers message text while preserving machine error code", async () => {

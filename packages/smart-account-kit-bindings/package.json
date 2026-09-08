@@ -27,7 +27,7 @@
     "url": "https://github.com/stellar/smart-account-kit"
   },
   "peerDependencies": {
-    "@stellar/stellar-sdk": ">=16.0.0"
+    "@stellar/stellar-sdk": "^16.3.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

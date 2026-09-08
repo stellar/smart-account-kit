@@ -14,6 +14,7 @@ import {
   buildSignaturePreimage,
   buildSignaturePayload,
   buildWebAuthnSignatureBytes,
+  assertWalletMutationIntent,
   compareScVal,
   createAddressCredentials,
   getAddressCredentials,
@@ -72,7 +73,111 @@ function makeAuthEntry(address: string): xdr.SorobanAuthorizationEntry {
   });
 }
 
+function makeContractInvocation(
+  contractId: string,
+  functionName: string,
+  subInvocations: xdr.SorobanAuthorizedInvocation[] = [],
+  args: xdr.ScVal[] = []
+): xdr.SorobanAuthorizedInvocation {
+  return new xdr.SorobanAuthorizedInvocation({
+    function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+      new xdr.InvokeContractArgs({
+        contractAddress: Address.fromString(contractId).toScAddress(),
+        functionName,
+        args,
+      })
+    ),
+    subInvocations,
+  });
+}
+
+function withRootInvocation(
+  entry: xdr.SorobanAuthorizationEntry,
+  rootInvocation: xdr.SorobanAuthorizedInvocation
+): xdr.SorobanAuthorizationEntry {
+  return new xdr.SorobanAuthorizationEntry({
+    credentials: entry.credentials(),
+    rootInvocation,
+  });
+}
+
 describe("auth-payload", () => {
+  it("refuses a wallet mutation on a generic signing path", () => {
+    const wallet = Address.contract(hash(Buffer.from("wallet-admin"))).toString();
+    const entry = withRootInvocation(
+      makeAuthEntry(makeAccount(22)),
+      makeContractInvocation(wallet, "add_signer")
+    );
+
+    expect(() => assertWalletMutationIntent(entry, wallet)).toThrow(
+      "Use the dedicated admin signing method"
+    );
+  });
+
+  it("accepts one root wallet mutation only when it matches the host function", () => {
+    const wallet = Address.contract(hash(Buffer.from("wallet-admin"))).toString();
+    const root = makeContractInvocation(wallet, "remove_policy", [], [
+      xdr.ScVal.scvU32(3),
+    ]);
+    const entry = withRootInvocation(makeAuthEntry(makeAccount(23)), root);
+    const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      root.function().contractFn()
+    );
+
+    expect(() =>
+      assertWalletMutationIntent(entry, wallet, hostFunction)
+    ).not.toThrow();
+  });
+
+  it("refuses nested and multiple wallet mutations on the admin path", () => {
+    const wallet = Address.contract(hash(Buffer.from("wallet-admin"))).toString();
+    const nestedMutation = makeContractInvocation(wallet, "upgrade");
+    const nested = withRootInvocation(
+      makeAuthEntry(makeAccount(24)),
+      makeContractInvocation(
+        Address.contract(hash(Buffer.from("target"))).toString(),
+        "call",
+        [nestedMutation]
+      )
+    );
+    const nestedHostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      nested.rootInvocation().function().contractFn()
+    );
+
+    expect(() =>
+      assertWalletMutationIntent(nested, wallet, nestedHostFunction)
+    ).toThrow("nested or multiple");
+
+    const root = makeContractInvocation(wallet, "execute", [nestedMutation]);
+    const multiple = withRootInvocation(makeAuthEntry(makeAccount(25)), root);
+    const multipleHostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      root.function().contractFn()
+    );
+
+    expect(() =>
+      assertWalletMutationIntent(multiple, wallet, multipleHostFunction)
+    ).toThrow("nested or multiple");
+  });
+
+  it("refuses an admin host function that differs from the authorization root", () => {
+    const wallet = Address.contract(hash(Buffer.from("wallet-admin"))).toString();
+    const root = makeContractInvocation(wallet, "add_context_rule", [], [
+      xdr.ScVal.scvU32(1),
+    ]);
+    const entry = withRootInvocation(makeAuthEntry(makeAccount(26)), root);
+    const otherHostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      new xdr.InvokeContractArgs({
+        contractAddress: Address.fromString(wallet).toScAddress(),
+        functionName: "add_context_rule",
+        args: [xdr.ScVal.scvU32(2)],
+      })
+    );
+
+    expect(() =>
+      assertWalletMutationIntent(entry, wallet, otherHostFunction)
+    ).toThrow("does not match the transaction host function");
+  });
+
   it("round-trips AuthPayload with signer map and context rule ids", () => {
     const signer = makeDelegatedSigner(
       makeAccount(1)

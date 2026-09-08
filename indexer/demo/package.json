@@ -11,12 +11,12 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
-    "@stellar/stellar-sdk": "16.0.1",
+    "@stellar/stellar-sdk": "16.3.0",
     "smart-account-kit": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^6.0.2",
-    "vite": "^8.0.5",
-    "vitest": "^4.1.2"
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
   }
 }

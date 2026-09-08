@@ -10,10 +10,11 @@
   },
   "dependencies": {
     "@openzeppelin/relayer-plugin-channels": "^0.20.0",
-    "hono": "^4.12.11"
+    "@stellar/stellar-sdk": "^16.3.0",
+    "hono": "^4.13.7"
   },
   "devDependencies": {
     "typescript": "^6.0.2",
-    "wrangler": "^4.80.0"
+    "wrangler": "^4.130.0"
   }
 }

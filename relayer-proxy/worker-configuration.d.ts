@@ -18,6 +18,7 @@ declare namespace Cloudflare {
 		ALLOWED_WALLET_CONTRACT_IDS?: string;
 		ALLOWED_WALLET_FUNCTIONS?: string;
 		MAX_RESOURCE_FEE_STROOPS?: string;
+		MAX_TOTAL_FEE_STROOPS?: string;
 		RATE_LIMIT_WINDOW_SECONDS?: string;
 		RATE_LIMIT_PER_IP?: string;
 		RATE_LIMIT_GLOBAL?: string;

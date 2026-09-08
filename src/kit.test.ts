@@ -178,6 +178,16 @@ describe("SmartAccountKit top-level surface", () => {
     const signAuthEntry = vi.fn(async (entry) => entry);
     const resolveConnectedContextRuleIds = vi.fn(async () => [3]);
     const transaction = {
+      built: {
+        operations: [
+          {
+            type: "invokeHostFunction",
+            func: xdr.HostFunction.hostFunctionTypeUploadContractWasm(
+              Buffer.alloc(32)
+            ),
+          },
+        ],
+      },
       simulationData: {
         result: {
           auth: [authEntry],
@@ -192,11 +202,11 @@ describe("SmartAccountKit top-level surface", () => {
       {
         _contractId: "CABC",
         _credentialId: "cred-1",
-        calculateExpiration: vi.fn(async () => 123),
-        signAuthEntry,
+        signAuthEntryInternal: signAuthEntry,
         resolveConnectedContextRuleIds,
       } as unknown as SmartAccountKit,
       transaction,
+      { allowWalletMutation: true } as any
     );
 
     expect(transaction.signAuthEntries).toHaveBeenCalledTimes(1);
@@ -204,8 +214,9 @@ describe("SmartAccountKit top-level surface", () => {
       expect.any(xdr.SorobanAuthorizationEntry),
       expect.objectContaining({
         credentialId: "cred-1",
-        expiration: 123,
+        expiration: undefined,
         contextRuleIds: [3],
+        walletMutationHostFunction: undefined,
       }),
     );
     expect(resolveConnectedContextRuleIds).toHaveBeenCalledWith(expect.any(xdr.SorobanAuthorizationEntry), undefined, expect.anything());
@@ -230,8 +241,7 @@ describe("SmartAccountKit top-level surface", () => {
       {
         _contractId: "CABC",
         _credentialId: "cred-1",
-        calculateExpiration: vi.fn(async () => 123),
-        signAuthEntry,
+        signAuthEntryInternal: signAuthEntry,
         resolveConnectedContextRuleIds,
       } as unknown as SmartAccountKit,
       transaction,
@@ -244,6 +254,72 @@ describe("SmartAccountKit top-level surface", () => {
         contextRuleIds: [4],
       }),
     );
+  });
+
+  it("signAdmin binds wallet mutation signing to the transaction host function", async () => {
+    const authEntry = makeAuthEntry();
+    const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+      new xdr.InvokeContractArgs({
+        contractAddress: Address.contract(hash(Buffer.from("admin-wallet"))).toScAddress(),
+        functionName: "add_signer",
+        args: [],
+      })
+    );
+    const signAuthEntryInternal = vi.fn(async (entry) => entry);
+    const transaction = {
+      built: {
+        operations: [
+          {
+            type: "invokeHostFunction",
+            func: hostFunction,
+          },
+        ],
+      },
+      simulationData: { result: { auth: [authEntry] } },
+      signAuthEntries: vi.fn(async ({ authorizeEntry }) => {
+        await authorizeEntry(authEntry);
+      }),
+    };
+
+    await SmartAccountKit.prototype.signAdmin.call(
+      {
+        _contractId: "CABC",
+        _credentialId: "cred-1",
+        signAuthEntryInternal,
+        resolveConnectedContextRuleIds: vi.fn(async () => [6]),
+      } as unknown as SmartAccountKit,
+      transaction as any
+    );
+
+    expect(signAuthEntryInternal).toHaveBeenCalledWith(
+      expect.any(xdr.SorobanAuthorizationEntry),
+      expect.objectContaining({ walletMutationHostFunction: hostFunction })
+    );
+  });
+
+  it("signAuthEntry removes internal options supplied by a JavaScript caller", async () => {
+    const signAuthEntryInternal = vi.fn(async (entry) => entry);
+    const entry = makeAuthEntry();
+
+    await SmartAccountKit.prototype.signAuthEntry.call(
+      { signAuthEntryInternal } as unknown as SmartAccountKit,
+      entry,
+      {
+        credentialId: "cred-1",
+        expiration: 123,
+        contextRuleIds: [4],
+        signer: { tag: "Delegated", values: ["GATTACKER"] },
+        walletMutationHostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(
+          Buffer.alloc(32)
+        ),
+      } as any
+    );
+
+    expect(signAuthEntryInternal).toHaveBeenCalledWith(entry, {
+      credentialId: "cred-1",
+      expiration: 123,
+      contextRuleIds: [4],
+    });
   });
 
   it("discovery methods pass through to the configured indexer", async () => {
@@ -450,12 +526,17 @@ describe("SmartAccountKit top-level surface", () => {
       transaction as any,
       {
         credentialId: "cred-override",
-      }
+        allowWalletMutation: true,
+      } as any
     );
 
     expect(result).toEqual(txResult);
     expect(resolveConnectedContextRuleIds).toHaveBeenCalledWith(expect.any(xdr.SorobanAuthorizationEntry), "cred-override", expect.anything());
     expect(signResimulateAndPrepare).toHaveBeenCalledTimes(1);
+    expect(signResimulateAndPrepare.mock.calls[0][2]).toHaveProperty(
+      "allowWalletMutation",
+      undefined
+    );
     expect(sendAndPoll).toHaveBeenCalledWith(preparedTx, { forceMethod: undefined });
   });
 });

@@ -39,6 +39,15 @@ describe("utils.deriveContractAddress", () => {
 });
 
 describe("utils.extractPublicKeyFromAttestation", () => {
+  it("rejects a registration response without a browser-provided public key", async () => {
+    await expect(
+      extractPublicKeyFromAttestation({
+        clientDataJSON: "",
+        attestationObject: base64url.encode(Buffer.alloc(200, 7)),
+      })
+    ).rejects.toThrow("did not provide a public key");
+  });
+
   it("normalizes SPKI public keys from WebAuthn registration responses", async () => {
     const keyPair = await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
@@ -62,5 +71,28 @@ describe("utils.extractPublicKeyFromAttestation", () => {
     expect(Buffer.from(extracted)).toEqual(raw);
     expect(extracted).toHaveLength(65);
     expect(extracted[0]).toBe(0x04);
+  });
+
+  it("rejects a malformed public key instead of slicing its last bytes", async () => {
+    await expect(
+      extractPublicKeyFromAttestation({
+        clientDataJSON: "",
+        attestationObject: "",
+        publicKey: base64url.encode(Buffer.alloc(80, 7)),
+      })
+    ).rejects.toThrow("Could not extract a valid P-256 public key");
+  });
+
+  it("rejects an uncompressed point that is not on P-256", async () => {
+    const invalidPoint = Buffer.alloc(65);
+    invalidPoint[0] = 0x04;
+
+    await expect(
+      extractPublicKeyFromAttestation({
+        clientDataJSON: "",
+        attestationObject: "",
+        publicKey: base64url.encode(invalidPoint),
+      })
+    ).rejects.toThrow("valid P-256 curve point");
   });
 });

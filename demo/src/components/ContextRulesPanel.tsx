@@ -130,13 +130,13 @@ export function ContextRulesPanel({
   const signAndSubmitWithMultiSigner = useCallback(
     async (tx: AssembledTransaction<unknown>, ruleSigners: Signer[]): Promise<{ success: boolean; error?: string }> => {
       if (!needsMultiSigner(ruleSigners)) {
-        return toSimpleResult(await kit.signAndSubmit(tx));
+        return toSimpleResult(await kit.signAndSubmitAdmin(tx));
       }
 
       const selectedSigners = buildSelectedSigners(ruleSigners);
       // Use SDK's built-in multi-signer operation
       return toSimpleResult(
-        await kit.multiSigners.operation(tx, selectedSigners, { onLog })
+        await kit.multiSigners.adminOperation(tx, selectedSigners, { onLog })
       );
     },
     [kit, onLog, needsMultiSigner, buildSelectedSigners]

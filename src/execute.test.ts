@@ -27,10 +27,10 @@ describe("SmartAccountKit execute helpers", () => {
     expect(result).toBe(transaction);
   });
 
-  it("executeAndSubmit() reuses execute() plus signAndSubmit()", async () => {
+  it("executeAndSubmit() reuses execute() plus signAndSubmitAdmin()", async () => {
     const transaction = { built: {} };
     const execute = vi.fn().mockResolvedValue(transaction);
-    const signAndSubmit = vi.fn().mockResolvedValue({
+    const signAndSubmitAdmin = vi.fn().mockResolvedValue({
       success: true,
       hash: "abc123",
     });
@@ -42,7 +42,7 @@ describe("SmartAccountKit execute helpers", () => {
     const result = await SmartAccountKit.prototype.executeAndSubmit.call(
       {
         execute,
-        signAndSubmit,
+        signAndSubmitAdmin,
       } as unknown as SmartAccountKit,
       "CTARGET",
       "set_config",
@@ -51,7 +51,7 @@ describe("SmartAccountKit execute helpers", () => {
     );
 
     expect(execute).toHaveBeenCalledWith("CTARGET", "set_config", ["owner"]);
-    expect(signAndSubmit).toHaveBeenCalledWith(transaction, options);
+    expect(signAndSubmitAdmin).toHaveBeenCalledWith(transaction, options);
     expect(result).toEqual({
       success: true,
       hash: "abc123",

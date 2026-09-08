@@ -63,7 +63,9 @@ const WALLET = Address.contract(new Uint8Array(32).fill(1)).toString();
 const OTHER_WALLET = Address.contract(new Uint8Array(32).fill(2)).toString();
 const TOKEN = Address.contract(new Uint8Array(32).fill(5)).toString();
 const WASM_HASH = "84".repeat(32);
-const MISSING_CHANNEL = `G${"A".repeat(55)}`;
+const MISSING_CHANNEL = Keypair.fromRawEd25519Seed(
+  new Uint8Array(32).fill(9)
+).publicKey();
 
 function createKV(initial: Record<string, string> = {}, onGet?: () => void) {
   const store = new Map(Object.entries(initial));
@@ -117,6 +119,7 @@ function makeEnv(
     allowedWallets?: string;
     allowedWalletFunctions?: string;
     maxFee?: string;
+    maxTotalFee?: string;
     rateLimitDO?: ReturnType<typeof makeRateLimitDO>;
   } = {}
 ) {
@@ -138,6 +141,7 @@ function makeEnv(
       opts.allowedWalletFunctions ??
       "execute,upgrade,add_policy,remove_policy,add_signer,remove_signer,add_context_rule,remove_context_rule,batch_add_signer,update_context_rule_name,update_context_rule_valid_until",
     MAX_RESOURCE_FEE_STROOPS: opts.maxFee ?? "1000000",
+    MAX_TOTAL_FEE_STROOPS: opts.maxTotalFee ?? "1100000",
     RATE_LIMIT_WINDOW_SECONDS: "60",
     RATE_LIMIT_PER_IP: "10",
     RATE_LIMIT_GLOBAL: "100",
@@ -378,10 +382,11 @@ function deployXdr(
   keypair = DEPLOYER_KEYPAIR,
   resourceFee = 5_000n,
   wasmHash = WASM_HASH,
-  sign = true
+  sign = true,
+  totalFee = "100"
 ) {
   const transaction = new TransactionBuilder(new Account(keypair.publicKey(), "0"), {
-    fee: "100",
+    fee: totalFee,
     networkPassphrase: Networks.TESTNET,
   })
     .addOperation(
@@ -477,6 +482,19 @@ describe("request boundary", () => {
       "https://demo.example"
     );
     expect(res.headers.get("Access-Control-Allow-Origin")).not.toBe("*");
+  });
+
+  it("allows the SDK client headers during preflight", async () => {
+    const res = await worker.fetch(
+      makeRequest("/", { method: "OPTIONS", origin: "https://demo.example" }),
+      makeEnv(),
+      ctx()
+    );
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get("Access-Control-Allow-Headers")).toBe(
+      "Content-Type, X-Client-Name, X-Client-Version"
+    );
   });
 
   it("rejects a disallowed preflight origin", async () => {
@@ -593,10 +611,10 @@ describe("sign-only deployment validation", () => {
     );
   });
 
-  it("requires legacy V1 credentials", async () => {
+  it("requires V1 credentials", async () => {
     await expectRejected(
       deploySubmission({ v2Credentials: true }),
-      "Deploy requires legacy V1 address credentials"
+      "Deploy requires V1 address credentials"
     );
   });
 
@@ -783,6 +801,20 @@ describe("signed xdr validation", () => {
       makeEnv({ maxFee: "1000", kv })
     );
     expect(res.status).toBe(413);
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("enforces the embedded xdr total-fee ceiling", async () => {
+    const kv = seededKV();
+    const res = await post(
+      { xdr: deployXdr(DEPLOYER_KEYPAIR, 500n, WASM_HASH, true, "1001") },
+      makeEnv({ maxTotalFee: "1000", kv })
+    );
+    expect(res.status).toBe(413);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "Transaction fee exceeds configured maximum",
+    });
     expect(kv.get).not.toHaveBeenCalled();
     expect(submitTransaction).not.toHaveBeenCalled();
   });

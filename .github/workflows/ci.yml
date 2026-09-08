@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: test & build
@@ -29,11 +32,9 @@ jobs:
       # build rather than be silently resolved away.
       - run: pnpm install --frozen-lockfile
 
-      # relayer-proxy is NOT a workspace member (the workspace is `packages/**`)
-      # but the root vitest run picks up its tests, so its deps must be present.
-      - name: Install relayer-proxy dependencies
-        working-directory: relayer-proxy
-        run: pnpm install --frozen-lockfile --ignore-workspace
+      # The optional wallet kit currently has one unpatched low advisory.
+      # Fail on every advisory at moderate severity or higher.
+      - run: pnpm audit --audit-level=moderate
 
       # Build BEFORE test: the tests import the generated bindings package by
       # name, which only resolves once its dist/ exists.
@@ -48,6 +49,12 @@ jobs:
       - run: pnpm run build:demo
 
       - run: pnpm --filter indexer-demo build
+
+      - run: pnpm verify:bindings
+
+      - run: pnpm pack --dry-run
+
+      - run: git diff --check
 
       # `prebuild` regenerates src/version.ts; if that leaves the tree dirty,
       # the committed version constant is stale.

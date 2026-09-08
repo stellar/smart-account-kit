@@ -31,6 +31,7 @@ import {
   buildAddressSignatureScVal,
   buildSignaturePreimage,
   createAddressCredentials,
+  assertWalletMutationIntent,
   getAddressCredentials,
   getAuthEntryAddress,
   normalizeSignatureExpirationLedger,
@@ -87,6 +88,7 @@ export interface MultiSignerManagerDeps {
       expiration?: number;
       contextRuleIds?: number[];
       signer?: ContractSigner;
+      walletMutationHostFunction?: xdr.HostFunction;
     }
   ) => Promise<xdr.SorobanAuthorizationEntry>;
   sendAndPoll: (tx: Transaction, options?: SubmissionOptions) => Promise<TransactionResult>;
@@ -234,7 +236,8 @@ export class MultiSignerManager {
     hostFunc: xdr.HostFunction,
     authEntries: xdr.SorobanAuthorizationEntry[],
     selectedSigners: SelectedSigner[],
-    options?: MultiSignerOptions
+    options: MultiSignerOptions | undefined,
+    allowWalletMutation: boolean
   ): Promise<TransactionResult> {
     const onLog = options?.onLog ?? (() => {});
     const contractId = this.deps.getContractId();
@@ -281,7 +284,9 @@ export class MultiSignerManager {
 
       const signedAuthEntries: xdr.SorobanAuthorizationEntry[] = [];
       const { sequence } = await this.deps.rpc.getLatestLedger();
-      const expiration = sequence + AUTH_ENTRY_EXPIRATION_BUFFER;
+      const defaultExpiration = normalizeSignatureExpirationLedger(
+        Math.min(0xffffffff, sequence + AUTH_ENTRY_EXPIRATION_BUFFER)
+      );
 
       for (const [authEntryIndex, entry] of authEntries.entries()) {
         const credentials = entry.credentials();
@@ -303,6 +308,11 @@ export class MultiSignerManager {
           continue;
         }
 
+        const existingExpiration = getAddressCredentials(
+          credentials
+        ).signatureExpirationLedger();
+        const expiration = existingExpiration || defaultExpiration;
+
         const authAddress = getAuthEntryAddress(entry);
 
         if (authAddress !== contractId) {
@@ -322,6 +332,12 @@ export class MultiSignerManager {
           );
           continue;
         }
+
+        assertWalletMutationIntent(
+          entry,
+          contractId,
+          allowWalletMutation ? hostFunc : undefined
+        );
 
         let signedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
         getAddressCredentials(signedEntry.credentials()).signatureExpirationLedger(expiration);
@@ -350,6 +366,9 @@ export class MultiSignerManager {
             expiration,
             contextRuleIds: resolvedContextRuleIds,
             signer: passkeySigner.signer as ContractSigner | undefined,
+            walletMutationHostFunction: allowWalletMutation
+              ? hostFunc
+              : undefined,
           });
         }
 
@@ -487,6 +506,39 @@ export class MultiSignerManager {
     selectedSigners: SelectedSigner[],
     options?: MultiSignerOptions
   ): Promise<TransactionResult> {
+    return this.submitOperation(
+      assembledTx,
+      selectedSigners,
+      options,
+      false
+    );
+  }
+
+  /**
+   * Submit an administrative smart-account operation with multiple signers.
+   *
+   * Use this method for account execution, upgrades, and rule, policy, or
+   * signer changes. The generic operation method refuses these mutations.
+   */
+  async adminOperation<T>(
+    assembledTx: AssembledTransaction<T>,
+    selectedSigners: SelectedSigner[],
+    options?: MultiSignerOptions
+  ): Promise<TransactionResult> {
+    return this.submitOperation(
+      assembledTx,
+      selectedSigners,
+      options,
+      true
+    );
+  }
+
+  private async submitOperation<T>(
+    assembledTx: AssembledTransaction<T>,
+    selectedSigners: SelectedSigner[],
+    options: MultiSignerOptions | undefined,
+    allowWalletMutation: boolean
+  ): Promise<TransactionResult> {
     const onLog = options?.onLog ?? (() => {});
 
     try {
@@ -496,11 +548,20 @@ export class MultiSignerManager {
       }
 
       const operations = builtTx.operations;
-      if (!operations || operations.length === 0) {
-        return failedTransaction(new SubmissionError("No operations in transaction"));
+      if (!operations || operations.length !== 1) {
+        return failedTransaction(
+          new SubmissionError("Expected exactly one operation")
+        );
       }
 
-      const invokeOp = operations[0] as Operation.InvokeHostFunction;
+      const operation = operations[0];
+      if (operation.type !== "invokeHostFunction") {
+        return failedTransaction(
+          new SubmissionError("Expected invokeHostFunction operation")
+        );
+      }
+
+      const invokeOp = operation as Operation.InvokeHostFunction;
       const authEntries = invokeOp.auth || [];
       const submissionOptions: SubmissionOptions = { forceMethod: options?.forceMethod };
 
@@ -518,7 +579,8 @@ export class MultiSignerManager {
         invokeOp.func,
         authEntries,
         selectedSigners,
-        options
+        options,
+        allowWalletMutation
       );
     } catch (err) {
       return failedTransaction(wrapError(err, SmartAccountErrorCode.TRANSACTION_SUBMISSION_FAILED));

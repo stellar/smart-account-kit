@@ -14,6 +14,7 @@ import {
   Keypair,
   Networks,
   Operation,
+  StrKey,
   Transaction,
   TransactionBuilder,
   xdr,
@@ -25,15 +26,16 @@ import {
   API_KEY_MIN_LENGTH,
   API_KEY_PREFIX,
   DEFAULT_MAX_RESOURCE_FEE_STROOPS,
+  DEFAULT_MAX_TOTAL_FEE_STROOPS,
   DEFAULT_RATE_LIMIT_GLOBAL,
   DEFAULT_RATE_LIMIT_PER_IP,
   DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
   DEFAULT_WALLET_FUNCTIONS,
   FRIENDBOT_URL,
   IP_HEADERS,
-  MISSING_ACCOUNT_PATTERN,
   SERVICE_NAME,
   SIMULATION_SOURCE,
+  STELLAR_ADDRESS_LENGTH,
   TESTNET_RETRY_DURATION_MS,
   UNKNOWN_IP,
 } from "./constants";
@@ -105,7 +107,10 @@ app.onError((error, c) => {
 function setCorsHeaders(headers: Headers, origin: string): void {
   headers.set("Access-Control-Allow-Origin", origin);
   headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  headers.set("Access-Control-Allow-Headers", "Content-Type");
+  headers.set(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Client-Name, X-Client-Version"
+  );
   headers.append("Vary", "Origin");
 }
 
@@ -142,6 +147,22 @@ function maxResourceFee(env: Env): bigint {
   } catch {
     throw new RequestError(
       "MAX_RESOURCE_FEE_STROOPS must be a non-negative integer",
+      500
+    );
+  }
+}
+
+function maxTotalFee(env: Env): bigint {
+  try {
+    const value =
+      env.MAX_TOTAL_FEE_STROOPS === undefined
+        ? DEFAULT_MAX_TOTAL_FEE_STROOPS
+        : BigInt(env.MAX_TOTAL_FEE_STROOPS);
+    if (value < 0n) throw new Error("negative");
+    return value;
+  } catch {
+    throw new RequestError(
+      "MAX_TOTAL_FEE_STROOPS must be a non-negative integer",
       500
     );
   }
@@ -636,7 +657,7 @@ async function validateFuncSubmission(
     const entry = auth[0];
     const credentials = entry.credentials();
     if (credentials.switch().name !== "sorobanCredentialsAddress") {
-      throw new RequestError("Deploy requires legacy V1 address credentials", 403);
+      throw new RequestError("Deploy requires V1 address credentials", 403);
     }
     const signer = Address.fromScAddress(credentials.address().address()).toString();
     const root = entry.rootInvocation();
@@ -726,6 +747,9 @@ function validateXdrSubmission(
   if (transaction.source === SHARED_DEPLOYER) {
     throw new RequestError("Shared deployer may not source signed xdr", 403);
   }
+  if (BigInt(transaction.fee) > maxTotalFee(env)) {
+    throw new RequestError("Transaction fee exceeds configured maximum", 413);
+  }
   if (transaction.operations.length !== 1) {
     throw new RequestError("Deploy transaction must contain exactly one operation", 403);
   }
@@ -773,7 +797,15 @@ function createClient(env: Env, apiKey: string): ChannelsClient {
 }
 
 export function extractMissingAccount(errorMessage: string): string | null {
-  return errorMessage.match(MISSING_ACCOUNT_PATTERN)?.[1] ?? null;
+  const marker = "Account not found:";
+  const markerIndex = errorMessage.indexOf(marker);
+  if (markerIndex < 0) return null;
+
+  const candidate = errorMessage
+    .slice(markerIndex + marker.length)
+    .trimStart()
+    .slice(0, STELLAR_ADDRESS_LENGTH);
+  return StrKey.isValidEd25519PublicKey(candidate) ? candidate : null;
 }
 
 async function fundWithFriendbot(account: string): Promise<boolean> {

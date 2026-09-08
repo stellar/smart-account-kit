@@ -37,10 +37,7 @@ export const API_KEY_MAX_LENGTH = 200;
 // ============================================================================
 
 /** Length of Stellar account address (G-address) */
-export const STELLAR_ADDRESS_LENGTH = 55;
-
-/** Regex pattern for extracting missing account from error */
-export const MISSING_ACCOUNT_PATTERN = /Account not found:\s*(G[A-Z0-9]{55})/;
+export const STELLAR_ADDRESS_LENGTH = 56;
 
 // ============================================================================
 // Retry Configuration
@@ -57,6 +54,7 @@ export const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60;
 export const DEFAULT_RATE_LIMIT_PER_IP = 10;
 export const DEFAULT_RATE_LIMIT_GLOBAL = 100;
 export const DEFAULT_MAX_RESOURCE_FEE_STROOPS = 1_000_000n;
+export const DEFAULT_MAX_TOTAL_FEE_STROOPS = 1_100_000n;
 export const SIMULATION_SOURCE =
   "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 

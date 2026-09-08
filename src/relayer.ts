@@ -131,37 +131,12 @@ export class RelayerClient {
     return nested ?? root;
   }
 
-  private hasTransactionFields(value: unknown): boolean {
-    const data = this.asObject(value);
-    if (!data) {
-      return false;
-    }
-    return (
-      typeof data.transactionId === "string" ||
-      typeof data.hash === "string" ||
-      typeof data.status === "string"
-    );
-  }
-
   private isSuccessResponse(response: Response, responseData: unknown): boolean {
     const root = this.asObject(responseData);
     if (!root) {
       return false;
     }
-    if (root.success === true) {
-      return true;
-    }
-    if (!response.ok || root.success === false) {
-      return false;
-    }
-
-    // Backward compatibility: some relayer proxies return tx fields directly
-    // without a top-level `success` boolean.
-    if (this.hasTransactionFields(root)) {
-      return true;
-    }
-    const nested = this.asObject(root.data);
-    return this.hasTransactionFields(nested);
+    return response.ok && root.success === true;
   }
 
   private extractErrorMessage(responseData: unknown, status: number): string {

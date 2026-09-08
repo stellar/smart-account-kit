@@ -47,7 +47,7 @@ Keep this list narrower than `acceptedWasmHashes`.
 
 The SDK retains confirmed birth data in credential storage.
 It never treats address occupancy as deployment confirmation.
-Pending, failed, occupied, and legacy predictions remain disconnected.
+Pending, failed, occupied, and unverified predictions remain disconnected.
 
 Fresh-device recovery accepts the immutable primary passkey only.
 A verified local association keeps a secondary passkey usable on the same device.
@@ -77,7 +77,7 @@ See [`mainnet-hardening.md`](./mainnet-hardening.md) for the required values and
 
 Fresh-device recovery requires a complete schema-2 lookup response.
 The response must include immutable birth metadata and a complete ledger position.
-The SDK rejects legacy, malformed, incomplete, and duplicate claims.
+The SDK rejects schema-1, malformed, incomplete, and duplicate claims.
 
 An incomplete candidate must include a known candidate-level reason.
 An incomplete response can include `reducer_errors` or `index_behind`.

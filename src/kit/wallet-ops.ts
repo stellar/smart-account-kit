@@ -63,7 +63,6 @@ export async function createWallet(
       authenticatorSelection?: {
         authenticatorAttachment?: "platform" | "cross-platform";
         residentKey?: "discouraged" | "preferred" | "required";
-        userVerification?: "discouraged" | "preferred" | "required";
       }
     ) => Promise<{ rawResponse: RegistrationResponseJSON; credentialId: string; publicKey: Uint8Array }>;
     /**
@@ -95,7 +94,6 @@ export async function createWallet(
     authenticatorSelection?: {
       authenticatorAttachment?: "platform" | "cross-platform";
       residentKey?: "discouraged" | "preferred" | "required";
-      userVerification?: "discouraged" | "preferred" | "required";
     };
     autoSubmit?: boolean;
     autoFund?: boolean;
@@ -264,7 +262,7 @@ export async function connectWallet(
   const authOptions: PublicKeyCredentialRequestOptionsJSON = {
     challenge,
     rpId: deps.rpId,
-    userVerification: "preferred",
+    userVerification: "required",
     timeout: WEBAUTHN_TIMEOUT_MS,
   };
 

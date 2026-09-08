@@ -5,11 +5,13 @@ import {
   validateContextRuleName,
   validateExternalKeySize,
   validatePolicyCount,
+  validateSigner,
   validateSigners,
   validateValidUntil,
 } from "./validation";
 import { ValidationError } from "./errors";
 import { MAX_EXTERNAL_KEY_SIZE, MAX_POLICIES, MAX_SIGNERS } from "./constants";
+import { DEFAULT_DEPLOYER_PUBLIC_KEY } from "./utils";
 
 function delegated(seed: number): ContractSigner {
   return { tag: "Delegated", values: [`G${"A".repeat(55)}`.slice(0, 56) + seed] };
@@ -73,6 +75,15 @@ describe("validateSigners", () => {
     expect(() => validateSigners([external(MAX_EXTERNAL_KEY_SIZE + 1)])).toThrow(
       ValidationError
     );
+  });
+
+  it("rejects the shared default deployer as a delegated signer", () => {
+    expect(() =>
+      validateSigner({
+        tag: "Delegated",
+        values: [DEFAULT_DEPLOYER_PUBLIC_KEY],
+      })
+    ).toThrow(ValidationError);
   });
 });
 

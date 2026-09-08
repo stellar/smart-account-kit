@@ -16,7 +16,7 @@ It wraps the official [`@openzeppelin/relayer-plugin-channels`](https://www.npmj
 
 ## Features
 
-- Fail-closed wallet contract/function, direct token-transfer, deployer, WASM, credential, auth-root, and resource-fee validation before any API key is read or minted.
+- Fail-closed wallet, deployer, WASM, credential, auth-root, resource-fee, and total-fee validation before any API key access.
 - Explicit CORS origins and atomic global/per-IP rate limits through a Durable Object.
 - **Per-IP API key model**: the proxy mints one Relayer API key per client IP (via the Relayer's public `/gen` endpoint) and stores it in the `API_KEYS` KV namespace under `api-key:<ip>`, persisted indefinitely.
 - Relayer's usage limits reset every 24 hours on their side — no need to regenerate keys.
@@ -35,7 +35,7 @@ POST /
 Body: { "func": "base64-encoded-func", "auth": ["base64-auth-entry", ...] }
 Body: { "xdr": "base64-signed-transaction-envelope" }
 ```
-`func` submissions may contain an allowlisted wallet invocation with address-bound V2 credentials or an allowlisted direct token transfer. They may also contain one `createContractV2` function with one matching legacy V1 deploy authorization entry. A deployment must contain one External WebAuthn signer and a credential-derived salt.
+`func` submissions may contain an allowlisted wallet invocation with address-bound V2 credentials or an allowlisted direct token transfer. They may also contain one `createContractV2` function with one matching V1 deploy authorization entry. A deployment must contain one External WebAuthn signer and a credential-derived salt.
 
 Signed `xdr` accepts one source-signed dedicated-deployer `createContractV2` operation. Its source must equal its preimage deployer. The shared deterministic deployer cannot be an XDR source.
 
@@ -62,7 +62,8 @@ wrangler deploy
 
 ```
 
-The proxy keeps its non-secret runtime config in `wrangler.toml`: exact browser origins, deployer addresses, account WASM hashes, explicit wallet IDs/functions, token IDs, RPC URL, resource-fee ceiling, and global/per-IP rate limits. Empty allowlists reject requests. `.dev.vars.example` contains local overrides. The committed KV namespace ID is a Cloudflare resource identifier, not a secret.
+The proxy keeps its non-secret runtime config in `wrangler.toml`. This config includes both resource-fee and total-fee ceilings.
+It also includes exact origins, allowlists, the RPC URL, and rate limits. Empty allowlists reject requests.
 
 ## Tests
 

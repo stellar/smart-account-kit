@@ -1,6 +1,6 @@
 export { ContextRulesPanel } from "./ContextRulesPanel";
 export { ContextRuleBuilder } from "./ContextRuleBuilder";
-export { ActiveSignerDisplay, formatSigner } from "./ActiveSignerDisplay";
+export { ActiveSignerDisplay } from "./ActiveSignerDisplay";
 export { SignerPicker, type SelectedSigner } from "./SignerPicker";
 export { ConfigPanel } from "./ConfigPanel";
 export { ExternalWalletsPanel } from "./ExternalWalletsPanel";

@@ -59,16 +59,17 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
-    "@stellar/stellar-sdk": ">=16.0.0",
+    "@stellar/stellar-sdk": "^16.3.0",
     "base64url": "^3.0.1",
     "smart-account-kit-bindings": "workspace:*"
   },
   "devDependencies": {
-    "@creit-tech/stellar-wallets-kit": "jsr:2.1.0",
+    "@creit-tech/stellar-wallets-kit": "jsr:2.5.0",
     "@types/node": "^25.5.2",
+    "@types/react": "^19.2.18",
     "fake-indexeddb": "^6.2.5",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "vitest": "^5.0.0"
   },
   "engines": {
     "node": ">=22.0.0",
@@ -76,8 +77,8 @@
   },
   "packageManager": "pnpm@10.33.0",
   "peerDependencies": {
-    "@creit-tech/stellar-wallets-kit": ">=2.1.0",
-    "@stellar/stellar-sdk": ">=16.0.0"
+    "@creit-tech/stellar-wallets-kit": ">=2.1.0 <2.6.0",
+    "@stellar/stellar-sdk": "^16.3.0"
   },
   "peerDependenciesMeta": {
     "@creit-tech/stellar-wallets-kit": {
@@ -86,7 +87,25 @@
   },
   "pnpm": {
     "overrides": {
-      "@stellar/stellar-sdk": "$@stellar/stellar-sdk"
+      "@stellar/stellar-sdk": "$@stellar/stellar-sdk",
+      "@protobufjs/utf8": "1.1.1",
+      "axios": "1.20.0",
+      "bn.js@<5.0.0": "4.12.3",
+      "bn.js@>=5.0.0": "5.2.3",
+      "defu": "6.1.5",
+      "form-data": "4.0.6",
+      "h3": "1.15.9",
+      "ip-address": "10.3.1",
+      "nanoid@<4.0.0": "3.3.18",
+      "picomatch": "4.0.4",
+      "protobufjs": "7.6.6",
+      "sharp": "0.35.0",
+      "stream-json": "3.5.0",
+      "ua-parser-js": "2.0.10",
+      "undici": "7.29.0",
+      "uuid": "11.1.1",
+      "ws@<8.0.0": "7.5.11",
+      "ws@>=8.0.0": "8.21.0"
     }
   },
   "publishConfig": {

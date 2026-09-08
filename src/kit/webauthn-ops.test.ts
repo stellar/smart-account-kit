@@ -51,7 +51,13 @@ describe("createPasskey", () => {
 
     const result = await createPasskey(deps, "App", "alice");
 
-    expect(startRegistration).toHaveBeenCalled();
+    expect(startRegistration).toHaveBeenCalledWith({
+      optionsJSON: expect.objectContaining({
+        authenticatorSelection: expect.objectContaining({
+          userVerification: "required",
+        }),
+      }),
+    });
     expect(result.credentialId).toBe("cred-abc");
     expect(result.publicKey).toHaveLength(65);
     expect(result.publicKey[0]).toBe(0x04);
@@ -69,7 +75,9 @@ describe("authenticatePasskey", () => {
     const result = await authenticatePasskey(deps);
 
     expect(result.credentialId).toBe("cred-xyz");
-    expect(startAuthentication).toHaveBeenCalled();
+    expect(startAuthentication).toHaveBeenCalledWith({
+      optionsJSON: expect.objectContaining({ userVerification: "required" }),
+    });
   });
 });
 
@@ -95,11 +103,12 @@ describe("signAuthEntry", () => {
     });
 
     const update = vi.fn();
+    const calculateExpiration = vi.fn(async () => 1000);
     const deps = {
       rpName: "Test App",
       networkPassphrase: NETWORK,
       storage: { update },
-      calculateExpiration: async () => 1000,
+      calculateExpiration,
       getCredentialId: () => credentialId,
       requireWallet: () => ({ wallet: {}, contractId: CONTRACT }),
       rpc: {} as never,
@@ -119,6 +128,11 @@ describe("signAuthEntry", () => {
     const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
     expect(payload.context_rule_ids).toEqual([0]);
     expect(payload.signers.size).toBe(1);
+    expect(getAddressCredentials(signed.credentials()).signatureExpirationLedger()).toBe(1);
+    expect(calculateExpiration).not.toHaveBeenCalled();
+    expect(startAuthentication).toHaveBeenCalledWith({
+      optionsJSON: expect.objectContaining({ userVerification: "required" }),
+    });
     expect(update).toHaveBeenCalledWith(credentialId, expect.objectContaining({ lastUsedAt: expect.any(Number) }));
   });
 

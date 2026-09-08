@@ -112,6 +112,33 @@ function makeBuiltTransaction(auth: xdr.SorobanAuthorizationEntry[] = []) {
     .build();
 }
 
+function makeWalletMutation(
+  contractId: string,
+  functionName = "add_signer"
+): {
+  hostFunction: xdr.HostFunction;
+  authEntry: xdr.SorobanAuthorizationEntry;
+} {
+  const invokeArgs = new xdr.InvokeContractArgs({
+    contractAddress: Address.fromString(contractId).toScAddress(),
+    functionName,
+    args: [],
+  });
+  return {
+    hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(invokeArgs),
+    authEntry: new xdr.SorobanAuthorizationEntry({
+      credentials: makeAddressAuthEntry(contractId).credentials(),
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function:
+          xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+            invokeArgs
+          ),
+        subInvocations: [],
+      }),
+    }),
+  };
+}
+
 describe("MultiSignerManager", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -499,6 +526,85 @@ describe("MultiSignerManager", () => {
     expect(resolveContextRuleIdsForEntry).toHaveBeenCalledTimes(1);
     expect(deps.signAuthEntry).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ success: true, hash: "tx-3" });
+  });
+
+  it("refuses wallet mutations through the generic multi-signer operation", async () => {
+    const deps = makeDeps();
+    const contractId = deps.getContractId();
+    const { hostFunction, authEntry } = makeWalletMutation(contractId);
+    deps.rpc.getLatestLedger.mockResolvedValue({ sequence: 450 });
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.operation(
+      {
+        built: {
+          operations: [
+            {
+              type: "invokeHostFunction",
+              func: hostFunction,
+              auth: [authEntry],
+            },
+          ],
+        },
+      } as any,
+      [
+        {
+          signer: makeExternalSigner(3, 4, 5),
+          type: "passkey",
+          credentialId: Buffer.alloc(20, 5).toString("base64url"),
+        },
+      ]
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe(SmartAccountErrorCode.INVALID_INPUT);
+      expect(result.error.message).toContain("dedicated admin signing method");
+    }
+    expect(deps.signAuthEntry).not.toHaveBeenCalled();
+    expect(deps.sendAndPoll).not.toHaveBeenCalled();
+  });
+
+  it("binds admin multi-signer authorization to the transaction host function", async () => {
+    const deps = makeDeps();
+    const contractId = deps.getContractId();
+    const { hostFunction, authEntry } = makeWalletMutation(contractId);
+    const preparedTx = { sign: vi.fn() };
+    deps.rpc.getLatestLedger.mockResolvedValue({ sequence: 475 });
+    deps.rpc.simulateTransaction.mockResolvedValue({ result: { auth: [] } });
+    deps.shouldUseFeeSponsoring.mockReturnValue(true);
+    deps.sendAndPoll.mockResolvedValue({ success: true, hash: "tx-admin" });
+    deps.signAuthEntry.mockImplementation(async (entry) => entry);
+    assembleTransactionMock.mockReturnValue({ build: () => preparedTx });
+    vi.mocked(resolveContextRuleIdsForEntry).mockResolvedValue([12]);
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.adminOperation(
+      {
+        built: {
+          operations: [
+            {
+              type: "invokeHostFunction",
+              func: hostFunction,
+              auth: [authEntry],
+            },
+          ],
+        },
+      } as any,
+      [
+        {
+          signer: makeExternalSigner(3, 4, 5),
+          type: "passkey",
+          credentialId: Buffer.alloc(20, 5).toString("base64url"),
+        },
+      ]
+    );
+
+    expect(deps.signAuthEntry).toHaveBeenCalledWith(
+      expect.any(xdr.SorobanAuthorizationEntry),
+      expect.objectContaining({ walletMutationHostFunction: hostFunction })
+    );
+    expect(result).toEqual({ success: true, hash: "tx-admin" });
   });
 
   it("preserves delegated wallet signers when passkey signing returns a cloned auth entry", async () => {

@@ -2,6 +2,38 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
+## Unreleased
+
+### Breaking security changes
+
+- Require `@stellar/stellar-sdk@^16.3.0` across the SDK, bindings, demos, and relayer proxy.
+- Require `@creit-tech/stellar-wallets-kit` below `2.6.0` while the kit targets Stellar SDK 16.
+- Require WebAuthn user verification for registration and every authentication ceremony.
+- Require the browser to return `response.publicKey` during passkey registration.
+- Make generic signing methods reject smart-account execution, upgrades, and configuration changes.
+- Add `signAdmin()`, `signAndSubmitAdmin()`, and `multiSigners.adminOperation()` for account mutations.
+- Bind each admin authorization root to the exact transaction host function before signing.
+- Reject public JavaScript attempts to inject internal signer or admin authorization options.
+- Require explicit relayer success responses and valid 32-byte transaction hashes.
+
+### Fixed
+
+- Sort constructor policy maps and signer maps with Soroban host ordering.
+- Report invalid policy addresses through the typed validation error path.
+- Decode `CreateContract` and `CreateContractV2` authorization contexts with SDK 16 accessors.
+- Reject malformed or off-curve WebAuthn public keys instead of slicing invalid attestation data.
+- Reject the shared deterministic deployer as a delegated signer.
+- Preserve existing authorization expiry values and clamp generated values to `u32`.
+- Add a total transaction-fee limit to the relayer proxy.
+- Validate missing-account messages before the relayer uses Friendbot.
+- Allow required SDK client headers in relayer CORS preflight responses.
+
+### Maintenance
+
+- Update the demo, test runner, build tools, wallet kit, relayer tools, and patched transitive dependencies.
+- Add dependency-audit and binding-parity checks to CI.
+- Update README examples to use the dedicated admin signing methods.
+
 ## 0.7.1 — 2026-09-08
 
 - Added typed schema-2 incomplete reasons and the historical signer-data label.

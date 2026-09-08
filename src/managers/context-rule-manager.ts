@@ -12,6 +12,7 @@ import type { Signer as ContractSigner, ContextRuleType, ContextRule } from "sma
 import type { ContractDetailsResponse } from "../indexer.js";
 import { getFilteredContextRules, listContextRules, readContextRule } from "../kit/context-rules.js";
 import { validateContextRule, validateContextRuleName, validateValidUntil } from "../validation.js";
+import { sortPolicyMap } from "../kit/policies-ops.js";
 
 /** Dependencies required by ContextRuleManager */
 export interface ContextRuleManagerDeps {
@@ -97,7 +98,7 @@ export class ContextRuleManager {
       name,
       valid_until: validUntil,
       signers,
-      policies,
+      policies: sortPolicyMap(policies),
     });
   }
 

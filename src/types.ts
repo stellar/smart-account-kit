@@ -87,7 +87,7 @@ export interface StoredCredential {
 
   /**
    * Whether this was the primary passkey used to deploy the wallet.
-   * An omitted legacy value is not trusted as a secondary association.
+   * An omitted value does not prove a secondary association.
    */
   isPrimary?: boolean;
 

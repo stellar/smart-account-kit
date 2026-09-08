@@ -658,11 +658,7 @@ export function ContextRuleBuilder({
             encodePolicyInstallParam(kit, sp, signers, webauthnVerifierAddress, ed25519VerifierAddress)
           );
         }
-        const sortedPolicies = new Map(
-          [...policies.entries()].sort(([a], [b]) => a.localeCompare(b))
-        );
-
-        const tx = await kit.rules.add(ctxType, name.trim(), builtSigners, sortedPolicies, validUntil);
+        const tx = await kit.rules.add(ctxType, name.trim(), builtSigners, policies, validUntil);
         const result = await runSubmit(tx);
         if (!result.success) {
           throw new Error(result.error || "Failed to create rule");

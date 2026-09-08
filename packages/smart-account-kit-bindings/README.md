@@ -15,7 +15,7 @@ Most applications should install [`smart-account-kit`](https://www.npmjs.com/pac
 ## Install
 
 ```bash
-pnpm add smart-account-kit-bindings @stellar/stellar-sdk
+pnpm add smart-account-kit-bindings @stellar/stellar-sdk@^16.3.0
 ```
 
 ## Use the generated client
