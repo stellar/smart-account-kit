@@ -69,6 +69,14 @@ export const RelayerErrorCodes = {
 
 export type RelayerErrorCode = (typeof RelayerErrorCodes)[keyof typeof RelayerErrorCodes];
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 /**
  * Relayer client for fee-sponsored transaction submission via proxy.
  *
@@ -100,7 +108,7 @@ export class RelayerClient {
       throw new Error("Relayer URL is required");
     }
 
-    this.url = url.replace(/\/+$/, "");
+    this.url = trimTrailingSlashes(url);
     this.timeout = timeout;
   }
 

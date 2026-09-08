@@ -186,17 +186,21 @@ function hexBytes(value: string): Uint8Array {
   return Uint8Array.from(value.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
 }
 
-const DEPLOY_CREDENTIAL_ID = Buffer.from("relayer-test-credential");
+const DEPLOY_CREDENTIAL_ID = Uint8Array.from(
+  "relayer-test-credential",
+  (character) => character.charCodeAt(0),
+);
 
 function deployConstructorArgs(extraSigner = false): xdr.ScVal[] {
-  const publicKey = Buffer.alloc(65, 7);
+  const publicKey = new Uint8Array(65).fill(7);
   publicKey[0] = 0x04;
+  const keyData = new Uint8Array(publicKey.length + DEPLOY_CREDENTIAL_ID.length);
+  keyData.set(publicKey);
+  keyData.set(DEPLOY_CREDENTIAL_ID, publicKey.length);
   const signer = xdr.ScVal.scvVec([
     xdr.ScVal.scvSymbol("External"),
     Address.fromString(WALLET).toScVal(),
-    xdr.ScVal.scvBytes(
-      Buffer.concat([publicKey, DEPLOY_CREDENTIAL_ID])
-    ),
+    xdr.ScVal.scvBytes(keyData),
   ]);
   return [
     xdr.ScVal.scvVec(extraSigner ? [signer, signer] : [signer]),
