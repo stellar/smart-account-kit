@@ -50,6 +50,8 @@ jobs:
 
       - run: pnpm --filter indexer-demo build
 
+      - uses: stellar/stellar-cli@v28.0.0
+
       - run: pnpm verify:bindings
 
       - run: pnpm pack --dry-run
