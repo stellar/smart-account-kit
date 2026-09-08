@@ -30,8 +30,6 @@ TypeScript SDK for deploying and managing OpenZeppelin smart account contracts o
 - **Storage adapters** — flexible credential storage (IndexedDB, localStorage, memory, custom)
 
 > **Upgrading from 0.6.x?** See the [v0.7.0 migration guide](docs/migration-v0.7.0.md) before you update.
->
-> **Upgrading from 0.3.0?** See the [v0.4.0 migration guide](docs/migration-v0.4.0.md).
 
 ## Concepts
 
@@ -53,8 +51,10 @@ The kit is a client for the OpenZeppelin [`stellar-contracts`](https://github.co
 ## Installation
 
 ```bash
-pnpm add smart-account-kit
+pnpm add smart-account-kit @stellar/stellar-sdk@^16.3.0
 ```
+
+The current package supports Stellar SDK `16.3.x`. Stellar SDK 17 changes the authorization API. Do not install version 17 with this release. If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit@2.5.0`.
 
 ## Quick Start
 
@@ -202,8 +202,10 @@ import { SmartAccountKit } from 'smart-account-kit';
 | `authenticatePasskey()` | Request a passkey response for discovery without connecting or verifying wallet ownership |
 | `discoverContractsByCredential(credentialId)` | Find contracts by credential ID via the indexer |
 | `discoverContractsByAddress(address)` | Find contracts by G/C-address via the indexer |
-| `sign(transaction, options?)` | Sign auth entries only (prefer `signAndSubmit`) |
-| `signAndSubmit(transaction, options?)` | Sign, re-simulate, and submit (recommended) |
+| `sign(transaction, options?)` | Sign non-administrative auth entries only |
+| `signAndSubmit(transaction, options?)` | Sign, re-simulate, and submit a non-administrative transaction |
+| `signAdmin(transaction, options?)` | Sign one administrative smart-account transaction |
+| `signAndSubmitAdmin(transaction, options?)` | Sign, re-simulate, and submit one administrative transaction |
 | `signAuthEntry(authEntry, options?)` | Sign a single auth entry (low-level) |
 | `execute(target, targetFn, targetArgs)` | Build a smart-account-mediated contract call |
 | `executeAndSubmit(target, targetFn, targetArgs, options?)` | Build + sign + submit a smart-account-mediated call |
@@ -214,13 +216,13 @@ import { SmartAccountKit } from 'smart-account-kit';
 | `convertPolicyParams(policyType, params)` | Convert native policy params to an `xdr.ScVal` |
 | `buildPoliciesScVal(policies, policyTypes)` | Build a sorted policies `Map` as an `xdr.ScVal` |
 
-Submission methods (`transfer`, `signAndSubmit`, `executeAndSubmit`, `fundWallet`, `createWallet`'s deploy step, `multiSigners.*`) return a [`TransactionResult`](#transaction-results--error-handling) and do **not** throw for expected on-chain/relayer failures. Everything else throws typed errors.
+Submission methods (`transfer`, `signAndSubmit`, `signAndSubmitAdmin`, `executeAndSubmit`, `fundWallet`, `createWallet`'s deploy step, `multiSigners.*`) return a [`TransactionResult`](#transaction-results--error-handling) and do **not** throw for expected on-chain/relayer failures. Everything else throws typed errors.
 
 #### Wallet lifecycle
 
 `createWallet()` creates deployment artifacts for a new smart account tied to a freshly generated passkey. With `autoSubmit: true`, it connects only after deployment succeeds. With manual submission, confirm the transaction and call `connectWallet()`. `connectWallet()` restores or prompts into an existing wallet. `authenticatePasskey()` returns an unverified response for discovery. `disconnect()` only clears session state.
 
-For transactions, `signAndSubmit()` is the default for smart-account auth flows and the canonical way to submit an assembled transaction returned by any of the sub-managers (`kit.rules.*`, `kit.signers.*`, `kit.policies.*`, `kit.upgrade`, and the policy clients). `executeAndSubmit()` is the one-shot path for arbitrary smart-account-mediated contract calls, and `sign()` / `signAuthEntry()` remain available when you need to inspect or compose around signed auth entries directly.
+For non-administrative transactions, `signAndSubmit()` is the default smart-account auth flow. Use `signAndSubmitAdmin()` for transactions from `kit.rules.*`, `kit.signers.*`, `kit.policies.*`, `kit.upgrade`, and the policy clients. `executeAndSubmit()` is the one-shot administrative path for smart-account-mediated contract calls. `sign()` and `signAuthEntry()` remain available for non-administrative custom signing flows.
 
 #### Sub-manager properties
 
@@ -259,14 +261,14 @@ const result = await kit.transfer('CTOKEN...', 'GRECIPIENT...', 100);
 
 // Build an arbitrary smart-account-mediated call
 const tx = await kit.execute('CTARGET...', 'set_config', [owner, threshold]);
-const execResult = await kit.signAndSubmit(tx);
+const execResult = await kit.signAndSubmitAdmin(tx);
 
 // Or build + sign + submit in one step
 const oneShot = await kit.executeAndSubmit('CTARGET...', 'set_config', [owner, threshold]);
 
 // Upgrade the account's WASM (self-authorized)
 const upgradeTx = await kit.upgrade('1b5f4534...'); // 32-byte hex or Buffer
-await kit.signAndSubmit(upgradeTx);
+await kit.signAndSubmitAdmin(upgradeTx);
 
 // Disconnect
 await kit.disconnect();
@@ -327,7 +329,7 @@ const err = decodeContractError('HostError: Error(Contract, #3221)');
 
 #### SignerManager (`kit.signers`)
 
-Manage signers on context rules. Each mutating method returns an `AssembledTransaction` (or, for `addPasskey`, an object containing one); submit it with `kit.signAndSubmit(tx)` — or `kit.multiSigners.operation(tx, selected)` when the rule needs multiple signers.
+Manage signers on context rules. Each mutating method returns an `AssembledTransaction`. Use `kit.signAndSubmitAdmin(tx)` for one passkey. Use `kit.multiSigners.adminOperation(tx, selected)` for multiple signers.
 
 | Method | Description |
 |--------|-------------|
@@ -345,19 +347,19 @@ const { credentialId, transaction } = await kit.signers.addPasskey(
   'Recovery Key',
   { nickname: 'Backup Key' }
 );
-await kit.signAndSubmit(transaction);
+await kit.signAndSubmitAdmin(transaction);
 
 // Add a delegated (Stellar account) signer
 const delegatedTx = await kit.signers.addDelegated(0, 'GABC...');
-await kit.signAndSubmit(delegatedTx);
+await kit.signAndSubmitAdmin(delegatedTx);
 
 // Add several signers at once
 const batchTx = await kit.signers.addBatch(0, [signerA, signerB]);
-await kit.signAndSubmit(batchTx);
+await kit.signAndSubmitAdmin(batchTx);
 
 // Remove a signer by value
 const removeTx = await kit.signers.remove(0, signer);
-await kit.signAndSubmit(removeTx);
+await kit.signAndSubmitAdmin(removeTx);
 ```
 
 #### ContextRuleManager (`kit.rules`)
@@ -386,7 +388,7 @@ const addTx = await kit.rules.add(
   [passkeySigner, delegatedSigner],
   new Map([[thresholdPolicyAddress, params]]),
 );
-await kit.signAndSubmit(addTx);
+await kit.signAndSubmitAdmin(addTx);
 
 // Read a specific rule directly from chain
 const { result: rule } = await kit.rules.get(0);
@@ -396,9 +398,9 @@ const rules = await kit.rules.list();
 const defaults = await kit.rules.getAll(createDefaultContext());
 
 // Update / remove
-await kit.signAndSubmit(await kit.rules.updateName(0, 'New Name'));
-await kit.signAndSubmit(await kit.rules.updateExpiration(0, expirationLedger));
-await kit.signAndSubmit(await kit.rules.remove(1));
+await kit.signAndSubmitAdmin(await kit.rules.updateName(0, 'New Name'));
+await kit.signAndSubmitAdmin(await kit.rules.updateExpiration(0, expirationLedger));
+await kit.signAndSubmitAdmin(await kit.rules.remove(1));
 ```
 
 `kit.rules.get()` reads a specific rule directly from the contract. `kit.rules.list()` and `kit.rules.getAll()` prefer indexer-provided active IDs, then probe IDs `0`–`8` on-chain by default, stopping after three consecutive misses. Configure that bounded fallback with `contextRuleProbe`, or disable it with `{ enabled: false }`. Because the contract exposes individual lookups but no iterator over active IDs after deletions, an indexer remains the reliable source for sparse or higher-numbered rules.
@@ -424,11 +426,11 @@ const params = kit.convertPolicyParams('spending_limit', createSpendingLimitPara
   LEDGERS_PER_DAY // rolling period (~17,280 ledgers)
 ));
 const addTx = await kit.policies.add(0, spendingLimitPolicyAddress, params);
-await kit.signAndSubmit(addTx);
+await kit.signAndSubmitAdmin(addTx);
 
 // Remove a policy
 const removeTx = await kit.policies.remove(0, spendingLimitPolicyAddress);
-await kit.signAndSubmit(removeTx);
+await kit.signAndSubmitAdmin(removeTx);
 ```
 
 `kit.policies.add()` takes an `xdr.ScVal`. Use `kit.convertPolicyParams(type, params)` to build one for the example policies, or pass a raw `xdr.ScVal` for a custom policy. See [Typed Policy Clients](#typed-policy-clients-kitpolicyclients) for reading/updating installed policies.
@@ -474,7 +476,8 @@ Multi-signer transaction flows, coordinating passkeys, Ed25519 keys, and delegat
 | `getAvailableSigners()` | Collect unique signers from the account's default rules |
 | `needsMultiSigner(signers)` | Whether a signer set requires the multi-signer path |
 | `buildSelectedSigners(signers, activeCredentialId?)` | Build a `SelectedSigner[]` from on-chain signers you can sign for |
-| `operation(assembledTx, selectedSigners, options?)` | Submit any assembled transaction with the selected signers |
+| `operation(assembledTx, selectedSigners, options?)` | Submit a non-administrative transaction with the selected signers |
+| `adminOperation(assembledTx, selectedSigners, options?)` | Submit an account execution, upgrade, or configuration change |
 | `transfer(tokenContract, recipient, amount, selectedSigners, options?)` | Multi-signer token transfer (signed as a direct token invocation, so token-scoped context rules and their policies apply) |
 
 ```typescript
@@ -487,13 +490,15 @@ const result = await kit.multiSigners.transfer('CTOKEN...', 'GRECIPIENT...', 100
 
 // Or submit any assembled transaction with multiple signers
 const tx = await kit.rules.add(/* ... */);
-await kit.multiSigners.operation(tx, selected, {
+await kit.multiSigners.adminOperation(tx, selected, {
   // Pin the auth context explicitly when a tx can match more than one rule
   resolveContextRuleIds: (entry, index) => [0],
 });
 ```
 
-The single-signer `kit.transfer()` / `kit.signAndSubmit()` convenience path is **passkey-only** by design. Any Ed25519 or delegated signer, or more than one signer, must go through `kit.multiSigners`.
+The single-signer methods use one passkey. Any Ed25519 or delegated signer requires `kit.multiSigners`.
+
+Generic signing methods refuse smart-account execution, upgrades, and configuration changes. Use `signAdmin()`, `signAndSubmitAdmin()`, or `adminOperation()` for these changes. Each admin method binds the authorization root to the transaction host function.
 
 ---
 
@@ -542,7 +547,7 @@ const ed25519Signer = createEd25519Signer(
   kit.ed25519VerifierAddress!,
   Buffer.from(publicKey, 'hex') // 32-byte key data
 );
-await kit.signAndSubmit(await kit.signers.addBatch(0, [ed25519Signer]));
+await kit.signAndSubmitAdmin(await kit.signers.addBatch(0, [ed25519Signer]));
 
 // 3. Sign with it via the multi-signer path
 const signers = await kit.multiSigners.getAvailableSigners();
@@ -572,20 +577,20 @@ First-class read/write clients for the three example policies. **Getters** read 
 const threshold = kit.policyClients.threshold(policyAddress);
 const current = await threshold.getThreshold(ruleId);
 const { result: rule } = await kit.rules.get(ruleId);
-await kit.signAndSubmit(await threshold.setThreshold(3, rule));
+await kit.signAndSubmitAdmin(await threshold.setThreshold(3, rule));
 
 // Weighted threshold — order matters when reconfiguring: raise weights before
 // raising the threshold; lower the threshold before lowering/zeroing weights.
 const weighted = kit.policyClients.weighted(policyAddress);
 const total = await weighted.getThreshold(ruleId);
 const weights = await weighted.getSignerWeights(rule);      // Map<Signer, number>
-await kit.signAndSubmit(await weighted.setSignerWeight(signer, 100, rule));
-await kit.signAndSubmit(await weighted.setThreshold(150, rule));
+await kit.signAndSubmitAdmin(await weighted.setSignerWeight(signer, 100, rule));
+await kit.signAndSubmitAdmin(await weighted.setThreshold(150, rule));
 
 // Spending limit
 const spending = kit.policyClients.spendingLimit(policyAddress);
 const data = await spending.getSpendingLimitData(ruleId);  // SpendingLimitData
-await kit.signAndSubmit(await spending.setSpendingLimit(2_000_000_000n, rule));
+await kit.signAndSubmitAdmin(await spending.setSpendingLimit(2_000_000_000n, rule));
 ```
 
 > ⚠️ **Signer-set divergence caveat.** Threshold and weighted-threshold policies are **not** auto-notified when a context rule's signer set changes. After adding or removing signers on a rule, call `setThreshold` / `setSignerWeight` to keep the policy consistent with the rule — otherwise authorization for that rule may break. The spending-limit policy only applies to `CallContract` rules and enforces on `transfer` calls (`amount = args[2]`) — attach it to a rule scoped to the token contract; since transfers are signed as direct token invocations, that rule matches them.
@@ -957,7 +962,7 @@ if (result.success) {
 
 ### Indexer Client
 
-The SDK includes an indexer client for reverse lookups from signer credentials to wallet candidates. The built-in provider is **[Mercury](https://mercurydata.app)**. Signer discovery is public. Credential discovery requires the schema-2 birth response in [`indexer/README.md`](indexer/README.md). The SDK rejects legacy credential responses.
+The SDK includes an indexer client for reverse lookups from signer credentials to wallet candidates. The built-in provider is **[Mercury](https://mercurydata.app)**. Signer discovery is public. Credential discovery requires the schema-2 birth response in [`indexer/README.md`](indexer/README.md). The SDK rejects schema-1 and incomplete credential responses.
 
 | Network | Built-in default (Mercury) |
 |---------|----------------------------|
@@ -1122,7 +1127,6 @@ Publish `smart-account-kit-bindings` first only when its generated code changed.
 - [Security policy](SECURITY.md) — supported versions and private vulnerability reporting
 - [Changelog](CHANGELOG.md) — release history
 - [v0.7.0 migration guide](docs/migration-v0.7.0.md) — verified wallet connection and storage changes
-- [v0.4.0 migration guide](docs/migration-v0.4.0.md) — breaking changes from 0.3.0
 - [Deterministic deployer security model](docs/security-deterministic-deployer.md) — connection and deployer controls
 - [Indexer response contract](indexer/README.md) — required discovery and provenance schema
 - [Protocol 27 deployments](docs/deployments-protocol-27-2026-07-09.md) — testnet/mainnet contract IDs and WASM hashes

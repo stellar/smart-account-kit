@@ -9,9 +9,11 @@ import {
 } from "./webauthn-ops";
 import { readAuthPayload, getAddressCredentials } from "./auth-payload";
 import { makeAddressAuthEntry } from "../managers/test-utils";
+import { SmartAccountErrorCode, ValidationError } from "../errors";
 
 const NETWORK = "Test SDF Network ; September 2015";
 const CONTRACT = StrKey.encodeContract(hash(Buffer.from("wallet")));
+const OTHER_CONTRACT = StrKey.encodeContract(hash(Buffer.from("other-wallet")));
 const VERIFIER = StrKey.encodeContract(hash(Buffer.from("verifier")));
 
 /** A minimal, well-formed DER ECDSA signature (r=32B, s=32B) for compaction. */
@@ -51,7 +53,13 @@ describe("createPasskey", () => {
 
     const result = await createPasskey(deps, "App", "alice");
 
-    expect(startRegistration).toHaveBeenCalled();
+    expect(startRegistration).toHaveBeenCalledWith({
+      optionsJSON: expect.objectContaining({
+        authenticatorSelection: expect.objectContaining({
+          userVerification: "required",
+        }),
+      }),
+    });
     expect(result.credentialId).toBe("cred-abc");
     expect(result.publicKey).toHaveLength(65);
     expect(result.publicKey[0]).toBe(0x04);
@@ -69,7 +77,9 @@ describe("authenticatePasskey", () => {
     const result = await authenticatePasskey(deps);
 
     expect(result.credentialId).toBe("cred-xyz");
-    expect(startAuthentication).toHaveBeenCalled();
+    expect(startAuthentication).toHaveBeenCalledWith({
+      optionsJSON: expect.objectContaining({ userVerification: "required" }),
+    });
   });
 });
 
@@ -95,11 +105,12 @@ describe("signAuthEntry", () => {
     });
 
     const update = vi.fn();
+    const calculateExpiration = vi.fn(async () => 1000);
     const deps = {
       rpName: "Test App",
       networkPassphrase: NETWORK,
       storage: { update },
-      calculateExpiration: async () => 1000,
+      calculateExpiration,
       getCredentialId: () => credentialId,
       requireWallet: () => ({ wallet: {}, contractId: CONTRACT }),
       rpc: {} as never,
@@ -119,6 +130,11 @@ describe("signAuthEntry", () => {
     const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
     expect(payload.context_rule_ids).toEqual([0]);
     expect(payload.signers.size).toBe(1);
+    expect(getAddressCredentials(signed.credentials()).signatureExpirationLedger()).toBe(1);
+    expect(calculateExpiration).not.toHaveBeenCalled();
+    expect(startAuthentication).toHaveBeenCalledWith({
+      optionsJSON: expect.objectContaining({ userVerification: "required" }),
+    });
     expect(update).toHaveBeenCalledWith(credentialId, expect.objectContaining({ lastUsedAt: expect.any(Number) }));
   });
 
@@ -138,5 +154,21 @@ describe("signAuthEntry", () => {
     await expect(
       signAuthEntry(deps, makeAddressAuthEntry(CONTRACT), { credentialId: "cred-abc" })
     ).rejects.toThrow();
+  });
+
+  it("uses a typed error for an entry from another smart account", async () => {
+    const deps = {
+      requireWallet: () => ({ wallet: {}, contractId: CONTRACT }),
+    } as never;
+
+    try {
+      await signAuthEntry(deps, makeAddressAuthEntry(OTHER_CONTRACT));
+      throw new Error("Expected signAuthEntry to reject the foreign entry");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).code).toBe(
+        SmartAccountErrorCode.INVALID_INPUT
+      );
+    }
   });
 });

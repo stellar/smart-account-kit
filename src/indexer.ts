@@ -223,10 +223,9 @@ export interface IndexerConfig {
 /**
  * Default indexer URLs for known networks.
  *
- * As of v0.4.0 the default provider is Mercury (https://mercurydata.app), a
- * hosted managed indexer. Its read endpoints are public, so no token is required
- * for the lookups the SDK performs. Override via `indexerUrl` to use any
- * wire-compatible provider.
+ * The default provider is Mercury (https://mercurydata.app), a hosted managed
+ * indexer. Its read endpoints are public, so the SDK needs no token for these
+ * lookups. Override `indexerUrl` to use another wire-compatible provider.
  */
 export const DEFAULT_INDEXER_URLS: Record<string, string> = {
   "Test SDF Network ; September 2015":

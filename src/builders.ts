@@ -425,7 +425,7 @@ export function createSpendingLimitParams(
 export { LEDGERS_PER_HOUR, LEDGERS_PER_DAY, LEDGERS_PER_WEEK } from "./constants.js";
 
 // ============================================================================
-// Compatibility Helper Functions
+// Display Helper Functions
 // ============================================================================
 
 export function truncateAddress(address: string, chars: number = 4): string {

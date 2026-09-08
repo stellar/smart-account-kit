@@ -610,7 +610,7 @@ export class SmartAccountKit {
       timeoutInSeconds: this.timeoutInSeconds,
       deployerKeypair: this.deployerKeypair,
       deployerPublicKey: this.deployerPublicKey,
-      signAuthEntry: (entry, options) => this.signAuthEntry(entry, options),
+      signAuthEntry: (entry, options) => this.signAuthEntryInternal(entry, options),
       sendAndPoll: (tx, options) => this.sendAndPoll(tx, options),
       hasSourceAccountAuth: (tx) => this.hasSourceAccountAuth(tx),
       shouldUseFeeSponsoring: (options) => this.shouldUseFeeSponsoring(options),
@@ -792,7 +792,9 @@ export class SmartAccountKit {
    */
   private async calculateExpiration(): Promise<number> {
     const { sequence } = await this.rpc.getLatestLedger();
-    return normalizeSignatureExpirationLedger(sequence + this.signatureExpirationLedgers);
+    return normalizeSignatureExpirationLedger(
+      Math.min(0xffffffff, sequence + this.signatureExpirationLedgers)
+    );
   }
 
   /**
@@ -845,7 +847,6 @@ export class SmartAccountKit {
       authenticatorSelection?: {
         authenticatorAttachment?: "platform" | "cross-platform";
         residentKey?: "discouraged" | "preferred" | "required";
-        userVerification?: "discouraged" | "preferred" | "required";
       };
       /**
        * If true, submit and wait for confirmation. The kit connects only after
@@ -927,7 +928,6 @@ export class SmartAccountKit {
     authenticatorSelection?: {
       authenticatorAttachment?: "platform" | "cross-platform";
       residentKey?: "discouraged" | "preferred" | "required";
-      userVerification?: "discouraged" | "preferred" | "required";
     }
   ): Promise<{
     rawResponse: RegistrationResponseJSON;
@@ -1092,7 +1092,7 @@ export class SmartAccountKit {
             optionsJSON: {
               challenge,
               rpId: this.rpId,
-              userVerification: "preferred",
+              userVerification: "required",
               timeout: 60_000,
             },
           });
@@ -1151,7 +1151,8 @@ export class SmartAccountKit {
   ): Promise<contract.AssembledTransaction<T>> {
     const ctxRuleCache: ConnectedContextRuleCache = {};
     const resolvedOptions = {
-      ...options,
+      credentialId: options?.credentialId,
+      expiration: options?.expiration,
       resolveContextRuleIds: options?.resolveContextRuleIds ?? ((entry: xdr.SorobanAuthorizationEntry) =>
         this.resolveConnectedContextRuleIds(entry, options?.credentialId, ctxRuleCache)),
     };
@@ -1160,8 +1161,7 @@ export class SmartAccountKit {
       {
         getContractId: () => this._contractId,
         getCredentialId: () => this._credentialId,
-        calculateExpiration: () => this.calculateExpiration(),
-        signAuthEntry: (entry, signOptions) => this.signAuthEntry(entry, signOptions),
+        signAuthEntry: (entry, signOptions) => this.signAuthEntryInternal(entry, signOptions),
       },
       transaction,
       resolvedOptions
@@ -1190,7 +1190,9 @@ export class SmartAccountKit {
   ): Promise<TransactionResult> {
     const ctxRuleCache: ConnectedContextRuleCache = {};
     const resolvedOptions = {
-      ...options,
+      credentialId: options?.credentialId,
+      expiration: options?.expiration,
+      forceMethod: options?.forceMethod,
       resolveContextRuleIds: options?.resolveContextRuleIds ?? ((entry: xdr.SorobanAuthorizationEntry) =>
         this.resolveConnectedContextRuleIds(entry, options?.credentialId, ctxRuleCache)),
     };
@@ -1213,13 +1215,96 @@ export class SmartAccountKit {
   }
 
   /**
+   * Sign an administrative smart-account transaction with a passkey.
+   *
+   * Use this method for account execution, upgrades, and rule, policy, or
+   * signer changes. Generic signing methods refuse these wallet mutations.
+   */
+  async signAdmin<T>(
+    transaction: contract.AssembledTransaction<T>,
+    options?: SignOptions
+  ): Promise<contract.AssembledTransaction<T>> {
+    const ctxRuleCache: ConnectedContextRuleCache = {};
+    const resolvedOptions = {
+      credentialId: options?.credentialId,
+      expiration: options?.expiration,
+      allowWalletMutation: true,
+      resolveContextRuleIds:
+        options?.resolveContextRuleIds ??
+        ((entry: xdr.SorobanAuthorizationEntry) =>
+          this.resolveConnectedContextRuleIds(
+            entry,
+            options?.credentialId,
+            ctxRuleCache
+          )),
+    };
+
+    const signed = await sign(
+      {
+        getContractId: () => this._contractId,
+        getCredentialId: () => this._credentialId,
+        signAuthEntry: (entry, signOptions) =>
+          this.signAuthEntryInternal(entry, signOptions),
+      },
+      transaction,
+      resolvedOptions
+    );
+
+    return signed as contract.AssembledTransaction<T>;
+  }
+
+  /**
+   * Sign and submit an administrative smart-account transaction.
+   *
+   * Use this method for account execution, upgrades, and rule, policy, or
+   * signer changes. Generic signing methods refuse these wallet mutations.
+   */
+  async signAndSubmitAdmin<T>(
+    transaction: contract.AssembledTransaction<T>,
+    options?: SignAndSubmitOptions
+  ): Promise<TransactionResult> {
+    const ctxRuleCache: ConnectedContextRuleCache = {};
+    const resolvedOptions = {
+      credentialId: options?.credentialId,
+      expiration: options?.expiration,
+      forceMethod: options?.forceMethod,
+      allowWalletMutation: true,
+      resolveContextRuleIds:
+        options?.resolveContextRuleIds ??
+        ((entry: xdr.SorobanAuthorizationEntry) =>
+          this.resolveConnectedContextRuleIds(
+            entry,
+            options?.credentialId,
+            ctxRuleCache
+          )),
+    };
+
+    return signAndSubmit(
+      {
+        getContractId: () => this._contractId,
+        signResimulateAndPrepare: (hostFunc, authEntries, signOptions) =>
+          this.signResimulateAndPrepare(hostFunc, authEntries, signOptions),
+        shouldUseFeeSponsoring: (submissionOptions) =>
+          this.shouldUseFeeSponsoring(submissionOptions),
+        hasSourceAccountAuth: (preparedTx) =>
+          this.hasSourceAccountAuth(preparedTx),
+        sendAndPoll: (preparedTx, submissionOptions) =>
+          this.sendAndPoll(preparedTx, submissionOptions),
+        deployerKeypair: this.deployerKeypair,
+      },
+      transaction,
+      resolvedOptions
+    );
+  }
+
+  /**
    * Sign a single authorization entry with a passkey.
    *
    * This is a low-level method useful for multi-signer flows.
    * For most use cases, prefer:
-   * - `signAndSubmit()` for full sign + re-simulate + submit flow
-   * - `sign()` to sign auth entries on an AssembledTransaction
-   * - `multiSigners.operation()` for multi-signer operations
+   * - `signAndSubmit()` for a non-administrative transaction
+   * - `signAndSubmitAdmin()` for an account mutation
+   * - `multiSigners.operation()` or `multiSigners.adminOperation()` for multiple signers
    *
    * @param entry - The authorization entry to sign
    * @param options - Signing options (credentialId, expiration)
@@ -1231,6 +1316,24 @@ export class SmartAccountKit {
       credentialId?: string;
       expiration?: number;
       contextRuleIds?: number[];
+    }
+  ): Promise<xdr.SorobanAuthorizationEntry> {
+    return this.signAuthEntryInternal(entry, {
+      credentialId: options?.credentialId,
+      expiration: options?.expiration,
+      contextRuleIds: options?.contextRuleIds,
+    });
+  }
+
+  /** @internal */
+  private async signAuthEntryInternal(
+    entry: xdr.SorobanAuthorizationEntry,
+    options?: {
+      credentialId?: string;
+      expiration?: number;
+      contextRuleIds?: number[];
+      signer?: ContractSigner;
+      walletMutationHostFunction?: xdr.HostFunction;
     }
   ): Promise<xdr.SorobanAuthorizationEntry> {
     return signAuthEntry(
@@ -1443,7 +1546,7 @@ export class SmartAccountKit {
    * const current = await client.getThreshold(ruleId);
    * const { result: rule } = await kit.rules.get(ruleId);
    * const tx = await client.setThreshold(3, rule);
-   * await kit.signAndSubmit(tx);
+   * await kit.signAndSubmitAdmin(tx);
    * ```
    */
   get policyClients() {
@@ -1467,7 +1570,7 @@ export class SmartAccountKit {
    * This is the high-level convenience path for arbitrary smart-account
    * executions, equivalent to:
    * 1. `kit.execute(...)`
-   * 2. `kit.signAndSubmit(...)`
+   * 2. `kit.signAndSubmitAdmin(...)`
    *
    * @param target - Target contract address
    * @param targetFn - Function name to invoke on the target contract
@@ -1482,7 +1585,7 @@ export class SmartAccountKit {
     options?: SignAndSubmitOptions
   ): Promise<TransactionResult> {
     const transaction = await this.execute(target, targetFn, targetArgs);
-    return this.signAndSubmit(transaction, options);
+    return this.signAndSubmitAdmin(transaction, options);
   }
 
   // ==========================================================================
@@ -1543,7 +1646,10 @@ export class SmartAccountKit {
   private async signResimulateAndPrepare(
     hostFunc: xdr.HostFunction,
     authEntries: xdr.SorobanAuthorizationEntry[],
-    options?: SignOptions & { forceMethod?: SubmissionMethod }
+    options?: SignOptions & {
+      forceMethod?: SubmissionMethod;
+      allowWalletMutation?: boolean;
+    }
   ): Promise<Transaction> {
     return signResimulateAndPrepare(
       {
@@ -1552,7 +1658,8 @@ export class SmartAccountKit {
         timeoutInSeconds: this.timeoutInSeconds,
         deployerKeypair: this.deployerKeypair,
         shouldUseFeeSponsoring: (opts) => shouldUseFeeSponsoring(this.relayer, opts),
-        signAuthEntry: (entry, signOptions) => this.signAuthEntry(entry, signOptions),
+        signAuthEntry: (entry, signOptions) =>
+          this.signAuthEntryInternal(entry, signOptions),
       },
       hostFunc,
       authEntries,

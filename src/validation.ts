@@ -16,6 +16,7 @@ import {
   MAX_SIGNERS,
 } from "./constants.js";
 import { SmartAccountErrorCode, ValidationError } from "./errors.js";
+import { isDefaultDeployer } from "./utils.js";
 
 /** UTF-8 byte length of a string. */
 function utf8ByteLength(value: string): number {
@@ -68,6 +69,13 @@ export function validateExternalKeySize(keyData: Uint8Array | Buffer): void {
  * @throws {ValidationError} If the signer is malformed
  */
 export function validateSigner(signer: ContractSigner): void {
+  if (signer.tag === "Delegated" && isDefaultDeployer(signer.values[0] as string)) {
+    throw new ValidationError(
+      "The shared default deployer cannot be a delegated signer",
+      SmartAccountErrorCode.INVALID_INPUT,
+      { field: "signer" }
+    );
+  }
   if (signer.tag === "External") {
     const keyData = signer.values[1];
     validateExternalKeySize(Buffer.from(keyData as Uint8Array | Buffer));

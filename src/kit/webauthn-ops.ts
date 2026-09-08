@@ -19,8 +19,10 @@ import {
   generateChallenge,
 } from "../utils.js";
 import {
+  assertWalletMutationIntent,
   buildWebAuthnSignatureBytes,
   getAddressCredentials,
+  getAuthEntryAddress,
   normalizeSignatureExpirationLedger,
   readAuthPayload,
   upsertAuthPayloadSigner,
@@ -30,6 +32,7 @@ import { computeEntryAuthDigest } from "../signers.js";
 import {
   findWebAuthnSignerInRules,
 } from "./context-rules.js";
+import { SmartAccountErrorCode, ValidationError } from "../errors.js";
 
 type WebAuthnDeps = {
   rpId?: string;
@@ -59,7 +62,6 @@ export async function createPasskey(
   authenticatorSelection?: {
     authenticatorAttachment?: "platform" | "cross-platform";
     residentKey?: "discouraged" | "preferred" | "required";
-    userVerification?: "discouraged" | "preferred" | "required";
   }
 ): Promise<{
   rawResponse: RegistrationResponseJSON;
@@ -82,7 +84,7 @@ export async function createPasskey(
     },
     authenticatorSelection: {
       residentKey: authenticatorSelection?.residentKey ?? "preferred",
-      userVerification: authenticatorSelection?.userVerification ?? "preferred",
+      userVerification: "required",
       authenticatorAttachment: authenticatorSelection?.authenticatorAttachment,
     },
     pubKeyCredParams: [{ alg: -7, type: "public-key" }],
@@ -105,7 +107,7 @@ export async function authenticatePasskey(
   const authOptions: PublicKeyCredentialRequestOptionsJSON = {
     challenge: generateChallenge(),
     rpId: deps.rpId,
-    userVerification: "preferred",
+    userVerification: "required",
     timeout: WEBAUTHN_TIMEOUT_MS,
   };
 
@@ -125,6 +127,8 @@ export async function signAuthEntry(
     expiration?: number;
     contextRuleIds?: number[];
     signer?: ContractSigner;
+    /** Internal declaration from a dedicated admin transaction path. */
+    walletMutationHostFunction?: xdr.HostFunction;
   }
 ): Promise<xdr.SorobanAuthorizationEntry> {
   const normalizedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
@@ -136,9 +140,27 @@ export async function signAuthEntry(
   }
 
   const credentials = getAddressCredentials(normalizedEntry.credentials());
-  const expiration = normalizeSignatureExpirationLedger(
-    options?.expiration ?? await deps.calculateExpiration()
+  const { wallet, contractId } = deps.requireWallet();
+  if (getAuthEntryAddress(normalizedEntry) !== contractId) {
+    throw new ValidationError(
+      "The authorization entry is not for the connected smart account",
+      SmartAccountErrorCode.INVALID_INPUT,
+      { contractId }
+    );
+  }
+  assertWalletMutationIntent(
+    normalizedEntry,
+    contractId,
+    options?.walletMutationHostFunction
   );
+  let requestedExpiration = options?.expiration;
+  if (requestedExpiration == null) {
+    requestedExpiration = credentials.signatureExpirationLedger();
+    if (!requestedExpiration) {
+      requestedExpiration = await deps.calculateExpiration();
+    }
+  }
+  const expiration = normalizeSignatureExpirationLedger(requestedExpiration);
   credentials.signatureExpirationLedger(expiration);
   const authPayload = readAuthPayload(credentials.signature());
 
@@ -154,7 +176,6 @@ export async function signAuthEntry(
     );
   }
 
-  const { wallet } = deps.requireWallet();
   const credentialIdBuffer = base64url.toBuffer(credentialId);
   const signer = options?.signer ?? await findWebAuthnSignerInRules(
     wallet,
@@ -162,7 +183,7 @@ export async function signAuthEntry(
     credentialIdBuffer,
     {
       rpc: deps.rpc,
-      contractId: deps.requireWallet().contractId,
+      contractId,
       networkPassphrase: deps.networkPassphrase,
       timeoutInSeconds: deps.timeoutInSeconds,
     }
@@ -178,7 +199,7 @@ export async function signAuthEntry(
     optionsJSON: {
       challenge: base64url(authDigest),
       rpId: deps.rpId,
-      userVerification: "preferred",
+      userVerification: "required",
       timeout: WEBAUTHN_TIMEOUT_MS,
       allowCredentials: [{ id: credentialId, type: "public-key" }],
     },

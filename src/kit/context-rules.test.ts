@@ -108,6 +108,35 @@ describe("context-rules", () => {
     ]);
   });
 
+  it("extracts the WASM hash from a CreateContractV2 context", () => {
+    const wasmHash = Buffer.alloc(32, 9);
+    const deployer = makeAccount(4);
+    const args = new xdr.CreateContractArgsV2({
+      contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+        new xdr.ContractIdPreimageFromAddress({
+          address: Address.fromString(deployer).toScAddress(),
+          salt: Buffer.alloc(32, 3),
+        })
+      ),
+      executable: xdr.ContractExecutable.contractExecutableWasm(wasmHash),
+      constructorArgs: [],
+    });
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function:
+          xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+            args
+          ),
+        subInvocations: [],
+      }),
+    });
+
+    expect(buildInvocationContextTypes(entry)).toEqual([
+      { tag: "CreateContract", values: [wasmHash] },
+    ]);
+  });
+
   it("lists active rules by exact ids discovered from the indexer", async () => {
     const delegated: Signer = {
       tag: "Delegated",

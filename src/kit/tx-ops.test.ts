@@ -146,10 +146,11 @@ describe("tx-ops", () => {
   });
 
   it("sends through the relayer when configured", async () => {
+    const relayerHash = "ab".repeat(32);
     const invokeOp = makeInvokeOperation([makeAddressEntry(makeAccount(2).publicKey())]);
     const relayerSend = vi.fn().mockResolvedValue({
       success: true,
-      hash: "relayer-hash",
+      hash: relayerHash,
     });
     const pollTransaction = vi.fn().mockResolvedValue({
       status: "SUCCESS",
@@ -174,12 +175,28 @@ describe("tx-ops", () => {
     const [funcXdr, authXdrs] = relayerSend.mock.calls[0];
     expect(typeof funcXdr).toBe("string");
     expect((authXdrs as string[])).toHaveLength(1);
-    expect(pollTransaction).toHaveBeenCalledWith("relayer-hash", { attempts: 10 });
+    expect(pollTransaction).toHaveBeenCalledWith(relayerHash, { attempts: 10 });
     expect(result).toEqual({
       success: true,
-      hash: "relayer-hash",
+      hash: relayerHash,
       ledger: 99,
     });
+  });
+
+  it("rejects a successful relayer response without a valid hash", async () => {
+    const pollTransaction = vi.fn();
+    const result = await sendAndPoll(
+      {
+        rpc: { pollTransaction } as never,
+        relayer: {
+          send: vi.fn().mockResolvedValue({ success: true, hash: "not-a-hash" }),
+        } as never,
+      },
+      { operations: [makeInvokeOperation()] } as unknown as Transaction
+    );
+
+    expect(result.success).toBe(false);
+    expect(pollTransaction).not.toHaveBeenCalled();
   });
 
   it("returns an rpc submission error without polling", async () => {
@@ -221,7 +238,7 @@ describe("tx-ops", () => {
     const signAuthEntry = vi.fn().mockImplementation(async (entry, options) => {
       expect(options).toMatchObject({
         credentialId: "cred-id",
-        expiration: 1234,
+        expiration: undefined,
         contextRuleIds: [7, 9],
       });
       return entry;
@@ -252,6 +269,31 @@ describe("tx-ops", () => {
     expect(signAuthEntry).toHaveBeenCalledTimes(1);
     expect(signAuthEntries).toHaveBeenCalledTimes(1);
     expect(result).toBe(tx);
+  });
+
+  it("requires one invokeHostFunction operation for admin signing", async () => {
+    const signAuthEntries = vi.fn();
+    const tx = makeAssembledTransaction({
+      built: {
+        operations: [makeInvokeOperation(), makeInvokeOperation()],
+      },
+      signAuthEntries,
+    });
+
+    await expect(
+      sign(
+        {
+          getContractId: () => makeContractAddress("contract"),
+          getCredentialId: () => "cred-id",
+          signAuthEntry: vi.fn(),
+        },
+        tx,
+        { allowWalletMutation: true }
+      )
+    ).rejects.toThrow(
+      "Admin signing requires exactly one invokeHostFunction operation"
+    );
+    expect(signAuthEntries).not.toHaveBeenCalled();
   });
 
   it("signAndSubmit re-simulates and submits with the prepared transaction", async () => {

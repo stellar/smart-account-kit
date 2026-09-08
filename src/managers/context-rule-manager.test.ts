@@ -39,7 +39,10 @@ describe("ContextRuleManager", () => {
     deps.wallet.add_context_rule.mockResolvedValue({ result: { id: 7 } });
     const manager = new ContextRuleManager(deps);
     const signers = [makeDelegatedSigner(1)];
-    const policies = new Map<string, unknown>([["CPOLICY", { threshold: 2 }]]);
+    const policies = new Map<string, unknown>([[
+      "CB2WQXF2XXDGUV2CTVQ23RLN3ESI3IY5KKX3KVXWBNRTTWDHZM76NVKJ",
+      { threshold: 2 },
+    ]]);
 
     const result = await manager.add(
       { tag: "Default", values: undefined },

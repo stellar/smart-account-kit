@@ -10,6 +10,85 @@ import type {
 } from "smart-account-kit-bindings";
 import { signersEqual } from "../signer-utils.js";
 import type { WebAuthnSigData } from "../contract-types.js";
+import { SmartAccountErrorCode, ValidationError } from "../errors.js";
+
+/** Smart-account functions that can change authority or execute wallet actions. */
+export const WALLET_MUTATION_FUNCTIONS = new Set([
+  "execute",
+  "upgrade",
+  "add_policy",
+  "remove_policy",
+  "add_signer",
+  "remove_signer",
+  "add_context_rule",
+  "remove_context_rule",
+  "batch_add_signer",
+  "update_context_rule_name",
+  "update_context_rule_valid_until",
+]);
+
+/**
+ * Refuse wallet mutations on generic signing paths.
+ *
+ * A dedicated admin path must provide the transaction host function. The
+ * mutation must be the root invocation and must match that function exactly.
+ */
+export function assertWalletMutationIntent(
+  entry: xdr.SorobanAuthorizationEntry,
+  contractId: string,
+  hostFunction?: xdr.HostFunction
+): void {
+  const mutations: Array<{
+    invocation: xdr.SorobanAuthorizedInvocation;
+    depth: number;
+    name: string;
+  }> = [];
+
+  const walk = (invocation: xdr.SorobanAuthorizedInvocation, depth: number) => {
+    const fn = invocation.function();
+    if (fn.switch().name === "sorobanAuthorizedFunctionTypeContractFn") {
+      const args = fn.contractFn();
+      const target = Address.fromScAddress(args.contractAddress()).toString();
+      const name = args.functionName().toString();
+      if (target === contractId && WALLET_MUTATION_FUNCTIONS.has(name)) {
+        mutations.push({ invocation, depth, name });
+      }
+    }
+    for (const child of invocation.subInvocations()) {
+      walk(child, depth + 1);
+    }
+  };
+
+  walk(entry.rootInvocation(), 0);
+  if (mutations.length === 0) return;
+
+  const fail = (message: string): never => {
+    throw new ValidationError(
+      message,
+      SmartAccountErrorCode.INVALID_INPUT,
+      { contractId, functions: mutations.map(({ name }) => name) }
+    );
+  };
+
+  if (!hostFunction) {
+    fail(
+      "Refusing a smart-account mutation on a generic signing path. Use the dedicated admin signing method."
+    );
+  }
+  const adminHostFunction = hostFunction as xdr.HostFunction;
+  if (mutations.length !== 1 || mutations[0].depth !== 0) {
+    fail("Refusing nested or multiple smart-account mutations in one authorization tree.");
+  }
+  if (adminHostFunction.switch().name !== "hostFunctionTypeInvokeContract") {
+    fail("The admin authorization root does not match an invokeContract transaction.");
+  }
+
+  const rootArgs = mutations[0].invocation.function().contractFn();
+  const transactionArgs = adminHostFunction.invokeContract();
+  if (!Buffer.from(rootArgs.toXDR()).equals(Buffer.from(transactionArgs.toXDR()))) {
+    fail("The admin authorization root does not match the transaction host function.");
+  }
+}
 
 export function buildSignaturePayload(
   networkPassphrase: string,

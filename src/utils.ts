@@ -185,10 +185,8 @@ export function deriveContractAddress(
 /**
  * Extract the public key from a WebAuthn attestation response.
  *
- * Tries multiple methods to extract the public key:
- * 1. From response.publicKey directly (if provided)
- * 2. From authenticatorData (parsing CBOR structure)
- * 3. From attestationObject (parsing CBOR structure)
+ * Requires the browser-provided `response.publicKey` value. It accepts a raw
+ * P-256 point or an SPKI key and validates the resulting curve point.
  *
  * @param response - The WebAuthn registration response
  * @returns The 65-byte uncompressed secp256r1 public key
@@ -197,89 +195,61 @@ export function deriveContractAddress(
 export async function extractPublicKeyFromAttestation(
   response: RegistrationResponseJSON["response"]
 ): Promise<Uint8Array> {
-  let publicKey: Buffer | undefined;
+  const subtle = globalThis.crypto?.subtle;
 
-  // Try to get the public key from the response directly
-  if (response.publicKey) {
-    const encodedPublicKey = base64url.toBuffer(response.publicKey);
-
+  const validateRawKey = async (candidate: Buffer): Promise<Uint8Array> => {
     if (
-      encodedPublicKey.length === SECP256R1_PUBLIC_KEY_SIZE &&
-      encodedPublicKey[0] === UNCOMPRESSED_PUBKEY_PREFIX
+      candidate.length !== SECP256R1_PUBLIC_KEY_SIZE ||
+      candidate[0] !== UNCOMPRESSED_PUBKEY_PREFIX
     ) {
-      publicKey = encodedPublicKey;
-    } else if (typeof crypto?.subtle !== "undefined") {
-      try {
-        const imported = await crypto.subtle.importKey(
-          "spki",
-          new Uint8Array(encodedPublicKey),
-          { name: "ECDSA", namedCurve: "P-256" },
-          true,
-          []
-        );
-        const rawKey = await crypto.subtle.exportKey("raw", imported);
-        publicKey = Buffer.from(new Uint8Array(rawKey));
-      } catch {
-        publicKey = encodedPublicKey.slice(
-          encodedPublicKey.length - SECP256R1_PUBLIC_KEY_SIZE
-        );
-      }
-    } else {
-      publicKey = encodedPublicKey.slice(
-        encodedPublicKey.length - SECP256R1_PUBLIC_KEY_SIZE
-      );
+      throw new Error("WebAuthn public key is not an uncompressed P-256 key");
     }
+    if (!subtle) {
+      throw new Error("WebCrypto is required to validate a WebAuthn public key");
+    }
+    try {
+      await subtle.importKey(
+        "raw",
+        new Uint8Array(candidate),
+        { name: "ECDSA", namedCurve: "P-256" },
+        false,
+        ["verify"]
+      );
+    } catch {
+      throw new Error("WebAuthn public key is not a valid P-256 curve point");
+    }
+    return new Uint8Array(candidate);
+  };
+
+  if (!response.publicKey) {
+    throw new Error("WebAuthn registration did not provide a public key");
   }
 
-  // Validate it's a proper uncompressed EC point
+  const encodedPublicKey = base64url.toBuffer(response.publicKey);
   if (
-    !publicKey ||
-    publicKey[0] !== UNCOMPRESSED_PUBKEY_PREFIX ||
-    publicKey.length !== SECP256R1_PUBLIC_KEY_SIZE
+    encodedPublicKey.length === SECP256R1_PUBLIC_KEY_SIZE &&
+    encodedPublicKey[0] === UNCOMPRESSED_PUBKEY_PREFIX
   ) {
-    // Fall back to extracting from authenticatorData or attestationObject
-    let x: Buffer;
-    let y: Buffer;
-
-    if (response.authenticatorData) {
-      const authenticatorData = base64url.toBuffer(response.authenticatorData);
-      const credentialIdLength =
-        (authenticatorData[53] << 8) | authenticatorData[54];
-
-      x = authenticatorData.slice(
-        65 + credentialIdLength,
-        97 + credentialIdLength
-      );
-      y = authenticatorData.slice(
-        100 + credentialIdLength,
-        132 + credentialIdLength
-      );
-    } else if (response.attestationObject) {
-      const attestationObject = base64url.toBuffer(response.attestationObject);
-
-      // COSE key structure prefix for ES256 (P-256)
-      const publicKeyPrefixSlice = Buffer.from([
-        0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20,
-      ]);
-      let startIndex = attestationObject.indexOf(publicKeyPrefixSlice);
-      startIndex = startIndex + publicKeyPrefixSlice.length;
-
-      x = attestationObject.slice(startIndex, 32 + startIndex);
-      y = attestationObject.slice(35 + startIndex, 67 + startIndex);
-    } else {
-      throw new Error(
-        "Could not extract public key from attestation response"
-      );
-    }
-
-    publicKey = Buffer.from([
-      UNCOMPRESSED_PUBKEY_PREFIX, // 0x04 - Uncompressed EC point prefix
-      ...x,
-      ...y,
-    ]);
+    return validateRawKey(encodedPublicKey);
   }
 
-  return new Uint8Array(publicKey);
+  if (!subtle) {
+    throw new Error("WebCrypto is required to decode a WebAuthn public key");
+  }
+
+  try {
+    const imported = await subtle.importKey(
+      "spki",
+      new Uint8Array(encodedPublicKey),
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      []
+    );
+    const rawKey = await subtle.exportKey("raw", imported);
+    return validateRawKey(Buffer.from(new Uint8Array(rawKey)));
+  } catch {
+    throw new Error("Could not extract a valid P-256 public key from WebAuthn registration");
+  }
 }
 
 /**

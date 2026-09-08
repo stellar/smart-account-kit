@@ -117,7 +117,13 @@ export async function sendAndPoll(
         );
       }
 
-      hash = relayerResult.hash ?? "";
+      const relayerHash = relayerResult.hash?.trim();
+      if (!relayerHash || !/^[0-9a-f]{64}$/i.test(relayerHash)) {
+        return submissionFailure(
+          "Relayer response did not include a valid transaction hash"
+        );
+      }
+      hash = relayerHash;
       break;
     }
 
@@ -537,6 +543,7 @@ export async function signResimulateAndPrepare(
         credentialId?: string;
         expiration?: number;
         contextRuleIds?: number[];
+        walletMutationHostFunction?: xdr.HostFunction;
       }
     ) => Promise<xdr.SorobanAuthorizationEntry>;
   },
@@ -547,6 +554,7 @@ export async function signResimulateAndPrepare(
     expiration?: number;
     forceMethod?: SubmissionMethod;
     resolveContextRuleIds?: ResolveContextRuleIds;
+    allowWalletMutation?: boolean;
   }
 ): Promise<Transaction> {
   const signedAuthEntries: xdr.SorobanAuthorizationEntry[] = [];
@@ -556,6 +564,9 @@ export async function signResimulateAndPrepare(
       expiration: options?.expiration,
       contextRuleIds: options?.resolveContextRuleIds
         ? await options.resolveContextRuleIds(authEntry, index)
+        : undefined,
+      walletMutationHostFunction: options?.allowWalletMutation
+        ? hostFunc
         : undefined,
     });
     signedAuthEntries.push(signedEntry);
@@ -584,13 +595,13 @@ export async function sign(
   deps: {
     getContractId: () => string | undefined;
     getCredentialId: () => string | undefined;
-    calculateExpiration: () => Promise<number>;
     signAuthEntry: (
       entry: xdr.SorobanAuthorizationEntry,
       options?: {
         credentialId?: string;
         expiration?: number;
         contextRuleIds?: number[];
+        walletMutationHostFunction?: xdr.HostFunction;
       }
     ) => Promise<xdr.SorobanAuthorizationEntry>;
   },
@@ -599,6 +610,7 @@ export async function sign(
     credentialId?: string;
     expiration?: number;
     resolveContextRuleIds?: ResolveContextRuleIds;
+    allowWalletMutation?: boolean;
   }
 ): Promise<contract.AssembledTransaction<unknown>> {
   const contractId = deps.getContractId();
@@ -607,7 +619,21 @@ export async function sign(
   }
 
   const credentialId = options?.credentialId ?? deps.getCredentialId();
-  const expiration = options?.expiration ?? await deps.calculateExpiration();
+  const expiration = options?.expiration;
+  const operations = transaction.built?.operations;
+  if (
+    options?.allowWalletMutation &&
+    (operations?.length !== 1 || operations[0].type !== "invokeHostFunction")
+  ) {
+    throw new SubmissionError(
+      "Admin signing requires exactly one invokeHostFunction operation"
+    );
+  }
+  const operation = operations?.[0];
+  const walletMutationHostFunction =
+    options?.allowWalletMutation && operation?.type === "invokeHostFunction"
+      ? (operation as Operation.InvokeHostFunction).func
+      : undefined;
 
   await transaction.signAuthEntries({
     address: contractId,
@@ -621,6 +647,7 @@ export async function sign(
         contextRuleIds: entryIndex >= 0 && options?.resolveContextRuleIds
           ? await options.resolveContextRuleIds(clone, entryIndex)
           : undefined,
+        walletMutationHostFunction,
       });
     },
   });
@@ -639,6 +666,7 @@ export async function signAndSubmit(
         expiration?: number;
         forceMethod?: SubmissionMethod;
         resolveContextRuleIds?: ResolveContextRuleIds;
+        allowWalletMutation?: boolean;
       }
     ) => Promise<Transaction>;
     shouldUseFeeSponsoring: (options?: SubmissionOptions) => boolean;
@@ -652,6 +680,7 @@ export async function signAndSubmit(
     expiration?: number;
     forceMethod?: SubmissionMethod;
     resolveContextRuleIds?: ResolveContextRuleIds;
+    allowWalletMutation?: boolean;
   }
 ): Promise<TransactionResult> {
   if (!deps.getContractId()) {
@@ -689,6 +718,7 @@ export async function signAndSubmit(
           expiration: options?.expiration,
           forceMethod: options?.forceMethod,
           resolveContextRuleIds: options?.resolveContextRuleIds,
+          allowWalletMutation: options?.allowWalletMutation,
         }
       );
 

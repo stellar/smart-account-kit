@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scValToNative, xdr } from "@stellar/stellar-sdk";
+import { Address, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { Client as SmartAccountClient } from "smart-account-kit-bindings";
 import {
   createDefaultContext,
@@ -8,8 +8,13 @@ import {
   createWebAuthnSigner,
   createWeightedThresholdParams,
 } from "../builders";
-import { buildConstructorPolicies, convertPolicyParams } from "./policies-ops";
-import { ValidationError } from "../errors";
+import {
+  buildConstructorPolicies,
+  convertPolicyParams,
+  sortPolicyMap,
+} from "./policies-ops";
+import { SmartAccountErrorCode, ValidationError } from "../errors";
+import { compareScVal } from "./auth-payload";
 
 function makeClient() {
   return new SmartAccountClient({
@@ -138,6 +143,18 @@ describe("buildConstructorPolicies", () => {
     expect(map.get(POLICY_B)).toBeInstanceOf(xdr.ScVal);
   });
 
+  it("sorts two constructor policies by Soroban address order", () => {
+    const map = buildConstructorPolicies([
+      { address: POLICY_B, type: "threshold", installParams: createThresholdParams(2) },
+      { address: POLICY_A, type: "threshold", installParams: createThresholdParams(1) },
+    ]);
+    const expected = [POLICY_B, POLICY_A].sort((left, right) =>
+      compareScVal(new Address(left).toScVal(), new Address(right).toScVal())
+    );
+
+    expect([...map.keys()]).toEqual(expected);
+  });
+
   it("passes through an xdr.ScVal for custom policies", () => {
     const custom = xdr.ScVal.scvVoid();
     const map = buildConstructorPolicies([
@@ -156,6 +173,20 @@ describe("buildConstructorPolicies", () => {
 
   it("returns an empty map for no policies", () => {
     expect(buildConstructorPolicies([]).size).toBe(0);
+  });
+});
+
+describe("sortPolicyMap", () => {
+  it("reports an invalid policy address as a ValidationError", () => {
+    try {
+      sortPolicyMap(new Map([["not-a-contract-address", xdr.ScVal.scvVoid()]]));
+      throw new Error("Expected sortPolicyMap to reject the invalid address");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).code).toBe(
+        SmartAccountErrorCode.INVALID_ADDRESS
+      );
+    }
   });
 });
 

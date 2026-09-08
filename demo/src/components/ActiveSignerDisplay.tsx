@@ -1,9 +1,6 @@
 import type { Signer } from "smart-account-kit-bindings";
 import { truncateAddress, formatSignerForDisplay } from "../utils/sdk";
 
-// Re-export SDK utilities for backwards compatibility with other demo components
-export { formatSignerForDisplay as formatSigner };
-
 interface ActiveSignerDisplayProps {
   credentialId: string | null;
   activeSigner: Signer | null;

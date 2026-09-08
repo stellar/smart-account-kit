@@ -35,7 +35,7 @@ export function useMultiSignerSubmit(kit: SmartAccountKit, onLog: LogFn) {
       // require multiple / non-passkey signers.
       if (!selectedSigners) {
         if (!ruleSigners || !kit.multiSigners.needsMultiSigner(ruleSigners)) {
-          return toSimpleResult(await kit.signAndSubmit(tx));
+          return toSimpleResult(await kit.signAndSubmitAdmin(tx));
         }
       }
 
@@ -46,7 +46,7 @@ export function useMultiSignerSubmit(kit: SmartAccountKit, onLog: LogFn) {
           activeCredentialId
         );
       return toSimpleResult(
-        await kit.multiSigners.operation(tx, signers, { onLog })
+        await kit.multiSigners.adminOperation(tx, signers, { onLog })
       );
     },
     [kit, onLog]

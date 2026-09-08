@@ -577,54 +577,17 @@ export async function resolveContextRuleIdsForEntry(
 function extractCreateContractWasmHash(
   fn: xdr.SorobanAuthorizedFunction
 ): Buffer | null {
-  const candidates: Array<unknown> = [];
-  const fnAny = fn as unknown as {
-    createContractHostFn?: () => unknown;
-    createContractWithCtorHostFn?: () => unknown;
-    createContractWithConstructorHostFn?: () => unknown;
-  };
+  const executable =
+    fn.switch().name === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
+      ? fn.createContractV2HostFn().executable()
+      : fn.switch().name === "sorobanAuthorizedFunctionTypeCreateContractHostFn"
+        ? fn.createContractHostFn().executable()
+        : null;
 
-  if (typeof fnAny.createContractHostFn === "function") {
-    candidates.push(fnAny.createContractHostFn());
+  if (!executable || executable.switch().name !== "contractExecutableWasm") {
+    return null;
   }
-  if (typeof fnAny.createContractWithCtorHostFn === "function") {
-    candidates.push(fnAny.createContractWithCtorHostFn());
-  }
-  if (typeof fnAny.createContractWithConstructorHostFn === "function") {
-    candidates.push(fnAny.createContractWithConstructorHostFn());
-  }
-
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-
-    const ctx = candidate as { executable?: unknown };
-    const executable = typeof ctx.executable === "function"
-      ? (ctx.executable as () => unknown)()
-      : ctx.executable;
-
-    if (!executable || typeof executable !== "object") {
-      continue;
-    }
-
-    const execAny = executable as {
-      switch?: () => { name: string };
-      wasm?: (() => Buffer) | Buffer;
-    };
-    const execSwitch = execAny.switch?.();
-
-    if (execSwitch?.name !== "contractExecutableWasm") {
-      continue;
-    }
-
-    const wasm = typeof execAny.wasm === "function" ? execAny.wasm() : execAny.wasm;
-    if (wasm) {
-      return Buffer.from(wasm);
-    }
-  }
-
-  return null;
+  return Buffer.from(executable.wasmHash());
 }
 
 function isMissingContextRuleError(error: unknown): boolean {

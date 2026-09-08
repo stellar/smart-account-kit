@@ -175,7 +175,7 @@ export {
   LEDGERS_PER_HOUR,
   LEDGERS_PER_DAY,
   LEDGERS_PER_WEEK,
-  // Compatibility helpers
+  // Display helpers
   truncateAddress,
   describeSignerType,
   formatSignerForDisplay,

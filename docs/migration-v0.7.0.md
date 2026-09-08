@@ -17,7 +17,7 @@ It requires SDK, indexer, demo, and relayer-proxy updates.
 5. Update interfaces that assume a successful deployment removes its credential record.
 
 Fresh-device recovery stays unavailable until the configured indexer returns a complete schema-2 response.
-The SDK rejects legacy credential lookup responses.
+The SDK rejects schema-1 and incomplete credential lookup responses.
 
 ## Connection changes
 

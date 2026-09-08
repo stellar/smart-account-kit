@@ -8,7 +8,7 @@ The built-in provider is **[Mercury](https://mercurydata.app/)**. This repositor
 > Treat every discovery result as untrusted.
 > Never present a discovery result as a wallet or deposit address.
 > `SmartAccountKit` verifies immutable birth, current code, and live ownership.
-> The SDK rejects a legacy response. An incomplete schema-2 response cannot connect.
+> The SDK rejects a schema-1 response. An incomplete schema-2 response cannot connect.
 
 > **History:** before v0.4.0 this directory also shipped a self-hosted reference stack (a Goldsky Turbo pipeline → PostgreSQL → Cloudflare Worker). That path was removed in v0.4.0 (too expensive to operate, and Mercury indexes the same events as a managed service). The old pipeline configs, SQL schema, and Worker live in git history if you need them.
 

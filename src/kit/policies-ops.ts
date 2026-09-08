@@ -13,6 +13,33 @@ import { buildI128ScVal } from "./tx-ops.js";
 const I128_MAX = (1n << 127n) - 1n;
 const I128_MIN = -(1n << 127n);
 
+function policyAddressToScVal(address: string): xdr.ScVal {
+  try {
+    return new Address(address).toScVal();
+  } catch (error) {
+    throw new ValidationError(
+      `Invalid policy address: ${address}`,
+      SmartAccountErrorCode.INVALID_ADDRESS,
+      {
+        address,
+        cause: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
+}
+
+/** Return a new policy map in the Soroban host's ScAddress key order. */
+export function sortPolicyMap<T>(policies: Map<string, T>): Map<string, T> {
+  const entries = [...policies.entries()].map(([address, value]) => ({
+    address,
+    value,
+    key: policyAddressToScVal(address),
+  }));
+
+  entries.sort((left, right) => compareScVal(left.key, right.key));
+  return new Map(entries.map(({ address, value }) => [address, value]));
+}
+
 function symbolEntry(key: string, val: xdr.ScVal): xdr.ScMapEntry {
   return new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(key), val });
 }
@@ -168,7 +195,7 @@ export function buildConstructorPolicies(
     }
     map.set(policy.address, scParams);
   }
-  return map;
+  return sortPolicyMap(map);
 }
 
 export function buildPoliciesScVal(
@@ -183,7 +210,7 @@ export function buildPoliciesScVal(
   const entries: xdr.ScMapEntry[] = [];
 
   for (const [address, params] of policies) {
-    const scAddress = new Address(address).toScVal();
+    const scAddress = policyAddressToScVal(address);
 
     const policyType = policyTypes.get(address);
     let scParams: xdr.ScVal;
