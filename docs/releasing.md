@@ -65,9 +65,9 @@ pnpm verify:bindings
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm test --run
 pnpm verify:bindings
 pnpm build
+pnpm test --run
 pnpm --filter smart-account-kit-demo build
 pnpm --filter indexer-demo build
 git diff --check

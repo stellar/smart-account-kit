@@ -6,5 +6,5 @@
 // This file is auto-generated. Do not edit manually.
 // Run `pnpm run version:sync` to update.
 
-export const VERSION = "0.7.1";
+export const VERSION = "0.8.0";
 export const NAME = "smart-account-kit";
