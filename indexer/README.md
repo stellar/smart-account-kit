@@ -1,6 +1,6 @@
 # Smart Account Indexer
 
-Discovery layer for smart account contracts on Stellar. It enables reverse lookups from a passkey credential (or signer address) to the smart account contracts a user can access, and supplies active context-rule state to the SDK.
+Discovery layer for smart account contracts on Stellar. It enables reverse lookups from a passkey credential (or signer address) to smart account contracts, and supplies indexed context-rule history to the SDK.
 
 The built-in provider is **[Mercury](https://mercurydata.app/)**. This repository does not contain an indexer service. Mercury or another provider must serve the schema-2 response below before credential discovery can succeed.
 
@@ -39,9 +39,7 @@ An optional provider token can be supplied through `indexerAuthToken` or `VITE_I
 ### Coverage
 
 Mercury indexes signer events on both public networks.
-Mercury testnet served schema 2 during validation on 2026-09-04.
-Mercury mainnet still served the legacy response during that validation.
-The SDK rejects the legacy mainnet response until Mercury completes its deployment.
+Mercury served schema 2 on both networks during validation on 2026-09-08.
 
 ## REST surface the SDK uses
 
@@ -50,12 +48,20 @@ The SDK's `IndexerClient` uses these public Mercury routes:
 | Endpoint | Used for |
 |----------|----------|
 | `GET /` | Health check (`isHealthy()`) |
-| `GET /api/lookup/:credentialId` | Reverse lookup by passkey credential ID (hex) — primary discovery path |
+| `GET /api/lookup/:credentialId` | Reverse lookup with RPC-confirmed candidate state |
 | `GET /api/lookup/address/:address` | Reverse lookup by G-address (Delegated signer) or C-address (External verifier) |
-| `GET /api/contract/:contractId` | Active contract detail: summary + context rules with signers and policies |
+| `GET /api/contract/:contractId` | Contract detail from indexed event history |
 | `GET /api/stats` | Aggregate indexer statistics |
 
 `getContractDetails()` treats a `404` as "not indexed yet" and returns `null`. The SDK can then use its bounded on-chain rule probe. Any provider that serves these routes can replace Mercury through `indexerUrl`.
+
+Mercury adds `signer_data: "historical"` to a contract-detail response.
+This field warns that the signer data can lag current chain state.
+The field is additive, so a custom provider can omit it.
+The SDK accepts only `"historical"` when the field is present.
+
+The credential lookup is authoritative for RPC-confirmed candidate state.
+The SDK also reads each selected context rule from the chain before use.
 
 The credential route must return the complete schema below.
 
@@ -97,7 +103,8 @@ The provider must follow these rules:
 - Derive birth fields from the successful creation transaction.
 - Confirm current code and live signer state through RPC.
 - Return every candidate and deduplicate by `contract_id`.
-- Set `collision` when the credential resolves to more than one contract.
+- Set `collision: true` only when derived and non-derived candidates coexist after exclusions.
+- Keep `collision: false` for multiple non-derived candidates.
 - Set `incomplete` when any birth, current-code, signer, or RPC fact is unavailable.
 - Set `complete` only after a finished scan through `indexed_through_ledger`.
 - Keep `indexed_through_ledger` current with the network ledger at request time.
@@ -106,6 +113,25 @@ The provider must follow these rules:
 
 The SDK treats every field as a claim.
 It verifies the creation transaction through RPC or Horizon before connection.
+
+### Incomplete reasons
+
+An incomplete candidate must include a nonempty `incompleteReasons` array.
+The array can contain only these values:
+
+- `missing_birth`
+- `rpc_unchecked`
+- `signer_unconfirmed`
+- `instance_missing`
+- `wasm_unresolved`
+- `inconsistent_creation_ledger`
+
+The candidate must omit `incompleteReasons` when `incomplete` is not `true`.
+
+An incomplete response can include a top-level `incompleteReasons` array.
+This array can contain only `reducer_errors` and `index_behind`.
+The response must omit this array when `complete` is `true`.
+The array is optional when candidate-level reasons explain the incomplete response.
 
 ## SDK Integration
 

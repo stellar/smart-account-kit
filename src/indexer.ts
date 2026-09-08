@@ -48,11 +48,27 @@ export interface IndexedContractSummary {
   current_wasm_hash?: string;
   /** Whether this address matches the configured deployer and credential salt. */
   derived_address?: boolean;
-  /** Whether another candidate exists for the same credential. */
+  /** Whether derived and non-derived candidates coexist after exclusions. */
   collision?: boolean;
   /** True when any required indexer or RPC fact is unavailable. */
   incomplete?: boolean;
+  /** Candidate-level causes. Present only when `incomplete` is true. */
+  incompleteReasons?: WalletCandidateIncompleteReason[];
 }
+
+/** Closed set of candidate-level completeness failures from schema 2. */
+export type WalletCandidateIncompleteReason =
+  | "missing_birth"
+  | "rpc_unchecked"
+  | "signer_unconfirmed"
+  | "instance_missing"
+  | "wasm_unresolved"
+  | "inconsistent_creation_ledger";
+
+/** Closed set of response-level completeness failures from schema 2. */
+export type CredentialLookupIncompleteReason =
+  | "reducer_errors"
+  | "index_behind";
 
 /** Minimum immutable facts needed to verify a wallet birth. */
 export interface WalletCandidate {
@@ -134,6 +150,8 @@ export interface CredentialLookupResponse {
   complete: boolean;
   /** Latest ledger fully reflected by this response. */
   indexed_through_ledger: number;
+  /** Response-level causes. Present only when `complete` is false. */
+  incompleteReasons?: CredentialLookupIncompleteReason[];
 }
 
 /**
@@ -156,8 +174,10 @@ export interface ContractDetailsResponse {
   contractId: string;
   /** Summary statistics */
   summary: IndexedContractSummary;
-  /** Active context rules with signers and policies */
+  /** Context-rule data from indexed event history. */
   contextRules: IndexedContextRule[];
+  /** The route can label signer data as indexed event history. */
+  signer_data?: "historical";
 }
 
 /**
@@ -296,7 +316,12 @@ export class IndexerClient {
       !Array.isArray(response.contracts) ||
       !Number.isSafeInteger(responseCount) ||
       responseCount < 0 ||
-      responseCount !== response.contracts.length
+      responseCount !== response.contracts.length ||
+      !hasValidLookupIncompleteReasons(
+        response.complete,
+        response.incompleteReasons
+      ) ||
+      !response.contracts.every(hasValidCandidateIncompleteReasons)
     ) {
       throw new IndexerError(
         "Indexer returned an invalid schema-2 credential response",
@@ -335,7 +360,9 @@ export class IndexerClient {
       candidates.map((candidate) => candidate.contractId)
     );
     const responseCount = Number(response.count);
-    const collisionExpected = candidates.length > 1;
+    const collisionExpected =
+      candidates.some((candidate) => candidate.derivedAddress) &&
+      candidates.some((candidate) => !candidate.derivedAddress);
     const complete =
       response.complete === true &&
       Number.isSafeInteger(responseCount) &&
@@ -388,11 +415,13 @@ export class IndexerClient {
   /**
    * Get detailed information about a smart account contract.
    *
-   * Returns the current state including:
+   * Returns indexed event history including:
    * - Contract summary statistics
-   * - Active context rules (excluding removed ones)
+   * - Context rules with signers and policies
    * - Signers for each rule
    * - Policies for each rule
+   *
+   * The credential lookup is authoritative for RPC-confirmed candidate state.
    *
    * @param contractId - Smart account contract address (C...)
    * @returns Contract details or null if not found
@@ -404,6 +433,15 @@ export class IndexerClient {
       const response = await this.fetch<ContractDetailsResponse>(
         `${API_PATH_CONTRACT}/${contractId}`
       );
+      if (
+        response.signer_data !== undefined &&
+        response.signer_data !== "historical"
+      ) {
+        throw new IndexerError(
+          "Indexer returned an invalid contract-detail response",
+          0
+        );
+      }
       return {
         ...response,
         summary: this.normalizeContractSummary(response.summary),
@@ -505,6 +543,59 @@ export class IndexerClient {
 }
 
 const HASH_HEX = /^[0-9a-f]{64}$/;
+const WALLET_CANDIDATE_INCOMPLETE_REASONS: ReadonlySet<string> = new Set([
+  "missing_birth",
+  "rpc_unchecked",
+  "signer_unconfirmed",
+  "instance_missing",
+  "wasm_unresolved",
+  "inconsistent_creation_ledger",
+]);
+const CREDENTIAL_LOOKUP_INCOMPLETE_REASONS: ReadonlySet<string> = new Set([
+  "reducer_errors",
+  "index_behind",
+]);
+
+function isAllowedReasonList(
+  value: unknown,
+  allowedReasons: ReadonlySet<string>
+): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (reason) => typeof reason === "string" && allowedReasons.has(reason)
+    )
+  );
+}
+
+function hasValidLookupIncompleteReasons(
+  complete: boolean,
+  reasons: unknown
+): boolean {
+  if (complete) return reasons === undefined;
+  return (
+    reasons === undefined ||
+    isAllowedReasonList(reasons, CREDENTIAL_LOOKUP_INCOMPLETE_REASONS)
+  );
+}
+
+function hasValidCandidateIncompleteReasons(contract: unknown): boolean {
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
+    return false;
+  }
+  const candidate = contract as {
+    incomplete?: unknown;
+    incompleteReasons?: unknown;
+  };
+  if (candidate.incomplete === true) {
+    return isAllowedReasonList(
+      candidate.incompleteReasons,
+      WALLET_CANDIDATE_INCOMPLETE_REASONS
+    );
+  }
+  return candidate.incompleteReasons === undefined;
+}
 
 function normalizePositiveInteger(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 1) {

@@ -969,6 +969,8 @@ import { IndexerClient, IndexerError, DEFAULT_INDEXER_URLS } from 'smart-account
 import type {
   IndexerConfig,
   IndexedContractSummary,
+  WalletCandidateIncompleteReason,
+  CredentialLookupIncompleteReason,
   IndexedWalletCandidate,
   WalletCandidate,
   WalletCandidateLookup,
@@ -1005,6 +1007,14 @@ if (kit.indexer) {
 Treat every discovery row as an unverified candidate.
 Do not auto-select one result or display it as a deposit address.
 `connectWallet` checks immutable birth, current code, one exact live signer, rule expiration, indexer freshness, and fresh passkey ownership.
+
+Schema 2 uses closed reason sets for incomplete candidates and incomplete responses.
+The SDK rejects unknown reasons and invalid reason placement.
+`collision` is true only when derived and non-derived candidates coexist after exclusions.
+
+Mercury marks contract-detail signer data with `signer_data: "historical"`.
+This additive field warns that the detail route can lag current chain state.
+The credential lookup remains authoritative for RPC-confirmed candidate state.
 
 `indexerAuthToken` is optional (Mercury's read endpoints are public); supply one only for gated/admin operations or a provider that requires it. When set, it (and `authToken` on a directly-constructed client) is sent on every request as `Authorization: Bearer <token>`. Browser bundles expose their environment variables to users, so only embed public or tightly scoped tokens there; keep privileged and catch-up/admin credentials server-side.
 

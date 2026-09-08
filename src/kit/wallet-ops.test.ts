@@ -806,7 +806,7 @@ describe("wallet-ops", () => {
       );
     });
 
-    it("connects only after stored birth and the live signer verify", async () => {
+    it("connects when valid_until equals the current ledger", async () => {
       const storage = new MemoryStorage();
       const credentialId = "cred";
       const publicKey = new Uint8Array(65).fill(9);
@@ -845,7 +845,7 @@ describe("wallet-ops", () => {
         ),
         readContextRule: vi.fn().mockResolvedValue({
           signers: [signer],
-          valid_until: undefined,
+          valid_until: 500,
         }),
         verifyBirth: vi.fn().mockResolvedValue({
           ok: true,

@@ -2,7 +2,14 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## 0.7.0 — Unreleased
+## 0.7.1 — 2026-09-08
+
+- Added typed schema-2 incomplete reasons and the historical signer-data label.
+- Matched collision validation to derived and non-derived candidate coexistence.
+- Kept `smart-account-kit-bindings@0.4.0` unchanged.
+- Kept the contracts and deployed services unchanged.
+
+## 0.7.0 — 2026-09-04
 
 This release changes the SDK, demos, documentation, and relayer proxy.
 It does not change or deploy smart contracts.
