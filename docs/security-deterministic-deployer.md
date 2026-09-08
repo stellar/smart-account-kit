@@ -79,6 +79,16 @@ Fresh-device recovery requires a complete schema-2 lookup response.
 The response must include immutable birth metadata and a complete ledger position.
 The SDK rejects legacy, malformed, incomplete, and duplicate claims.
 
+An incomplete candidate must include a known candidate-level reason.
+An incomplete response can include `reducer_errors` or `index_behind`.
+The SDK rejects unknown reasons and reasons on complete data.
+
+`collision` is true only when derived and non-derived candidates remain after exclusions.
+Multiple non-derived candidates do not create a collision.
+
+Mercury labels contract-detail signer data with `signer_data: "historical"`.
+The credential lookup remains authoritative for RPC-confirmed candidate state.
+
 The indexer supplies discovery claims only.
 The SDK rechecks each immutable claim against RPC or Horizon.
 See [`../indexer/README.md`](../indexer/README.md) for the exact response contract.

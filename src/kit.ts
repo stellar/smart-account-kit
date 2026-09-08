@@ -702,8 +702,9 @@ export class SmartAccountKit {
   /**
    * Get detailed information about a smart account contract from the indexer.
    *
-   * Returns the current state including active context rules, signers, and policies.
-   * This is useful for displaying contract details and discovering active rule IDs.
+   * Returns indexed context-rule history, signers, and policies.
+   * The credential lookup supplies RPC-confirmed candidate state.
+   * The SDK rechecks selected rules on the chain.
    *
    * Note: the SDK relies on the indexer for active rule discovery because the
    * contract does not expose an iterator for active rule IDs.

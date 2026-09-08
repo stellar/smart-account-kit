@@ -68,6 +68,7 @@ interface ContractDetails {
   contractId: string;
   summary: SmartAccountInfo;
   contextRules: ContextRuleInfo[];
+  signer_data?: "historical";
 }
 
 // State

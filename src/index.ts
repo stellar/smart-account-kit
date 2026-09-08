@@ -229,6 +229,8 @@ export {
 export type {
   IndexerConfig,
   IndexedContractSummary,
+  WalletCandidateIncompleteReason,
+  CredentialLookupIncompleteReason,
   IndexedWalletCandidate,
   WalletCandidate,
   WalletCandidateLookup,
