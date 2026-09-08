@@ -2,7 +2,7 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## Unreleased
+## 0.8.0 — 2026-09-08
 
 ### Breaking security changes
 
