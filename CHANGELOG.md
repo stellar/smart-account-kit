@@ -20,6 +20,7 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 
 - Sort constructor policy maps and signer maps with Soroban host ordering.
 - Report invalid policy addresses through the typed validation error path.
+- Report foreign smart-account authorization entries through the typed validation error path.
 - Decode `CreateContract` and `CreateContractV2` authorization contexts with SDK 16 accessors.
 - Reject malformed or off-curve WebAuthn public keys instead of slicing invalid attestation data.
 - Reject the shared deterministic deployer as a delegated signer.

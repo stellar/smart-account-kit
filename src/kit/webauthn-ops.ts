@@ -32,6 +32,7 @@ import { computeEntryAuthDigest } from "../signers.js";
 import {
   findWebAuthnSignerInRules,
 } from "./context-rules.js";
+import { SmartAccountErrorCode, ValidationError } from "../errors.js";
 
 type WebAuthnDeps = {
   rpId?: string;
@@ -141,7 +142,11 @@ export async function signAuthEntry(
   const credentials = getAddressCredentials(normalizedEntry.credentials());
   const { wallet, contractId } = deps.requireWallet();
   if (getAuthEntryAddress(normalizedEntry) !== contractId) {
-    throw new Error("The authorization entry is not for the connected smart account");
+    throw new ValidationError(
+      "The authorization entry is not for the connected smart account",
+      SmartAccountErrorCode.INVALID_INPUT,
+      { contractId }
+    );
   }
   assertWalletMutationIntent(
     normalizedEntry,

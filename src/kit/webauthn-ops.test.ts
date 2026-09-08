@@ -9,9 +9,11 @@ import {
 } from "./webauthn-ops";
 import { readAuthPayload, getAddressCredentials } from "./auth-payload";
 import { makeAddressAuthEntry } from "../managers/test-utils";
+import { SmartAccountErrorCode, ValidationError } from "../errors";
 
 const NETWORK = "Test SDF Network ; September 2015";
 const CONTRACT = StrKey.encodeContract(hash(Buffer.from("wallet")));
+const OTHER_CONTRACT = StrKey.encodeContract(hash(Buffer.from("other-wallet")));
 const VERIFIER = StrKey.encodeContract(hash(Buffer.from("verifier")));
 
 /** A minimal, well-formed DER ECDSA signature (r=32B, s=32B) for compaction. */
@@ -152,5 +154,21 @@ describe("signAuthEntry", () => {
     await expect(
       signAuthEntry(deps, makeAddressAuthEntry(CONTRACT), { credentialId: "cred-abc" })
     ).rejects.toThrow();
+  });
+
+  it("uses a typed error for an entry from another smart account", async () => {
+    const deps = {
+      requireWallet: () => ({ wallet: {}, contractId: CONTRACT }),
+    } as never;
+
+    try {
+      await signAuthEntry(deps, makeAddressAuthEntry(OTHER_CONTRACT));
+      throw new Error("Expected signAuthEntry to reject the foreign entry");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).code).toBe(
+        SmartAccountErrorCode.INVALID_INPUT
+      );
+    }
   });
 });
