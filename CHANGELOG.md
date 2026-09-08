@@ -28,12 +28,18 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 - Add a total transaction-fee limit to the relayer proxy.
 - Validate missing-account messages before the relayer uses Friendbot.
 - Allow required SDK client headers in relayer CORS preflight responses.
+- Remove a polynomial-time trailing-slash expression from the relayer client.
 
 ### Maintenance
 
 - Update the demo, test runner, build tools, wallet kit, relayer tools, and patched transitive dependencies.
 - Add dependency-audit and binding-parity checks to CI.
+- Pin every CI action to an immutable commit.
 - Update README examples to use the dedicated admin signing methods.
+- Remove the obsolete relayer lockfile after adding the relayer to the root workspace.
+- Add the relayer proxy's portable Worker type check to CI.
+- Configure secret scanning to recognize public Stellar contract addresses and
+  published verifier WASM hashes without hiding private-key formats.
 
 ## 0.7.1 — 2026-09-08
 

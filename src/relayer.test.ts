@@ -13,6 +13,21 @@ describe("RelayerClient responses", () => {
     vi.restoreAllMocks();
   });
 
+  it("removes trailing URL slashes without a regular expression", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ success: true, data: { status: "submitted" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const client = new RelayerClient("https://relay.example////");
+    await client.send("AAAA", []);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://relay.example",
+      expect.any(Object),
+    );
+  });
+
   it("accepts canonical success responses with success=true and data payload", async () => {
     vi.stubGlobal(
       "fetch",

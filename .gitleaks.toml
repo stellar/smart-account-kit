@@ -1,0 +1,44 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Stellar contract addresses"
+regexTarget = "match"
+regexes = [
+  '''C[A-Z2-7]{55}''',
+]
+
+[[allowlists]]
+description = "Published WebAuthn verifier WASM hashes"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''(^|/)demo/\.env(\.mainnet)?\.example$''',
+  '''(^|/)docs/migration-smart-account-kit-v0\.7\.0-rc\.2\.md$''',
+]
+regexes = [
+  '''(?i)(webauthn|verifier|wasm)[^\n]*[0-9a-f]{64}''',
+]
+
+[[allowlists]]
+description = "Relayer API-key test placeholders"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''(^|/)relayer-proxy/src/index\.test\.ts$''',
+  '''(^|/)indexer/relayer-proxy/src/index\.test\.ts$''',
+]
+regexes = [
+  '''gen:\s*\(\)\s*=>.*apiKey:''',
+]
+
+[[allowlists]]
+description = "Historical backend-agent filename"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''(^|/)docs/research/2026-09-06-first-principles-review/07-services\.md$''',
+]
+regexes = [
+  '''05-node-backend-agent\.ts.*Node only, no WebAuthn''',
+]

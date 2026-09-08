@@ -13,9 +13,9 @@ Tests and reviews reduce risk.
 They do not prove that the software has no defects.
 
 The repository audit reports one low-severity [`elliptic@6.6.1` advisory](https://github.com/advisories/GHSA-848j-6mx2-7j84).
-It enters through the optional wallet kit's Hot Wallet module.
+It enters through the optional wallet kit's Hot Wallet and Trezor integrations.
 The package has no patched `elliptic` release.
-Do not enable that wallet module for production assets.
+Do not enable those wallet modules for production assets.
 CI rejects every dependency advisory at moderate severity or higher.
 
 Do not store or control assets you cannot afford to lose.
