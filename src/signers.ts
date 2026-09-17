@@ -24,7 +24,17 @@
 
 import { Keypair, xdr } from "@stellar/stellar-sdk";
 import type { Signer as ContractSigner } from "smart-account-kit-bindings";
-import { buildAuthDigest, buildSignaturePayload } from "./kit/auth-payload.js";
+import {
+  assertWalletMutationIntent,
+  buildAuthDigest,
+  buildSignaturePayload,
+  getAddressCredentials,
+  getAuthEntryAddress,
+  normalizeSignatureExpirationLedger,
+  readAuthPayload,
+  upsertAuthPayloadSigner,
+  writeAuthPayload,
+} from "./kit/auth-payload.js";
 import { SmartAccountErrorCode, ValidationError } from "./errors.js";
 import { ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE } from "./constants.js";
 
@@ -142,4 +152,137 @@ export class Ed25519Signer implements AuthDigestSigner {
     }
     return signature;
   }
+}
+
+/** Options for {@link signAuthEntryWithSigners}. */
+export interface SignAuthEntryWithSignersOptions {
+  /** Network passphrase the entry will be submitted on. */
+  networkPassphrase: string;
+  /**
+   * Context rule ids bound into the auth digest. Required unless the entry's
+   * AuthPayload already carries them (for example, a partially signed entry).
+   */
+  contextRuleIds?: number[];
+  /**
+   * Signature expiration ledger. Required unless the entry already has a
+   * non-zero `signatureExpirationLedger`.
+   */
+  expiration?: number;
+}
+
+/**
+ * Sign a smart-account authorization entry with local auth-digest signers and
+ * return the signed entry WITHOUT submitting it.
+ *
+ * This is the sign-only path for headless or non-browser callers, such as an
+ * agent that holds an Ed25519 key and hands the signed entry to a third party
+ * (an x402 facilitator, a relayer, a coordinator) that builds and submits the
+ * transaction. It needs no connected wallet, no RPC, and no WebAuthn.
+ *
+ * Security properties:
+ * - Refuses smart-account mutations (`execute`, `upgrade`, signer, rule, and
+ *   policy changes). Use `kit.multiSigners.adminOperation()` for those.
+ * - Binds `contextRuleIds` into the auth digest, so the rule selection cannot
+ *   change after signing. A mismatch with ids already in the payload throws.
+ * - Never widens a partially signed payload: existing signatures are kept and
+ *   the same signer is replaced, not duplicated.
+ *
+ * @param entry - The `SorobanAuthorizationEntry` from simulation
+ * @param signers - Local signers (e.g. {@link Ed25519Signer}) that sign the digest
+ * @param options - Network passphrase, context rule ids, and expiration
+ * @returns A signed copy of the entry; the input is not modified
+ * @throws {ValidationError} On empty signers, unsupported credentials, a
+ *   wallet mutation, a missing expiration, or missing/mismatched rule ids
+ *
+ * @example
+ * ```ts
+ * const signer = Ed25519Signer.fromSecret(process.env.AGENT_SECRET!, verifier);
+ * const signed = await signAuthEntryWithSigners(entry, [signer], {
+ *   networkPassphrase: Networks.TESTNET,
+ *   contextRuleIds: [usdcRuleId],
+ *   expiration: latestLedger + 100,
+ * });
+ * facilitator.settle(signed.toXDR("base64"));
+ * ```
+ */
+export async function signAuthEntryWithSigners(
+  entry: xdr.SorobanAuthorizationEntry,
+  signers: readonly AuthDigestSigner[],
+  options: SignAuthEntryWithSignersOptions
+): Promise<xdr.SorobanAuthorizationEntry> {
+  if (signers.length === 0) {
+    throw new ValidationError(
+      "At least one signer is required",
+      SmartAccountErrorCode.INVALID_INPUT
+    );
+  }
+
+  const signed = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+  const credentialType = signed.credentials().switch().name as string;
+  if (credentialType === "sorobanCredentialsAddressWithDelegates") {
+    throw new ValidationError(
+      "ADDRESS_WITH_DELEGATES auth entries are not supported by sign-only signing yet",
+      SmartAccountErrorCode.INVALID_INPUT
+    );
+  }
+  if (
+    credentialType !== "sorobanCredentialsAddress" &&
+    credentialType !== "sorobanCredentialsAddressV2"
+  ) {
+    throw new ValidationError(
+      "Only address-credential auth entries can be signed by a smart account",
+      SmartAccountErrorCode.INVALID_INPUT,
+      { credentialType }
+    );
+  }
+
+  const contractId = getAuthEntryAddress(signed);
+  // No host function: this is a generic path and must refuse admin mutations.
+  assertWalletMutationIntent(signed, contractId);
+
+  const credentials = getAddressCredentials(signed.credentials());
+  const requestedExpiration =
+    options.expiration ?? credentials.signatureExpirationLedger();
+  if (!requestedExpiration) {
+    throw new ValidationError(
+      "A signature expiration ledger is required to sign this auth entry",
+      SmartAccountErrorCode.INVALID_INPUT
+    );
+  }
+  const expiration = normalizeSignatureExpirationLedger(requestedExpiration);
+
+  const authPayload = readAuthPayload(credentials.signature());
+  const contextRuleIds = options.contextRuleIds ?? authPayload.context_rule_ids;
+  if (contextRuleIds.length === 0) {
+    throw new ValidationError(
+      "contextRuleIds are required to sign smart account auth entries when the payload does not already include them",
+      SmartAccountErrorCode.INVALID_INPUT
+    );
+  }
+  if (
+    authPayload.context_rule_ids.length > 0 &&
+    authPayload.context_rule_ids.join(",") !== contextRuleIds.join(",")
+  ) {
+    throw new ValidationError(
+      "Existing auth payload uses different context rule IDs",
+      SmartAccountErrorCode.INVALID_INPUT,
+      { existing: authPayload.context_rule_ids, requested: contextRuleIds }
+    );
+  }
+
+  const { authDigest } = computeEntryAuthDigest(
+    options.networkPassphrase,
+    signed,
+    expiration,
+    contextRuleIds
+  );
+
+  for (const signer of signers) {
+    const signatureBytes = await signer.signAuthDigest(authDigest);
+    upsertAuthPayloadSigner(authPayload, signer.signer, Buffer.from(signatureBytes));
+  }
+
+  authPayload.context_rule_ids = [...contextRuleIds];
+  credentials.signature(writeAuthPayload(authPayload));
+  return signed;
 }
