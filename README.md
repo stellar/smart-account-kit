@@ -1141,3 +1141,7 @@ Publish `smart-account-kit-bindings` first only when its generated code changed.
 ## License
 
 Apache License 2.0 — see [`LICENSE`](LICENSE) for details.
+
+---
+
+> **Note:** This repository is not in scope for the Stellar Development Foundation bug bounty program. Vulnerabilities found in this repo are not eligible for rewards.
