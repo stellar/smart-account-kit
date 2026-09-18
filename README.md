@@ -566,6 +566,39 @@ signer.publicKey; // 32-byte Buffer
 signer.address;   // G-address form
 ```
 
+#### Sign only, without submitting (headless Ed25519)
+
+Use `signAuthEntryWithSigners` when a third party settles the transaction, such as an x402 facilitator, a relayer, or a multi-party coordinator. It signs one `SorobanAuthorizationEntry` with local signers and returns the signed entry. It does not need a browser, a passkey, a connected `SmartAccountKit`, or an RPC connection.
+
+```typescript
+import { Networks, xdr } from '@stellar/stellar-sdk';
+import { Ed25519Signer, signAuthEntryWithSigners } from 'smart-account-kit';
+
+// One-time setup happens elsewhere with a passkey: create the account, add
+// this key as an External signer on a CallContract(USDC) rule, and attach a
+// spending_limit policy to that rule.
+const signer = Ed25519Signer.fromSecret(process.env.AGENT_SECRET!, ed25519VerifierAddress);
+
+// The entry comes from the transaction simulation (yours or the facilitator's).
+const entry = xdr.SorobanAuthorizationEntry.fromXDR(entryXdrBase64, 'base64');
+
+const signed = await signAuthEntryWithSigners(entry, [signer], {
+  networkPassphrase: Networks.TESTNET,
+  contextRuleIds: [usdcRuleId],      // the rule the policy is attached to
+  expiration: latestLedger + 100,    // signature expiration ledger
+});
+
+// Hand the signed entry back to whoever submits.
+await facilitator.settle(signed.toXDR('base64'));
+```
+
+Rules the helper enforces:
+
+- It refuses smart-account mutations (`execute`, `upgrade`, signer, rule, and policy changes). Use `kit.multiSigners.adminOperation()` for those.
+- It binds `contextRuleIds` into the auth digest. If the entry is already partly signed, the ids must match.
+- It requires an explicit `expiration` unless the entry already has one.
+- It accepts any `AuthDigestSigner`, so a KMS or HSM signer works the same way.
+
 ---
 
 ### Typed Policy Clients (`kit.policyClients`)

@@ -2,6 +2,16 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
+## Unreleased
+
+### Added
+
+- `signAuthEntryWithSigners()`: sign one authorization entry with local
+  `AuthDigestSigner`s (for example `Ed25519Signer`) and return it without
+  submitting. It needs no browser, passkey, connected kit, or RPC. It refuses
+  smart-account mutations and binds `contextRuleIds` into the auth digest.
+  Closes [#13](https://github.com/stellar/smart-account-kit/issues/13).
+
 ## 0.8.0 — 2026-09-08
 
 ### Breaking security changes

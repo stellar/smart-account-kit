@@ -189,8 +189,15 @@ export {
 } from "./signer-utils.js";
 
 // Signer abstraction (Ed25519 + shared auth-digest core)
-export { Ed25519Signer, computeEntryAuthDigest } from "./signers.js";
-export type { AuthDigestSigner } from "./signers.js";
+export {
+  Ed25519Signer,
+  computeEntryAuthDigest,
+  signAuthEntryWithSigners,
+} from "./signers.js";
+export type {
+  AuthDigestSigner,
+  SignAuthEntryWithSignersOptions,
+} from "./signers.js";
 
 // Advanced flows: auth-payload signer encoding + transaction helpers
 export { signerToScVal, parseSignerScVal } from "./kit/auth-payload.js";
