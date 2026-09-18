@@ -47,3 +47,8 @@ Use local tests or isolated test accounts.
 Do not test public user accounts or move assets that you do not own.
 
 The maintainers will confirm receipt, investigate the report, prepare a fix, and coordinate disclosure with the reporter.
+
+## Bug bounty
+
+This repository is not in scope for the Stellar Development Foundation bug bounty program.
+Vulnerabilities found in this repo are not eligible for rewards.
