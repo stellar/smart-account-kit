@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { SignerManager } from "./signer-manager";
 import { buildKeyData } from "../utils";
-import { makeAccount, makeDelegatedSigner } from "./test-utils";
+import { makeAccount, makeContract, makeDelegatedSigner } from "./test-utils";
+import { ValidationError } from "../errors";
 
 function makeDeps() {
   const wallet = {
@@ -129,6 +130,32 @@ describe("SignerManager", () => {
       signer: makeDelegatedSigner(11),
     });
     expect(result).toEqual({ result: 44 });
+  });
+
+  it("rejects a delegated signer that is not a G-address", async () => {
+    const deps = makeDeps();
+    const manager = new SignerManager({
+      ...deps,
+      createPasskey: vi.fn(),
+      webauthnVerifierAddress: "CCAAAAA",
+    });
+
+    await expect(manager.addDelegated(2, makeContract(3))).rejects.toThrow(ValidationError);
+    expect(deps.wallet.add_signer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a batch that makes the wallet its own delegated signer", async () => {
+    const deps = makeDeps();
+    const manager = new SignerManager({
+      ...deps,
+      createPasskey: vi.fn(),
+      webauthnVerifierAddress: "CCAAAAA",
+    });
+
+    await expect(
+      manager.addBatch(4, [makeDelegatedSigner(1), { tag: "Delegated", values: ["CCONTRACT"] }])
+    ).rejects.toThrow("cannot be its own delegated signer");
+    expect(deps.wallet.batch_add_signer).not.toHaveBeenCalled();
   });
 
   it("removes a signer by resolving the global signer id", async () => {

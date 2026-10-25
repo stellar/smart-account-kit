@@ -13,6 +13,7 @@ import { buildKeyData } from "../utils.js";
 import { SignerNotFoundError } from "../errors.js";
 import { unwrapContractResult } from "../contract-errors.js";
 import { validateSigner, validateSigners } from "../validation.js";
+import { createDelegatedSigner } from "../builders.js";
 
 /** Dependencies required by SignerManager */
 export interface SignerManagerDeps {
@@ -120,14 +121,18 @@ export class SignerManager {
 
   /**
    * Add a delegated signer (Stellar account) to a context rule.
+   *
+   * @param contextRuleId - The context rule to add the signer to
+   * @param publicKey - Stellar account address (G...)
+   * @returns Assembled transaction that adds the signer when signed and sent
+   * @throws {ValidationError} If `publicKey` is not a G-address
+   * @throws Error if not connected to a wallet
    */
   async addDelegated(contextRuleId: number, publicKey: string) {
     const { wallet } = this.deps.requireWallet();
 
-    const signer: ContractSigner = {
-      tag: "Delegated",
-      values: [publicKey],
-    };
+    // A G-address can never be the wallet itself, so no self-delegation check.
+    const signer = createDelegatedSigner(publicKey);
     validateSigner(signer);
 
     return wallet.add_signer({
@@ -148,7 +153,8 @@ export class SignerManager {
    *   rule-level limit at simulation.
    * @returns Assembled transaction that adds the signers when signed and sent
    * @throws {ValidationError} If the batch (plus `existingSignerCount`) would
-   *   exceed `MAX_SIGNERS` or a signer is invalid
+   *   exceed `MAX_SIGNERS`, a signer is invalid, or a Delegated signer is the
+   *   wallet itself
    * @throws Error if not connected to a wallet
    */
   async addBatch(
@@ -156,8 +162,8 @@ export class SignerManager {
     signers: ContractSigner[],
     options?: { existingSignerCount?: number }
   ) {
-    const { wallet } = this.deps.requireWallet();
-    validateSigners(signers, options?.existingSignerCount ?? 0);
+    const { wallet, contractId } = this.deps.requireWallet();
+    validateSigners(signers, options?.existingSignerCount ?? 0, contractId);
     return wallet.batch_add_signer({
       context_rule_id: contextRuleId,
       signers,

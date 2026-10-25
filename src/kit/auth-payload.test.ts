@@ -9,7 +9,7 @@ import {
 import { describe, expect, it } from "vitest";
 import type { AuthPayload, Signer } from "smart-account-kit-bindings";
 import {
-  buildAuthDigest,
+  buildLegacyAuthDigest,
   buildAddressSignatureScVal,
   buildSignaturePreimage,
   buildSignaturePayload,
@@ -178,6 +178,65 @@ describe("auth-payload", () => {
     ).toThrow("does not match the transaction host function");
   });
 
+  describe("signers added on the admin path", () => {
+    const wallet = Address.contract(hash(Buffer.from("wallet-admin"))).toString();
+    const self = signerToScVal(makeDelegatedSigner(wallet));
+    const other = signerToScVal(makeDelegatedSigner(makeAccount(28)));
+
+    function assertAdmin(functionName: string, args: xdr.ScVal[]) {
+      const root = makeContractInvocation(wallet, functionName, [], args);
+      const entry = withRootInvocation(makeAuthEntry(makeAccount(27)), root);
+      const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
+        root.function().contractFn()
+      );
+      assertWalletMutationIntent(entry, wallet, hostFunction);
+    }
+
+    function contextRuleArgs(signers: xdr.ScVal[]): xdr.ScVal[] {
+      return [
+        xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Default")]),
+        xdr.ScVal.scvString("rule"),
+        xdr.ScVal.scvVoid(),
+        xdr.ScVal.scvVec(signers),
+        xdr.ScVal.scvMap([]),
+      ];
+    }
+
+    it("refuses a mutation that makes the wallet its own delegated signer", () => {
+      expect(() => assertAdmin("add_signer", [xdr.ScVal.scvU32(0), self])).toThrow(
+        "cannot be its own delegated signer"
+      );
+      expect(() =>
+        assertAdmin("batch_add_signer", [xdr.ScVal.scvU32(0), xdr.ScVal.scvVec([other, self])])
+      ).toThrow("cannot be its own delegated signer");
+      expect(() => assertAdmin("add_context_rule", contextRuleArgs([other, self]))).toThrow(
+        "cannot be its own delegated signer"
+      );
+    });
+
+    it("refuses a mutation that adds another contract as a delegated signer", () => {
+      const peer = Address.contract(hash(Buffer.from("wallet-peer"))).toString();
+      const contract = signerToScVal(makeDelegatedSigner(peer));
+      expect(() => assertAdmin("add_signer", [xdr.ScVal.scvU32(0), contract])).toThrow(
+        "must be a Stellar account"
+      );
+      expect(() =>
+        assertAdmin("batch_add_signer", [xdr.ScVal.scvU32(0), xdr.ScVal.scvVec([other, contract])])
+      ).toThrow("must be a Stellar account");
+      expect(() => assertAdmin("add_context_rule", contextRuleArgs([other, contract]))).toThrow(
+        "must be a Stellar account"
+      );
+    });
+
+    it("accepts a mutation that adds other signers", () => {
+      expect(() => assertAdmin("add_signer", [xdr.ScVal.scvU32(0), other])).not.toThrow();
+      expect(() =>
+        assertAdmin("batch_add_signer", [xdr.ScVal.scvU32(0), xdr.ScVal.scvVec([other])])
+      ).not.toThrow();
+      expect(() => assertAdmin("add_context_rule", contextRuleArgs([other]))).not.toThrow();
+    });
+  });
+
   it("round-trips AuthPayload with signer map and context rule ids", () => {
     const signer = makeDelegatedSigner(
       makeAccount(1)
@@ -213,11 +272,11 @@ describe("auth-payload", () => {
     expect(Array.from(payload.signers.values())[0]).toEqual(Buffer.from("bb", "hex"));
   });
 
-  it("binds context rule ids into the auth digest", () => {
+  it("binds context rule ids into the legacy auth digest", () => {
     const signaturePayload = hash(Buffer.from("payload"));
 
-    const digestA = buildAuthDigest(signaturePayload, [1]);
-    const digestB = buildAuthDigest(signaturePayload, [2]);
+    const digestA = buildLegacyAuthDigest(signaturePayload, [1]);
+    const digestB = buildLegacyAuthDigest(signaturePayload, [2]);
 
     expect(digestA.equals(digestB)).toBe(false);
 

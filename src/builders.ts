@@ -254,6 +254,50 @@ export function createCreateContractContext(wasmHash: string | Buffer): ContextR
   };
 }
 
+/**
+ * Create a CreateContractExternalRef context rule type.
+ *
+ * CreateContractExternalRef rules apply only when deploying contracts from a
+ * CAP-85 executable reference: the WASM hash that the `owner` contract stores
+ * under `tag`. The hash is resolved at deployment time, so the rule trusts the
+ * owner contract to keep the reference pointing at acceptable code. Requires
+ * an account build that includes this rule type; older builds reject it
+ * during simulation.
+ *
+ * @param owner - The contract address that stores the executable reference
+ * @param tag - The tag the reference is stored under
+ * @returns ContextRuleType for external-reference contract creation
+ *
+ * @example
+ * ```typescript
+ * const contextType = createCreateContractExternalRefContext("C...", "account-v1");
+ * await kit.rules.add(contextType, "Deploy Accounts", signers, policies);
+ * ```
+ */
+export function createCreateContractExternalRefContext(
+  owner: string,
+  tag: string
+): ContextRuleType {
+  if (!StrKey.isValidContract(owner)) {
+    throw new ValidationError(
+      "Invalid executable owner. Must be a valid C... contract address.",
+      SmartAccountErrorCode.INVALID_ADDRESS,
+      { owner }
+    );
+  }
+  if (typeof tag !== "string") {
+    throw new ValidationError(
+      "Executable reference tag must be a string",
+      SmartAccountErrorCode.INVALID_INPUT,
+      { tag }
+    );
+  }
+  return {
+    tag: "CreateContractExternalRef",
+    values: [owner, tag],
+  };
+}
+
 // ============================================================================
 // Policy Parameter Builders
 // ============================================================================
@@ -493,6 +537,11 @@ export function formatContextType(contextType: ContextRuleType): string {
   if (contextType.tag === "CreateContract") {
     const hashBytes = contextType.values[0] as Buffer;
     return `Create Contract: ${hashBytes.toString("hex").slice(0, 8)}...`;
+  }
+
+  if (contextType.tag === "CreateContractExternalRef") {
+    const [owner, tag] = contextType.values;
+    return `Create Contract from Ref: ${truncateAddress(owner)} / ${tag}`;
   }
 
   return "Unknown";

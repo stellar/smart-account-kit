@@ -15,11 +15,10 @@ import type { Signer as ContractSigner } from "smart-account-kit-bindings";
 import base64url from "../base64url.js";
 import type { PolicyConfig } from "../types.js";
 import type { WalletCandidate } from "../indexer.js";
-import { compactSignature } from "../utils.js";
+import { compactSignature, normalizeHashHex } from "../utils.js";
 import { compareScVal, parseSignerScVal } from "./auth-payload.js";
 import { buildConstructorPolicies } from "./policies-ops.js";
 
-const HASH_HEX = /^[0-9a-f]{64}$/;
 const P256_PUBLIC_KEY_SIZE = 65;
 const AUTHENTICATOR_DATA_MIN_SIZE = 37;
 const USER_PRESENT_FLAG = 0x01;
@@ -59,11 +58,6 @@ export interface WalletBirthVerificationDeps {
   expectedSalt?: Uint8Array;
   expectedConstructorArgsHash?: string;
   expectedPolicies?: readonly PolicyConfig[];
-}
-
-function normalizeHash(value: string): string | undefined {
-  const normalized = value.toLowerCase();
-  return HASH_HEX.test(normalized) ? normalized : undefined;
 }
 
 function fail(reason: WalletBirthFailure, detail: string): WalletBirthResult {
@@ -155,7 +149,7 @@ function validateConstructor(
   }
 
   const expectedArgsHash = deps.expectedConstructorArgsHash
-    ? normalizeHash(deps.expectedConstructorArgsHash)
+    ? normalizeHashHex(deps.expectedConstructorArgsHash)
     : undefined;
   if (deps.expectedConstructorArgsHash && !expectedArgsHash) {
     return fail("constructor_mismatch", "the expected constructor hash is malformed");
@@ -186,11 +180,11 @@ export async function verifyWalletBirth(
   deps: WalletBirthVerificationDeps,
   candidate: WalletCandidate
 ): Promise<WalletBirthResult> {
-  const claimedWasm = normalizeHash(candidate.birthWasmHash);
-  const txHash = normalizeHash(candidate.creationTransactionHash);
+  const claimedWasm = normalizeHashHex(candidate.birthWasmHash);
+  const txHash = normalizeHashHex(candidate.creationTransactionHash);
   const accepted = new Set(
     deps.acceptedBirthWasmHashes
-      .map(normalizeHash)
+      .map(normalizeHashHex)
       .filter((value): value is string => value !== undefined)
   );
   if (

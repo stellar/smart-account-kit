@@ -15,6 +15,7 @@ import type {
 import type { xdr } from "@stellar/stellar-sdk";
 import type { SmartAccountError } from "./errors.js";
 import type { WalletStorage } from "./external-signers.js";
+import type { AuthDigestScheme } from "./kit/auth-digest-scheme.js";
 
 // ============================================================================
 // Credential Storage Types
@@ -159,6 +160,20 @@ export interface SmartAccountConfig {
    * `[accountWasmHash]`.
    */
   acceptedBirthWasmHashes?: string[];
+
+  /**
+   * Authorization digest scheme per account WASM hash (hex).
+   *
+   * Signers commit to a digest whose format depends on the code a wallet runs.
+   * The SDK reads the wallet's current WASM hash before every signature and
+   * refuses to sign for a hash it cannot map. Built-in entries cover the
+   * canonical deployments; entries here are merged over them.
+   *
+   * - `legacy-concat`: stellar-contracts builds before the `AuthDigestPreimage`
+   *   change (#868).
+   * - `preimage-v1`: builds that include it.
+   */
+  authDigestSchemes?: Record<string, AuthDigestScheme>;
 
   /**
    * Horizon URL for immutable transaction history after RPC retention expires.

@@ -32,6 +32,8 @@ describe("decodeContractError", () => {
   it.each([
     [3000, "ContextRuleNotFound", "SmartAccount"],
     [3016, "UnauthorizedSigner", "SmartAccount"],
+    [3017, "DelegatedSignerIsContextContract", "SmartAccount"],
+    [3018, "SelfDelegatedSigner", "SmartAccount"],
     [3114, "ChallengeInvalid", "WebAuthn"],
     [3201, "InvalidThreshold", "SimpleThreshold"],
     [3211, "InvalidThreshold", "WeightedThreshold"],
@@ -118,7 +120,7 @@ describe("CONTRACT_ERROR_REGISTRY", () => {
   });
 
   it("stays in sync with the generated bindings' SmartAccountError map", () => {
-    // The account contract family (3000-3016) is the source of truth in the
+    // The account contract family (3000-3018) is the source of truth in the
     // generated bindings; a regen must not drift from this table.
     const bindingsEntries = Object.entries(
       AccountErrorSpec as Record<string, { message: string }>

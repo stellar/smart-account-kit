@@ -49,6 +49,8 @@ import {
   signFeePayer,
 } from "../kit/tx-ops.js";
 import { computeEntryAuthDigest } from "../signers.js";
+import type { AuthDigestScheme } from "../kit/auth-digest-scheme.js";
+import type { SignAuthEntryOptions } from "../kit/webauthn-ops.js";
 import { validateAddress, validateAmount } from "../utils.js";
 import {
   SmartAccountErrorCode,
@@ -83,14 +85,9 @@ export interface MultiSignerManagerDeps {
   deployerPublicKey: string;
   signAuthEntry: (
     entry: xdr.SorobanAuthorizationEntry,
-    options?: {
-      credentialId?: string;
-      expiration?: number;
-      contextRuleIds?: number[];
-      signer?: ContractSigner;
-      walletMutationHostFunction?: xdr.HostFunction;
-    }
+    options?: SignAuthEntryOptions
   ) => Promise<xdr.SorobanAuthorizationEntry>;
+  resolveAuthDigestScheme: (contractId: string) => Promise<AuthDigestScheme>;
   sendAndPoll: (tx: Transaction, options?: SubmissionOptions) => Promise<TransactionResult>;
   hasSourceAccountAuth: (tx: Transaction) => boolean;
   shouldUseFeeSponsoring: (options?: SubmissionOptions) => boolean;
@@ -283,6 +280,9 @@ export class MultiSignerManager {
       onLog(`Found ${authEntries.length} auth entries to sign`);
 
       const signedAuthEntries: xdr.SorobanAuthorizationEntry[] = [];
+      // Resolved once, on the first smart-account entry, so every signer in
+      // this transaction commits under the same scheme.
+      let authDigestScheme: AuthDigestScheme | undefined;
       const { sequence } = await this.deps.rpc.getLatestLedger();
       const defaultExpiration = normalizeSignatureExpirationLedger(
         Math.min(0xffffffff, sequence + AUTH_ENTRY_EXPIRATION_BUFFER)
@@ -338,6 +338,7 @@ export class MultiSignerManager {
           contractId,
           allowWalletMutation ? hostFunc : undefined
         );
+        authDigestScheme ??= await this.deps.resolveAuthDigestScheme(contractId);
 
         let signedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
         getAddressCredentials(signedEntry.credentials()).signatureExpirationLedger(expiration);
@@ -369,6 +370,7 @@ export class MultiSignerManager {
             walletMutationHostFunction: allowWalletMutation
               ? hostFunc
               : undefined,
+            authDigestScheme,
           });
         }
 
@@ -392,13 +394,15 @@ export class MultiSignerManager {
         }
 
         // The auth digest is shared by every signer on this entry (passkeys sign
-        // it inside signAuthEntry; ed25519 keys and delegated signers sign it
-        // here). It is independent of the AuthPayload signature content.
-        const { authDigest } = computeEntryAuthDigest(
+        // it inside signAuthEntry; ed25519 keys sign it here, and delegated
+        // signers authorize its scheme-specific `__check_auth` arguments). It is
+        // independent of the AuthPayload signature content.
+        const { authDigest, delegatedAuthArgs } = computeEntryAuthDigest(
           this.deps.networkPassphrase,
           signedEntry,
           expiration,
-          authPayload.context_rule_ids
+          authPayload.context_rule_ids,
+          authDigestScheme
         );
 
         // Ed25519 external signers contribute their raw 64-byte signature bytes.
@@ -441,7 +445,7 @@ export class MultiSignerManager {
               new xdr.InvokeContractArgs({
                 contractAddress: Address.fromString(contractId).toScAddress(),
                 functionName: "__check_auth",
-                args: [xdr.ScVal.scvBytes(authDigest)],
+                args: delegatedAuthArgs,
               })
             ),
             subInvocations: [],

@@ -63,15 +63,21 @@ const READ_ONLY_SIM_ACCOUNT = new Account(
 );
 
 export function contextRuleTypeKey(contextType: ContextRuleType): string {
-  if (contextType.tag === "Default") {
-    return "Default";
+  switch (contextType.tag) {
+    case "Default":
+      return "Default";
+    case "CallContract":
+      return `CallContract:${contextType.values[0]}`;
+    case "CreateContract":
+      return `CreateContract:${Buffer.from(contextType.values[0]).toString("hex")}`;
+    case "CreateContractExternalRef":
+      // A strkey never contains ":", so the owner prefix keeps the key unambiguous.
+      return `CreateContractExternalRef:${contextType.values[0]}:${contextType.values[1]}`;
+    default: {
+      const unknown: never = contextType;
+      throw new Error(`Unknown context rule type: ${(unknown as { tag: string }).tag}`);
+    }
   }
-
-  if (contextType.tag === "CallContract") {
-    return `CallContract:${contextType.values[0]}`;
-  }
-
-  return `CreateContract:${Buffer.from(contextType.values[0]).toString("hex")}`;
 }
 
 export function contextRuleTypeMatches(
@@ -100,15 +106,14 @@ export function buildInvocationContextTypes(
         values: [Address.fromScAddress(args.contractAddress()).toString()],
       });
     } else if (switchName.startsWith("sorobanAuthorizedFunctionTypeCreateContract")) {
-      const wasmHash = extractCreateContractWasmHash(fn);
-      if (!wasmHash) {
-        throw new Error("Unable to extract WASM hash from create-contract authorization entry");
+      const contextType = extractCreateContractContextType(fn);
+      if (!contextType) {
+        throw new Error(
+          "Unable to extract a WASM hash or executable reference from create-contract authorization entry"
+        );
       }
 
-      contexts.push({
-        tag: "CreateContract",
-        values: [wasmHash],
-      });
+      contexts.push(contextType);
     }
 
     for (const sub of invocation.subInvocations()) {
@@ -574,9 +579,14 @@ export async function resolveContextRuleIdsForEntry(
   });
 }
 
-function extractCreateContractWasmHash(
+/**
+ * Map a create-contract authorization to the rule type the smart account
+ * validates it against: `CreateContract(hash)` for a WASM executable and
+ * `CreateContractExternalRef(owner, tag)` for a CAP-85 executable reference.
+ */
+function extractCreateContractContextType(
   fn: xdr.SorobanAuthorizedFunction
-): Buffer | null {
+): ContextRuleType | null {
   const executable =
     fn.switch().name === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
       ? fn.createContractV2HostFn().executable()
@@ -584,10 +594,23 @@ function extractCreateContractWasmHash(
         ? fn.createContractHostFn().executable()
         : null;
 
-  if (!executable || executable.switch().name !== "contractExecutableWasm") {
-    return null;
+  switch (executable?.switch().name) {
+    case "contractExecutableWasm":
+      return { tag: "CreateContract", values: [Buffer.from(executable.wasmHash())] };
+    case "contractExecutableExternalRef": {
+      const ref = executable.externalRef();
+      const tag = ref.tag();
+      return {
+        tag: "CreateContractExternalRef",
+        values: [
+          Address.fromScAddress(ref.executableOwner()).toString(),
+          typeof tag === "string" ? tag : Buffer.from(tag).toString("utf8"),
+        ],
+      };
+    }
+    default:
+      return null;
   }
-  return Buffer.from(executable.wasmHash());
 }
 
 function isMissingContextRuleError(error: unknown): boolean {

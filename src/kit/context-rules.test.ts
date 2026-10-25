@@ -5,6 +5,8 @@ import { Client as SmartAccountClient } from "smart-account-kit-bindings";
 import {
   readContextRule,
   buildInvocationContextTypes,
+  contextRuleTypeKey,
+  contextRuleTypeMatches,
   findWebAuthnSignerForCredential,
   listContextRules,
   resolveContextRuleIdsForEntry,
@@ -586,4 +588,142 @@ describe("direct token transfer entries", () => {
       resolveContextRuleIdsForEntry(wallet, entry, [signer], undefined, [defaultRule, tokenRule])
     ).resolves.toEqual([2]);
   });
+});
+
+describe("CAP-85 external executable references", () => {
+  const owner = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
+  const deployer = makeAccount(5);
+  const signer: Signer = {
+    tag: "Delegated",
+    values: ["GDQP2KPQGKIHYJGXNUIYOMHARUARCA6E6KGUWKZ4S6T7ZTZ4Q7SMX5VA"],
+  };
+
+  function externalRef(tag: string): xdr.ContractExecutable {
+    return xdr.ContractExecutable.contractExecutableExternalRef(
+      new xdr.ContractExecutableExternalRef({
+        executableOwner: Address.fromString(owner).toScAddress(),
+        tag,
+      })
+    );
+  }
+
+  function contractIdPreimage(): xdr.ContractIdPreimage {
+    return xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+      new xdr.ContractIdPreimageFromAddress({
+        address: Address.fromString(deployer).toScAddress(),
+        salt: Buffer.alloc(32, 3),
+      })
+    );
+  }
+
+  function entryFor(fn: xdr.SorobanAuthorizedFunction): xdr.SorobanAuthorizationEntry {
+    return new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: fn,
+        subInvocations: [],
+      }),
+    });
+  }
+
+  function createV2Entry(tag: string): xdr.SorobanAuthorizationEntry {
+    return entryFor(
+      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+        new xdr.CreateContractArgsV2({
+          contractIdPreimage: contractIdPreimage(),
+          executable: externalRef(tag),
+          constructorArgs: [xdr.ScVal.scvU32(1)],
+        })
+      )
+    );
+  }
+
+  it("maps a constructor deployment from a reference to CreateContractExternalRef", () => {
+    expect(buildInvocationContextTypes(createV2Entry("account-v1"))).toEqual([
+      { tag: "CreateContractExternalRef", values: [owner, "account-v1"] },
+    ]);
+  });
+
+  it("maps a deployment without constructor from a reference to CreateContractExternalRef", () => {
+    const entry = entryFor(
+      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractHostFn(
+        new xdr.CreateContractArgs({
+          contractIdPreimage: contractIdPreimage(),
+          executable: externalRef("account-v1"),
+        })
+      )
+    );
+
+    expect(buildInvocationContextTypes(entry)).toEqual([
+      { tag: "CreateContractExternalRef", values: [owner, "account-v1"] },
+    ]);
+  });
+
+  it("keys every context rule type distinctly", () => {
+    const types: ContextRuleType[] = [
+      { tag: "Default", values: undefined },
+      { tag: "CallContract", values: [owner] },
+      { tag: "CreateContract", values: [Buffer.alloc(32, 1)] },
+      { tag: "CreateContractExternalRef", values: [owner, "a"] },
+      { tag: "CreateContractExternalRef", values: [owner, "b"] },
+      { tag: "CreateContractExternalRef", values: [owner, "a:b"] },
+      { tag: "CreateContractExternalRef", values: [deployerContract(), "a"] },
+    ];
+
+    const keys = types.map(contextRuleTypeKey);
+    expect(new Set(keys).size).toBe(types.length);
+    expect(contextRuleTypeKey({ tag: "CreateContractExternalRef", values: [owner, "a"] })).toBe(
+      `CreateContractExternalRef:${owner}:a`
+    );
+  });
+
+  it("rejects an unknown context rule type instead of keying it as CreateContract", () => {
+    expect(() =>
+      contextRuleTypeKey({ tag: "FutureVariant", values: [] } as unknown as ContextRuleType)
+    ).toThrow("Unknown context rule type: FutureVariant");
+  });
+
+  it("matches a reference only by its own rule or a Default rule", () => {
+    const required: ContextRuleType = {
+      tag: "CreateContractExternalRef",
+      values: [owner, "account-v1"],
+    };
+
+    expect(contextRuleTypeMatches(required, required)).toBe(true);
+    expect(contextRuleTypeMatches({ tag: "Default", values: undefined }, required)).toBe(true);
+    expect(
+      contextRuleTypeMatches(
+        { tag: "CreateContractExternalRef", values: [owner, "account-v2"] },
+        required
+      )
+    ).toBe(false);
+    expect(
+      contextRuleTypeMatches({ tag: "CreateContract", values: [Buffer.alloc(32, 1)] }, required)
+    ).toBe(false);
+  });
+
+  it("resolves a reference deployment to the rule for that owner and tag", async () => {
+    const defaultRule = makeRule(0, { tag: "Default", values: undefined }, [signer]);
+    const wasmRule = makeRule(1, { tag: "CreateContract", values: [Buffer.alloc(32, 1)] }, [signer]);
+    const refRule = makeRule(
+      2,
+      { tag: "CreateContractExternalRef", values: [owner, "account-v1"] },
+      [signer]
+    );
+    const otherTagRule = makeRule(
+      3,
+      { tag: "CreateContractExternalRef", values: [owner, "account-v2"] },
+      [signer]
+    );
+    const rules = [defaultRule, wasmRule, refRule, otherTagRule];
+    const wallet = makeWallet({ 0: defaultRule, 1: wasmRule, 2: refRule, 3: otherTagRule });
+
+    await expect(
+      resolveContextRuleIdsForEntry(wallet, createV2Entry("account-v1"), [signer], undefined, rules)
+    ).resolves.toEqual([2]);
+  });
+
+  function deployerContract(): string {
+    return Address.contract(Buffer.alloc(32, 7)).toString();
+  }
 });

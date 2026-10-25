@@ -4,13 +4,49 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 
 ## Unreleased
 
+### Breaking security changes
+
+- `signers.addDelegated` accepts only G-addresses, matching `createDelegatedSigner`.
+- Reject a Delegated signer that is the wallet itself in `rules.add`, `signers.addDelegated`, and
+  `signers.addBatch`, and refuse to sign an admin transaction that adds one, mirroring
+  stellar-accounts `SelfDelegatedSigner` (#3018). Wallets running `1b5f4534…` do not enforce it
+  on-chain
+  ([GHSA-jpg9-m7w4-c7wc](https://github.com/OpenZeppelin/stellar-contracts/security/advisories/GHSA-jpg9-m7w4-c7wc)).
+- Reject every Delegated signer that is a contract (C-address) in `rules.add`,
+  `signers.addBatch`, and admin transactions. A Delegated contract signer allows mutual and
+  caller delegation, and wallets running `1b5f4534…` have no on-chain guard against either.
+- Signing fails closed with `AuthDigestSchemeError` when the wallet runs code that is not in the
+  digest scheme table. Wallets on a self-built account WASM must add their hash with the
+  `authDigestSchemes` option.
+- The regenerated bindings add a `CreateContractExternalRef` case to `ContextRuleType`. An
+  exhaustive `switch` over it must handle the new case.
+- `kit.upgrade()` refuses a target that is missing from `acceptedWasmHashes` or has no known
+  authorization digest scheme, and wallet deployment refuses an `accountWasmHash` without one.
+- `computeEntryAuthDigest` takes a required digest scheme and also returns the delegated
+  `__check_auth` arguments.
+
 ### Added
 
+- Support the stellar-accounts v0.8.0 `AuthDigestPreimage` digest (`preimage-v1`) next to the
+  deployed `legacy-concat` digest. The SDK picks the scheme from the wallet's current WASM hash
+  before every signature.
+- Add the `authDigestSchemes` config option. Built-in entries cover `1b5f4534…` and
+  stellar-accounts v0.7.3 (`203e2970…`) as `legacy-concat`, and v0.8.0 (`c514d35e…`) as
+  `preimage-v1`.
+- Support `CreateContractExternalRef(owner, tag)` context rules for CAP-85 executable-reference
+  deployments, with `createCreateContractExternalRefContext` and display formatting.
 - `signAuthEntryWithSigners()`: sign one authorization entry with local
   `AuthDigestSigner`s (for example `Ed25519Signer`) and return it without
   submitting. It needs no browser, passkey, connected kit, or RPC. It refuses
-  smart-account mutations and binds `contextRuleIds` into the auth digest.
+  smart-account mutations and binds `contextRuleIds` into the auth digest. The caller passes the
+  wallet's `authDigestScheme`, because the helper does not read chain state.
   Closes [#13](https://github.com/stellar/smart-account-kit/issues/13).
+- Decode contract errors `DelegatedSignerIsContextContract` (#3017) and `SelfDelegatedSigner`
+  (#3018).
+
+### Maintenance
+
+- Regenerate the bindings from the stellar-accounts v0.8.0 account build (`c514d35e…`).
 
 ## 0.8.0 — 2026-09-08
 

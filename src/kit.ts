@@ -123,6 +123,7 @@ import {
   createPasskey,
   authenticatePasskey,
   signAuthEntry,
+  type SignAuthEntryOptions,
 } from "./kit/webauthn-ops.js";
 import {
   createWallet,
@@ -156,6 +157,12 @@ import {
   resolveContextRuleIdsForEntry,
 } from "./kit/context-rules.js";
 import { normalizeSignatureExpirationLedger } from "./kit/auth-payload.js";
+import {
+  assertKnownAuthDigestScheme,
+  buildAuthDigestSchemeTable,
+  resolveAuthDigestScheme,
+  type AuthDigestScheme,
+} from "./kit/auth-digest-scheme.js";
 import {
   generateChallenge,
   validateAddress,
@@ -232,6 +239,8 @@ export class SmartAccountKit {
   readonly acceptedWasmHashes: readonly string[];
   /** Accepted immutable birth code identities, lowercase hex. Never empty. */
   readonly acceptedBirthWasmHashes: readonly string[];
+  /** Authorization digest scheme per account WASM hash, lowercase hex. */
+  private readonly authDigestSchemes: ReadonlyMap<string, AuthDigestScheme>;
   private readonly webauthnVerifierAddress: string;
   /** Deployed Ed25519 verifier contract address, if configured. */
   public readonly ed25519VerifierAddress?: string;
@@ -447,6 +456,7 @@ export class SmartAccountKit {
         ? config.acceptedBirthWasmHashes
         : [config.accountWasmHash]
     ).map((h) => h.toLowerCase());
+    this.authDigestSchemes = buildAuthDigestSchemeTable(config.authDigestSchemes);
     this.webauthnVerifierAddress = config.webauthnVerifierAddress;
     this.ed25519VerifierAddress = config.ed25519VerifierAddress;
     this.defaultPolicies = config.defaultPolicies;
@@ -611,6 +621,7 @@ export class SmartAccountKit {
       deployerKeypair: this.deployerKeypair,
       deployerPublicKey: this.deployerPublicKey,
       signAuthEntry: (entry, options) => this.signAuthEntryInternal(entry, options),
+      resolveAuthDigestScheme: (contractId) => this.resolveAuthDigestScheme(contractId),
       sendAndPoll: (tx, options) => this.sendAndPoll(tx, options),
       hasSourceAccountAuth: (tx) => this.hasSourceAccountAuth(tx),
       shouldUseFeeSponsoring: (options) => this.shouldUseFeeSponsoring(options),
@@ -883,6 +894,9 @@ export class SmartAccountKit {
         throw sharedDeployerFeeError(this.deployerKeypair.publicKey());
       }
     }
+    // Same reasoning: a wallet deployed on code the SDK cannot sign for would
+    // orphan the passkey too.
+    assertKnownAuthDigestScheme(this.authDigestSchemes, this.accountWasmHash, "accountWasmHash");
 
     const constructorPolicies = options?.policies ?? this.defaultPolicies;
     return createWallet(
@@ -1328,13 +1342,7 @@ export class SmartAccountKit {
   /** @internal */
   private async signAuthEntryInternal(
     entry: xdr.SorobanAuthorizationEntry,
-    options?: {
-      credentialId?: string;
-      expiration?: number;
-      contextRuleIds?: number[];
-      signer?: ContractSigner;
-      walletMutationHostFunction?: xdr.HostFunction;
-    }
+    options?: SignAuthEntryOptions
   ): Promise<xdr.SorobanAuthorizationEntry> {
     return signAuthEntry(
       {
@@ -1348,9 +1356,18 @@ export class SmartAccountKit {
         requireWallet: () => this.requireWallet(),
         rpc: this.rpc,
         timeoutInSeconds: this.timeoutInSeconds,
+        resolveAuthDigestScheme: (contractId) => this.resolveAuthDigestScheme(contractId),
       },
       entry,
       options
+    );
+  }
+
+  /** @internal */
+  private resolveAuthDigestScheme(contractId: string): Promise<AuthDigestScheme> {
+    return resolveAuthDigestScheme(
+      { rpc: this.rpc, schemes: this.authDigestSchemes },
+      contractId
     );
   }
 
@@ -1501,10 +1518,15 @@ export class SmartAccountKit {
    * (self-auth) and submitted. The contract's `operator` argument is ignored
    * (stellar-contract-utils Upgradeable), so the account's own address is passed.
    *
+   * The target must be in `acceptedWasmHashes` and have a known authorization
+   * digest scheme. Otherwise the SDK could not connect to or sign for the
+   * wallet after the upgrade.
+   *
    * @param newWasmHash - The new contract WASM hash (32-byte hash as hex string
    *   or Buffer)
    * @returns Assembled transaction that upgrades the contract when signed and sent
-   * @throws {ValidationError} If the hash is not 32 bytes
+   * @throws {ValidationError} If the hash is not 32 bytes, is not accepted, or
+   *   has no known digest scheme
    * @throws Error if not connected to a wallet
    */
   async upgrade(
@@ -1520,6 +1542,15 @@ export class SmartAccountKit {
         { length: wasmHash.length }
       );
     }
+    const targetHash = wasmHash.toString("hex");
+    if (!this.acceptedWasmHashes.includes(targetHash)) {
+      throw new ValidationError(
+        `newWasmHash ${targetHash} is not in \`acceptedWasmHashes\`, so the SDK would refuse to connect to the wallet after the upgrade`,
+        SmartAccountErrorCode.INVALID_INPUT,
+        { field: "newWasmHash", wasmHash: targetHash }
+      );
+    }
+    assertKnownAuthDigestScheme(this.authDigestSchemes, targetHash, "newWasmHash");
     return wallet.upgrade({ new_wasm_hash: wasmHash, operator: contractId });
   }
 
@@ -1741,6 +1772,7 @@ export class SmartAccountKit {
     publicKey: Uint8Array,
     policies?: PolicyConfig[]
   ) {
+    assertKnownAuthDigestScheme(this.authDigestSchemes, this.accountWasmHash, "accountWasmHash");
     return buildDeployTransaction(
       {
         accountWasmHash: this.accountWasmHash,

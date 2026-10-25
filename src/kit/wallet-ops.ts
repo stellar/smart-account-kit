@@ -22,6 +22,7 @@ import { WEBAUTHN_TIMEOUT_MS, DEFAULT_SESSION_EXPIRY_MS } from "../constants.js"
 import {
   deriveContractAddress,
   generateChallenge,
+  readInstanceWasmHash,
 } from "../utils.js";
 import {
   ValidationError,
@@ -290,13 +291,12 @@ function assertAcceptedCode(
   contractId: string,
   accepted: readonly string[]
 ): void {
-  const executable = instance.val.contractData().val().instance().executable();
-  if (executable.switch().name !== "contractExecutableWasm") {
+  const actual = readInstanceWasmHash(instance);
+  if (!actual) {
     // A Stellar-asset-contract executable has no WASM hash to bind, so it can
     // never be an accepted smart account.
     throw new WalletCodeNotAcceptedError(contractId, "not-a-wasm-contract", accepted);
   }
-  const actual = executable.wasmHash().toString("hex");
   if (!accepted.includes(actual)) {
     throw new WalletCodeNotAcceptedError(contractId, actual, accepted);
   }

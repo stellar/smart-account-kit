@@ -69,7 +69,7 @@
     "@types/react": "^19.2.18",
     "fake-indexeddb": "^6.2.5",
     "typescript": "^6.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": ">=22.0.0",
@@ -93,19 +93,28 @@
       "bn.js@<5.0.0": "4.12.3",
       "bn.js@>=5.0.0": "5.2.3",
       "defu": "6.1.5",
+      "follow-redirects": "1.16.1",
       "form-data": "4.0.6",
       "h3": "1.15.9",
-      "ip-address": "10.3.1",
+      "ip-address": "10.7.5",
       "nanoid@<4.0.0": "3.3.18",
+      "pbkdf2": "3.1.7",
       "picomatch": "4.0.4",
       "protobufjs": "7.6.6",
-      "sharp": "0.35.0",
-      "stream-json": "3.5.0",
+      "sharp": "0.35.5",
+      "smol-toml": "1.9.1",
+      "source-map-js": "1.2.2",
+      "stream-json": "3.7.0",
       "ua-parser-js": "1.0.41",
-      "undici": "7.29.0",
+      "undici": "7.30.1",
       "uuid": "11.1.1",
       "ws@<8.0.0": "7.5.11",
       "ws@>=8.0.0": "8.21.0"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-mrhx-c7xc-m3w5"
+      ]
     }
   },
   "publishConfig": {

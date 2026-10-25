@@ -29,6 +29,7 @@ import {
   writeAuthPayload,
 } from "./auth-payload.js";
 import { computeEntryAuthDigest } from "../signers.js";
+import type { AuthDigestScheme } from "./auth-digest-scheme.js";
 import {
   findWebAuthnSignerInRules,
 } from "./context-rules.js";
@@ -53,6 +54,7 @@ type SignAuthEntryDeps = WebAuthnDeps & {
   requireWallet: RequireWallet;
   rpc: rpc.Server;
   timeoutInSeconds: number;
+  resolveAuthDigestScheme: (contractId: string) => Promise<AuthDigestScheme>;
 };
 
 export async function createPasskey(
@@ -119,17 +121,21 @@ export async function authenticatePasskey(
   };
 }
 
+export interface SignAuthEntryOptions {
+  credentialId?: string;
+  expiration?: number;
+  contextRuleIds?: number[];
+  signer?: ContractSigner;
+  /** Internal declaration from a dedicated admin transaction path. */
+  walletMutationHostFunction?: xdr.HostFunction;
+  /** Internal: a scheme the caller already resolved for this wallet. */
+  authDigestScheme?: AuthDigestScheme;
+}
+
 export async function signAuthEntry(
   deps: SignAuthEntryDeps,
   entry: xdr.SorobanAuthorizationEntry,
-  options?: {
-    credentialId?: string;
-    expiration?: number;
-    contextRuleIds?: number[];
-    signer?: ContractSigner;
-    /** Internal declaration from a dedicated admin transaction path. */
-    walletMutationHostFunction?: xdr.HostFunction;
-  }
+  options?: SignAuthEntryOptions
 ): Promise<xdr.SorobanAuthorizationEntry> {
   const normalizedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
   const credentialType = normalizedEntry.credentials().switch().name as string;
@@ -177,22 +183,26 @@ export async function signAuthEntry(
   }
 
   const credentialIdBuffer = base64url.toBuffer(credentialId);
-  const signer = options?.signer ?? await findWebAuthnSignerInRules(
-    wallet,
-    contextRuleIds,
-    credentialIdBuffer,
-    {
-      rpc: deps.rpc,
-      contractId,
-      networkPassphrase: deps.networkPassphrase,
-      timeoutInSeconds: deps.timeoutInSeconds,
-    }
-  );
+  const [signer, authDigestScheme] = await Promise.all([
+    options?.signer ?? findWebAuthnSignerInRules(
+      wallet,
+      contextRuleIds,
+      credentialIdBuffer,
+      {
+        rpc: deps.rpc,
+        contractId,
+        networkPassphrase: deps.networkPassphrase,
+        timeoutInSeconds: deps.timeoutInSeconds,
+      }
+    ),
+    options?.authDigestScheme ?? deps.resolveAuthDigestScheme(contractId),
+  ]);
   const { authDigest } = computeEntryAuthDigest(
     deps.networkPassphrase,
     normalizedEntry,
     credentials.signatureExpirationLedger(),
-    contextRuleIds
+    contextRuleIds,
+    authDigestScheme
   );
 
   const authResponse = await deps.webAuthn.startAuthentication({

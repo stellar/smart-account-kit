@@ -9,6 +9,7 @@ import {
   createDefaultContext,
   createCallContractContext,
   createCreateContractContext,
+  createCreateContractExternalRefContext,
   getCredentialIdFromSigner,
   signersEqual,
   validateContextRuleName,
@@ -112,6 +113,8 @@ export function ContextRuleBuilder({
   const [contextType, setContextType] = useState<ContextTypeOption>("default");
   const [contractAddress, setContractAddress] = useState("");
   const [wasmHash, setWasmHash] = useState("");
+  const [refOwner, setRefOwner] = useState("");
+  const [refTag, setRefTag] = useState("");
   const [signers, setSigners] = useState<SignerEntry[]>([]);
 
   // Signer add state
@@ -182,10 +185,16 @@ export function ContextRuleBuilder({
         setContextType("create_contract");
         const hashBytes = editingRule.context_type.values[0] as Buffer;
         setWasmHash(hashBytes.toString("hex"));
+      } else if (editingRule.context_type.tag === "CreateContractExternalRef") {
+        setContextType("create_contract_external_ref");
+        setRefOwner(editingRule.context_type.values[0]);
+        setRefTag(editingRule.context_type.values[1]);
       } else {
         setContextType("default");
         setContractAddress("");
         setWasmHash("");
+        setRefOwner("");
+        setRefTag("");
       }
 
       // Load signers from the rule
@@ -234,6 +243,8 @@ export function ContextRuleBuilder({
       setContextType("default");
       setContractAddress("");
       setWasmHash("");
+      setRefOwner("");
+      setRefTag("");
       setSigners([]);
       setSelectedPolicies([]);
       setHasExpiration(false);
@@ -495,6 +506,8 @@ export function ContextRuleBuilder({
         ctxType = createCallContractContext(contractAddress);
       } else if (contextType === "create_contract") {
         ctxType = createCreateContractContext(wasmHash);
+      } else if (contextType === "create_contract_external_ref") {
+        ctxType = createCreateContractExternalRefContext(refOwner.trim(), refTag);
       } else {
         ctxType = createDefaultContext();
       }
@@ -716,6 +729,13 @@ export function ContextRuleBuilder({
         return;
       }
     }
+    if (contextType === "create_contract_external_ref") {
+      const owner = refOwner.trim();
+      if (!owner.startsWith("C") || owner.length !== 56) {
+        setError("Invalid executable owner. Must start with C and be 56 characters.");
+        return;
+      }
+    }
     if (signers.length === 0 && selectedPolicies.length === 0) {
       setError("At least one signer or policy is required.");
       return;
@@ -835,6 +855,16 @@ export function ContextRuleBuilder({
                 />
                 <span>Create Contract</span>
               </label>
+              <label className="radio-label">
+                <input
+                  type="radio"
+                  name="contextType"
+                  value="create_contract_external_ref"
+                  checked={contextType === "create_contract_external_ref"}
+                  onChange={() => setContextType("create_contract_external_ref")}
+                />
+                <span>Create Contract from Reference</span>
+              </label>
             </div>
             {contextType === "call_contract" && (
               <input
@@ -853,6 +883,27 @@ export function ContextRuleBuilder({
                 placeholder="WASM hash (64 hex chars, e.g., abc123...)"
                 style={{ marginTop: "8px" }}
               />
+            )}
+            {contextType === "create_contract_external_ref" && (
+              <>
+                <input
+                  type="text"
+                  value={refOwner}
+                  onChange={(e) => setRefOwner(e.target.value)}
+                  placeholder="Executable owner contract (C...)"
+                  style={{ marginTop: "8px" }}
+                />
+                <input
+                  type="text"
+                  value={refTag}
+                  onChange={(e) => setRefTag(e.target.value)}
+                  placeholder="Executable tag"
+                  style={{ marginTop: "8px" }}
+                />
+                <p className="form-hint">
+                  The owner contract can change the code this reference resolves to.
+                </p>
+              </>
             )}
           </div>
 

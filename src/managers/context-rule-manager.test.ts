@@ -78,6 +78,21 @@ describe("ContextRuleManager", () => {
     expect(deps.wallet.add_context_rule).not.toHaveBeenCalled();
   });
 
+  it("rejects a rule that makes the wallet its own delegated signer", async () => {
+    const deps = makeDeps();
+    const manager = new ContextRuleManager(deps);
+
+    await expect(
+      manager.add(
+        { tag: "Default", values: undefined },
+        "Rule",
+        [{ tag: "Delegated", values: ["CCONTRACT"] }],
+        new Map()
+      )
+    ).rejects.toThrow("cannot be its own delegated signer");
+    expect(deps.wallet.add_context_rule).not.toHaveBeenCalled();
+  });
+
   it("returns the context rule count", async () => {
     const deps = makeDeps();
     deps.wallet.get_context_rules_count.mockResolvedValue({ result: 3 });

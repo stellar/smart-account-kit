@@ -8,6 +8,12 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { SmartAccountKit } from "./kit";
+import { SmartAccountErrorCode, ValidationError } from "./errors";
+import { buildAuthDigestSchemeTable } from "./kit/auth-digest-scheme";
+
+const LEGACY_HASH = "1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a";
+const PATCHED_LEGACY_HASH = "203e2970d9fed24fb5fca2e0aeebb3c1e4648b76dd6601567178e6474c9fec6f";
+const PREIMAGE_HASH = "c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1";
 
 function makeAuthEntry(): xdr.SorobanAuthorizationEntry {
   const invocation = new xdr.SorobanAuthorizedInvocation({
@@ -76,6 +82,8 @@ describe("SmartAccountKit top-level surface", () => {
       {
         storage,
         events,
+        accountWasmHash: LEGACY_HASH,
+        authDigestSchemes: buildAuthDigestSchemeTable(),
         deployerKeypair: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 1)),
         networkPassphrase: Networks.TESTNET,
         sessionExpiryMs: 60_000,
@@ -101,6 +109,69 @@ describe("SmartAccountKit top-level surface", () => {
     expect(setConnectedState).toHaveBeenCalledTimes(1);
     expect(result.credentialId).toBe("cred-123");
     expect(result.signedTransaction).toBe("SIGNED_XDR");
+  });
+
+  it("createWallet refuses code with no digest scheme before the passkey ceremony", async () => {
+    const createPasskey = vi.fn();
+
+    await expect(
+      SmartAccountKit.prototype.createWallet.call(
+        {
+          accountWasmHash: "ab".repeat(32),
+          authDigestSchemes: buildAuthDigestSchemeTable(),
+          createPasskey,
+        } as unknown as SmartAccountKit,
+        "My App",
+        "user@example.com",
+      )
+    ).rejects.toThrow(
+      expect.objectContaining({ code: SmartAccountErrorCode.INVALID_CONFIG })
+    );
+    expect(createPasskey).not.toHaveBeenCalled();
+  });
+
+  describe("upgrade", () => {
+    function makeUpgradeKit(acceptedWasmHashes: string[]) {
+      const wallet = { upgrade: vi.fn(async () => ({ built: true })) };
+      const kit = {
+        requireWallet: () => ({ wallet, contractId: "CWALLET" }),
+        acceptedWasmHashes,
+        authDigestSchemes: buildAuthDigestSchemeTable({ ["ab".repeat(32)]: "preimage-v1" }),
+      } as unknown as SmartAccountKit;
+      return { kit, wallet };
+    }
+
+    it("builds the upgrade to accepted code with a known digest scheme", async () => {
+      const { kit, wallet } = makeUpgradeKit([LEGACY_HASH, PATCHED_LEGACY_HASH, PREIMAGE_HASH]);
+
+      await SmartAccountKit.prototype.upgrade.call(kit, PREIMAGE_HASH.toUpperCase());
+
+      expect(wallet.upgrade).toHaveBeenCalledWith({
+        new_wasm_hash: Buffer.from(PREIMAGE_HASH, "hex"),
+        operator: "CWALLET",
+      });
+    });
+
+    it("refuses a target missing from acceptedWasmHashes", async () => {
+      const { kit, wallet } = makeUpgradeKit([LEGACY_HASH]);
+
+      await expect(
+        SmartAccountKit.prototype.upgrade.call(kit, PATCHED_LEGACY_HASH)
+      ).rejects.toThrow("acceptedWasmHashes");
+      expect(wallet.upgrade).not.toHaveBeenCalled();
+    });
+
+    it("refuses accepted code with no known digest scheme", async () => {
+      const unmapped = "cd".repeat(32);
+      const { kit, wallet } = makeUpgradeKit([LEGACY_HASH, unmapped]);
+
+      await expect(
+        SmartAccountKit.prototype.upgrade.call(kit, Buffer.from(unmapped, "hex"))
+      ).rejects.toThrow(
+        expect.objectContaining({ code: SmartAccountErrorCode.INVALID_INPUT })
+      );
+      expect(wallet.upgrade).not.toHaveBeenCalled();
+    });
   });
 
   it("authenticatePasskey delegates to the configured WebAuthn client", async () => {
@@ -312,6 +383,7 @@ describe("SmartAccountKit top-level surface", () => {
         walletMutationHostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(
           Buffer.alloc(32)
         ),
+        authDigestScheme: "legacy-concat",
       } as any
     );
 
@@ -538,5 +610,33 @@ describe("SmartAccountKit top-level surface", () => {
       undefined
     );
     expect(sendAndPoll).toHaveBeenCalledWith(preparedTx, { forceMethod: undefined });
+  });
+
+  it("validates authDigestSchemes when the kit is constructed", () => {
+    const config = {
+      rpcUrl: "https://rpc.example",
+      networkPassphrase: Networks.TESTNET,
+      accountWasmHash: "00".repeat(32),
+      webauthnVerifierAddress: "CEXAMPLE",
+    };
+
+    expect(
+      () => new SmartAccountKit({
+        ...config,
+        authDigestSchemes: { ["ab".repeat(32)]: "preimage-v1" },
+      })
+    ).not.toThrow();
+    expect(
+      () => new SmartAccountKit({
+        ...config,
+        authDigestSchemes: { "not-a-hash": "preimage-v1" },
+      })
+    ).toThrow(ValidationError);
+    expect(
+      () => new SmartAccountKit({
+        ...config,
+        authDigestSchemes: { ["ab".repeat(32)]: "concat" as never },
+      })
+    ).toThrow(ValidationError);
   });
 });

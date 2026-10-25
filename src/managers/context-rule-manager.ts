@@ -72,12 +72,14 @@ export class ContextRuleManager {
   /**
    * Add a new context rule to the smart account.
    *
-   * @param contextType - When this rule applies (Default, CallContract, CreateContract)
+   * @param contextType - When this rule applies (Default, CallContract, CreateContract, CreateContractExternalRef)
    * @param name - Human-readable name for the rule
    * @param signers - Array of signers that can authorize under this rule
    * @param policies - Map of policy addresses to their parameters
    * @param validUntil - Optional ledger number when this rule expires
    * @returns Assembled transaction that creates the rule when signed and sent
+   * @throws {ValidationError} On a contract limit violation, or if a Delegated
+   *   signer is the wallet itself
    * @throws Error if not connected to a wallet
    */
   async add(
@@ -87,13 +89,15 @@ export class ContextRuleManager {
     policies: Map<string, unknown>,
     validUntil?: number
   ) {
+    const { wallet, contractId } = this.deps.requireWallet();
     validateContextRule({
       name,
       signers,
       policyCount: policies.size,
       validUntil,
+      account: contractId,
     });
-    return this.deps.requireWallet().wallet.add_context_rule({
+    return wallet.add_context_rule({
       context_type: contextType,
       name,
       valid_until: validUntil,
@@ -152,7 +156,7 @@ export class ContextRuleManager {
   /**
    * Get all context rules of a specific type.
    *
-   * @param contextRuleType - The type of rules to retrieve (Default, CallContract, CreateContract)
+   * @param contextRuleType - The type of rules to retrieve (Default, CallContract, CreateContract, CreateContractExternalRef)
    * @returns Promise resolving to an array of matching {@link ContextRule}s
    * @throws Error if not connected to a wallet
    */

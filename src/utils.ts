@@ -7,6 +7,7 @@
  */
 
 import { StrKey, hash, xdr, Address, Keypair } from "@stellar/stellar-sdk";
+import type { rpc } from "@stellar/stellar-sdk";
 import type { RegistrationResponseJSON } from "@simplewebauthn/browser";
 import base64url from "./base64url.js";
 
@@ -71,6 +72,27 @@ export function validateAddress(address: string, fieldName: string = "address"):
       { field: fieldName, value: address.slice(0, 10) + "..." }
     );
   }
+}
+
+/**
+ * Lowercase a 32-byte hex hash, or return undefined if `value` is not one.
+ */
+export function normalizeHashHex(value: string): string | undefined {
+  const normalized = value.toLowerCase();
+  return /^[0-9a-f]{64}$/.test(normalized) ? normalized : undefined;
+}
+
+/**
+ * The WASM hash a contract instance runs, as lowercase hex, or undefined for an
+ * executable with no WASM hash (a Stellar asset contract or a CAP-85 reference).
+ */
+export function readInstanceWasmHash(
+  instance: Awaited<ReturnType<rpc.Server["getContractData"]>>
+): string | undefined {
+  const executable = instance.val.contractData().val().instance().executable();
+  return executable.switch().name === "contractExecutableWasm"
+    ? Buffer.from(executable.wasmHash()).toString("hex")
+    : undefined;
 }
 
 /**

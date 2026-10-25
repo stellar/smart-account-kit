@@ -8,8 +8,14 @@ import {
   signAuthEntry,
 } from "./webauthn-ops";
 import { readAuthPayload, getAddressCredentials } from "./auth-payload";
+import { AUTH_DIGEST_SCHEMES } from "./auth-digest-scheme";
 import { makeAddressAuthEntry } from "../managers/test-utils";
-import { SmartAccountErrorCode, ValidationError } from "../errors";
+import { computeEntryAuthDigest } from "../signers";
+import {
+  AuthDigestSchemeError,
+  SmartAccountErrorCode,
+  ValidationError,
+} from "../errors";
 
 const NETWORK = "Test SDF Network ; September 2015";
 const CONTRACT = StrKey.encodeContract(hash(Buffer.from("wallet")));
@@ -84,28 +90,28 @@ describe("authenticatePasskey", () => {
 });
 
 describe("signAuthEntry", () => {
-  it("signs an auth entry into an AuthPayload keyed by the WebAuthn signer", async () => {
-    const credentialId = "cred-abc";
-    const signer: ContractSigner = {
-      tag: "External",
-      values: [VERIFIER, Buffer.concat([Buffer.alloc(65, 4), base64url.toBuffer(credentialId)])],
-    };
+  const credentialId = "cred-abc";
+  const signer: ContractSigner = {
+    tag: "External",
+    values: [VERIFIER, Buffer.concat([Buffer.alloc(65, 4), base64url.toBuffer(credentialId)])],
+  };
 
-    const startAuthentication = vi.fn(async ({ optionsJSON }) => {
-      // The WebAuthn challenge is the base64url of the 32-byte auth digest.
-      expect(base64url.toBuffer(optionsJSON.challenge)).toHaveLength(32);
-      return {
-        id: credentialId,
-        response: {
-          signature: base64url.encode(derSignature()),
-          authenticatorData: base64url.encode(Buffer.alloc(37, 1)),
-          clientDataJSON: base64url.encode(Buffer.from('{"type":"webauthn.get"}')),
-        },
-      };
-    });
-
+  function makeSigningDeps(overrides: {
+    startAuthentication?: ReturnType<typeof vi.fn>;
+    resolveAuthDigestScheme?: ReturnType<typeof vi.fn>;
+  } = {}) {
+    const startAuthentication = overrides.startAuthentication ?? vi.fn(async () => ({
+      id: credentialId,
+      response: {
+        signature: base64url.encode(derSignature()),
+        authenticatorData: base64url.encode(Buffer.alloc(37, 1)),
+        clientDataJSON: base64url.encode(Buffer.from('{"type":"webauthn.get"}')),
+      },
+    }));
     const update = vi.fn();
     const calculateExpiration = vi.fn(async () => 1000);
+    const resolveAuthDigestScheme =
+      overrides.resolveAuthDigestScheme ?? vi.fn(async () => "preimage-v1");
     const deps = {
       rpName: "Test App",
       networkPassphrase: NETWORK,
@@ -115,9 +121,14 @@ describe("signAuthEntry", () => {
       requireWallet: () => ({ wallet: {}, contractId: CONTRACT }),
       rpc: {} as never,
       timeoutInSeconds: 30,
+      resolveAuthDigestScheme,
       webAuthn: { startRegistration: vi.fn(), startAuthentication },
     } as never;
+    return { deps, startAuthentication, update, calculateExpiration, resolveAuthDigestScheme };
+  }
 
+  it("signs an auth entry into an AuthPayload keyed by the WebAuthn signer", async () => {
+    const { deps, startAuthentication, update, calculateExpiration } = makeSigningDeps();
     const entry = makeAddressAuthEntry(CONTRACT);
 
     const signed = await signAuthEntry(deps, entry, {
@@ -138,18 +149,73 @@ describe("signAuthEntry", () => {
     expect(update).toHaveBeenCalledWith(credentialId, expect.objectContaining({ lastUsedAt: expect.any(Number) }));
   });
 
+  for (const scheme of AUTH_DIGEST_SCHEMES) {
+    it(`uses the wallet's resolved ${scheme} digest as the WebAuthn challenge`, async () => {
+      const resolveAuthDigestScheme = vi.fn(async () => scheme);
+      const { deps, startAuthentication } = makeSigningDeps({ resolveAuthDigestScheme });
+
+      await signAuthEntry(deps, makeAddressAuthEntry(CONTRACT), {
+        credentialId,
+        contextRuleIds: [0, 2],
+        signer,
+      });
+
+      const { authDigest } = computeEntryAuthDigest(
+        NETWORK,
+        makeAddressAuthEntry(CONTRACT),
+        1,
+        [0, 2],
+        scheme
+      );
+      expect(resolveAuthDigestScheme).toHaveBeenCalledWith(CONTRACT);
+      expect(startAuthentication).toHaveBeenCalledWith({
+        optionsJSON: expect.objectContaining({ challenge: base64url.encode(authDigest) }),
+      });
+    });
+  }
+
+  it("uses a scheme the caller already resolved without reading the wallet again", async () => {
+    const resolveAuthDigestScheme = vi.fn(async () => "preimage-v1");
+    const { deps, startAuthentication } = makeSigningDeps({ resolveAuthDigestScheme });
+
+    await signAuthEntry(deps, makeAddressAuthEntry(CONTRACT), {
+      credentialId,
+      contextRuleIds: [0],
+      signer,
+      authDigestScheme: "legacy-concat",
+    });
+
+    const { authDigest } = computeEntryAuthDigest(
+      NETWORK,
+      makeAddressAuthEntry(CONTRACT),
+      1,
+      [0],
+      "legacy-concat"
+    );
+    expect(resolveAuthDigestScheme).not.toHaveBeenCalled();
+    expect(startAuthentication).toHaveBeenCalledWith({
+      optionsJSON: expect.objectContaining({ challenge: base64url.encode(authDigest) }),
+    });
+  });
+
+  it("refuses to prompt the passkey when the wallet's digest scheme is unknown", async () => {
+    const resolveAuthDigestScheme = vi.fn(async () => {
+      throw new AuthDigestSchemeError(CONTRACT, "ab".repeat(32));
+    });
+    const { deps, startAuthentication } = makeSigningDeps({ resolveAuthDigestScheme });
+
+    await expect(
+      signAuthEntry(deps, makeAddressAuthEntry(CONTRACT), {
+        credentialId,
+        contextRuleIds: [0],
+        signer,
+      })
+    ).rejects.toBeInstanceOf(AuthDigestSchemeError);
+    expect(startAuthentication).not.toHaveBeenCalled();
+  });
+
   it("rejects when no context rule ids are available", async () => {
-    const deps = {
-      rpName: "Test App",
-      networkPassphrase: NETWORK,
-      storage: { update: vi.fn() },
-      calculateExpiration: async () => 1000,
-      getCredentialId: () => "cred-abc",
-      requireWallet: () => ({ wallet: {}, contractId: CONTRACT }),
-      rpc: {} as never,
-      timeoutInSeconds: 30,
-      webAuthn: { startRegistration: vi.fn(), startAuthentication: vi.fn() },
-    } as never;
+    const { deps } = makeSigningDeps();
 
     await expect(
       signAuthEntry(deps, makeAddressAuthEntry(CONTRACT), { credentialId: "cred-abc" })

@@ -8,6 +8,7 @@
  * @packageDocumentation
  */
 
+import { StrKey } from "@stellar/stellar-sdk";
 import type { Signer as ContractSigner } from "smart-account-kit-bindings";
 import {
   MAX_EXTERNAL_KEY_SIZE,
@@ -64,17 +65,44 @@ export function validateExternalKeySize(keyData: Uint8Array | Buffer): void {
 
 /**
  * Validate a single signer: External signers must have key data within
- * `MAX_EXTERNAL_KEY_SIZE`.
+ * `MAX_EXTERNAL_KEY_SIZE`, and a Delegated signer must be a Stellar account
+ * (G-address) that is not the smart account it is added to.
  *
+ * The self-delegation check mirrors the contract's `SelfDelegatedSigner`
+ * (#3018). A Delegated contract signer allows self, mutual, and caller
+ * delegation (GHSA-jpg9-m7w4-c7wc), and wallets running code from before
+ * stellar-accounts 0.7.3 enforce none of these on-chain, so the SDK refuses
+ * every Delegated C-address.
+ *
+ * @param signer - The signer to validate
+ * @param account - The smart account the signer is added to; omit to skip the
+ *   self-delegation check
  * @throws {ValidationError} If the signer is malformed
  */
-export function validateSigner(signer: ContractSigner): void {
-  if (signer.tag === "Delegated" && isDefaultDeployer(signer.values[0] as string)) {
-    throw new ValidationError(
-      "The shared default deployer cannot be a delegated signer",
-      SmartAccountErrorCode.INVALID_INPUT,
-      { field: "signer" }
-    );
+export function validateSigner(signer: ContractSigner, account?: string): void {
+  if (signer.tag === "Delegated") {
+    const address = signer.values[0] as string;
+    if (isDefaultDeployer(address)) {
+      throw new ValidationError(
+        "The shared default deployer cannot be a delegated signer",
+        SmartAccountErrorCode.INVALID_INPUT,
+        { field: "signer" }
+      );
+    }
+    if (account !== undefined && address === account) {
+      throw new ValidationError(
+        "A smart account cannot be its own delegated signer",
+        SmartAccountErrorCode.INVALID_INPUT,
+        { field: "signer", account }
+      );
+    }
+    if (!StrKey.isValidEd25519PublicKey(address)) {
+      throw new ValidationError(
+        "A delegated signer must be a Stellar account (G-address). Delegating to a contract can let anyone authorize the account.",
+        SmartAccountErrorCode.INVALID_ADDRESS,
+        { field: "signer", address }
+      );
+    }
   }
   if (signer.tag === "External") {
     const keyData = signer.values[1];
@@ -87,11 +115,14 @@ export function validateSigner(signer: ContractSigner): void {
  *
  * @param signers - Signers to validate
  * @param existingCount - Signers already on the rule (default 0)
+ * @param account - The smart account the signers are added to; omit to skip the
+ *   self-delegation check
  * @throws {ValidationError} If the total exceeds `MAX_SIGNERS` or any signer is invalid
  */
 export function validateSigners(
   signers: ContractSigner[],
-  existingCount = 0
+  existingCount = 0,
+  account?: string
 ): void {
   const total = existingCount + signers.length;
   if (total > MAX_SIGNERS) {
@@ -102,7 +133,7 @@ export function validateSigners(
     );
   }
   for (const signer of signers) {
-    validateSigner(signer);
+    validateSigner(signer, account);
   }
 }
 
@@ -166,9 +197,11 @@ export function validateContextRule(args: {
   policyCount: number;
   validUntil?: number;
   currentLedger?: number;
+  /** The smart account the rule is added to (enables the self-delegation check). */
+  account?: string;
 }): void {
   validateContextRuleName(args.name);
-  validateSigners(args.signers);
+  validateSigners(args.signers, 0, args.account);
   validatePolicyCount(args.policyCount);
   validateValidUntil(args.validUntil, args.currentLedger);
   if (args.signers.length === 0 && args.policyCount === 0) {

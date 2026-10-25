@@ -6,13 +6,13 @@
  * the enum variant name and a human-readable message.
  *
  * Codes mirror the deployed OpenZeppelin stellar-accounts contracts:
- * - SmartAccount        3000-3016
+ * - SmartAccount        3000-3018
  * - WebAuthn verifier   3110-3119
  * - SimpleThreshold     3200-3203
  * - WeightedThreshold   3210-3214
  * - SpendingLimit       3220-3227
  *
- * The SmartAccount family (3000-3016) is the source of truth in the generated
+ * The SmartAccount family (3000-3018) is the source of truth in the generated
  * bindings' `SmartAccountError` map; `contract-errors.test.ts` asserts this
  * table stays in sync with it so a bindings regen surfaces any drift.
  *
@@ -63,7 +63,7 @@ function entry(
 export const CONTRACT_ERROR_REGISTRY: Readonly<Record<number, ContractErrorInfo>> =
   Object.freeze(
     Object.fromEntries([
-      // --- SmartAccount (3000-3016; 3001 intentionally absent) ---
+      // --- SmartAccount (3000-3018; 3001 intentionally absent) ---
       entry(3000, "ContextRuleNotFound", "SmartAccount", "The specified context rule does not exist."),
       entry(3002, "UnvalidatedContext", "SmartAccount", "The provided context could not be validated against any rule."),
       entry(3003, "ExternalVerificationFailed", "SmartAccount", "External signature verification failed."),
@@ -80,6 +80,8 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<Record<number, ContractErrorInfo>
       entry(3014, "ContextRuleIdsLengthMismatch", "SmartAccount", "The number of context rule IDs does not match the number of auth contexts."),
       entry(3015, "NameTooLong", "SmartAccount", "The context rule name exceeds the maximum of 20 bytes."),
       entry(3016, "UnauthorizedSigner", "SmartAccount", "A provided signer is not part of any validated context rule."),
+      entry(3017, "DelegatedSignerIsContextContract", "SmartAccount", "A delegated signer is the contract of a context being authorized."),
+      entry(3018, "SelfDelegatedSigner", "SmartAccount", "A smart account cannot be its own delegated signer."),
 
       // --- WebAuthn verifier (3110-3119) ---
       entry(3110, "SignaturePayloadInvalid", "WebAuthn", "The signature payload was malformed."),

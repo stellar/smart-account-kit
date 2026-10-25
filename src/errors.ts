@@ -22,6 +22,7 @@ export enum SmartAccountErrorCode {
   WALLET_PROVENANCE_UNVERIFIED = 2005,
   WALLET_OWNERSHIP_UNVERIFIED = 2006,
   WALLET_AMBIGUOUS = 2007,
+  AUTH_DIGEST_SCHEME_UNKNOWN = 2008,
 
   // Credential errors (3xxx)
   CREDENTIAL_NOT_FOUND = 3001,
@@ -176,6 +177,25 @@ export class WalletCodeNotAcceptedError extends SmartAccountError {
       { context: { contractId, actual, accepted } }
     );
     this.name = "WalletCodeNotAcceptedError";
+  }
+}
+
+/**
+ * Error thrown when the SDK cannot tell how a smart account's signers commit
+ * to an authorization.
+ *
+ * The digest scheme depends on the code the account currently runs. Signing
+ * fails closed for code the SDK does not know.
+ */
+export class AuthDigestSchemeError extends SmartAccountError {
+  constructor(contractId: string, actual: string) {
+    super(
+      `Smart account ${contractId} runs code (${actual}) with an unknown authorization digest scheme. ` +
+        "Map its WASM hash in `authDigestSchemes`.",
+      SmartAccountErrorCode.AUTH_DIGEST_SCHEME_UNKNOWN,
+      { context: { contractId, actual } }
+    );
+    this.name = "AuthDigestSchemeError";
   }
 }
 

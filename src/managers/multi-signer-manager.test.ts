@@ -53,11 +53,16 @@ import {
   makeExternalSigner,
 } from "./test-utils";
 import { signersEqual } from "../signer-utils";
+import { computeEntryAuthDigest } from "../signers";
+import { AUTH_DIGEST_SCHEMES, type AuthDigestScheme } from "../kit/auth-digest-scheme";
 import {
+  AuthDigestSchemeError,
   SignerNotFoundError,
   ValidationError,
   SmartAccountErrorCode,
 } from "../errors";
+
+const NETWORK = "Test SDF Network ; September 2015";
 
 function makeDeps() {
   const externalSigners = {
@@ -83,6 +88,7 @@ function makeDeps() {
     deployerKeypair: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 5)),
     deployerPublicKey: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 5)).publicKey(),
     signAuthEntry: vi.fn(),
+    resolveAuthDigestScheme: vi.fn().mockResolvedValue("preimage-v1"),
     sendAndPoll: vi.fn(),
     hasSourceAccountAuth: vi.fn().mockReturnValue(false),
     shouldUseFeeSponsoring: vi.fn().mockReturnValue(false),
@@ -439,6 +445,8 @@ describe("MultiSignerManager", () => {
     expect(assembleTransactionMock).toHaveBeenCalledTimes(1);
     expect(deps.sendAndPoll).toHaveBeenCalledWith(preparedTx, { forceMethod: undefined });
     expect(result).toEqual({ success: true, hash: "tx-2" });
+    // No smart-account entry, so the wallet's code is never read.
+    expect(deps.resolveAuthDigestScheme).not.toHaveBeenCalled();
   });
 
   it("fails fast when a wallet signer is missing contract signer metadata", async () => {
@@ -688,5 +696,179 @@ describe("MultiSignerManager", () => {
     expect(authPayload.context_rule_ids).toEqual([12]);
     expect(passkeySignature).toEqual(Buffer.from("aa", "hex"));
     expect(walletSignature).toEqual(Buffer.alloc(0));
+  });
+});
+
+describe("MultiSignerManager authorization digest schemes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    assembleTransactionMock.mockReset();
+    resolveContextRuleIdsForEntryMock.mockReset();
+  });
+
+  const SCHEMES = AUTH_DIGEST_SCHEMES;
+
+  function pingOperation(authEntries: xdr.SorobanAuthorizationEntry[]) {
+    return {
+      built: {
+        operations: [{
+          type: "invokeHostFunction",
+          func: xdr.HostFunction.hostFunctionTypeInvokeContract(
+            new xdr.InvokeContractArgs({
+              contractAddress: Address.fromString(makeContract(46)).toScAddress(),
+              functionName: "ping",
+              args: [],
+            })
+          ),
+          auth: authEntries,
+        }],
+      },
+    } as any;
+  }
+
+  function prepareSubmission(deps: ReturnType<typeof makeDeps>, scheme: AuthDigestScheme) {
+    deps.resolveAuthDigestScheme.mockResolvedValue(scheme);
+    deps.rpc.getLatestLedger.mockResolvedValue({ sequence: 600 });
+    deps.rpc.getAccount.mockResolvedValue(new Account(deps.deployerPublicKey, "1"));
+    deps.rpc.simulateTransaction.mockResolvedValue({ result: { auth: [] } });
+    deps.sendAndPoll.mockResolvedValue({ success: true, hash: "tx-scheme" });
+    assembleTransactionMock.mockReturnValue({ build: () => ({ sign: vi.fn() }) });
+    vi.mocked(resolveContextRuleIdsForEntry).mockResolvedValue([12]);
+  }
+
+  /** The digest material for an entry that `makeAddressAuthEntry` built (expiration 1). */
+  function expectedDigest(contractId: string, scheme: AuthDigestScheme) {
+    return computeEntryAuthDigest(NETWORK, makeAddressAuthEntry(contractId), 1, [12], scheme);
+  }
+
+  for (const scheme of SCHEMES) {
+    it(`builds the delegated __check_auth entry over the ${scheme} arguments`, async () => {
+      const deps = makeDeps();
+      const contractId = deps.getContractId();
+      const walletAddress = makeAccount(24);
+      prepareSubmission(deps, scheme);
+      deps.externalSigners.canSignFor.mockImplementation((address: string) => address === walletAddress);
+      deps.externalSigners.signAuthEntry.mockResolvedValue({
+        signedAuthEntry: Buffer.alloc(64, 9).toString("base64"),
+        signerAddress: walletAddress,
+      });
+      const manager = new MultiSignerManager(deps);
+
+      const result = await manager.operation(
+        pingOperation([makeAddressAuthEntry(contractId)]),
+        [{ signer: makeDelegatedSigner(24), type: "wallet", walletAddress }],
+        {}
+      );
+
+      expect(result).toEqual({ success: true, hash: "tx-scheme" });
+      const expectedArgs = expectedDigest(contractId, scheme).delegatedAuthArgs
+        .map((arg) => arg.toXDR("hex"));
+
+      // The wallet signed a preimage whose root invocation carries those arguments.
+      const signedPreimage = xdr.HashIdPreimage.fromXDR(
+        deps.externalSigners.signAuthEntry.mock.calls[0][0],
+        "base64"
+      );
+      const signedFn = signedPreimage.sorobanAuthorization().invocation().function().contractFn();
+      expect(signedFn.functionName().toString()).toBe("__check_auth");
+      expect(Address.fromScAddress(signedFn.contractAddress()).toString()).toBe(contractId);
+      expect(signedFn.args().map((arg) => arg.toXDR("hex"))).toEqual(expectedArgs);
+
+      // The submitted nested entry matches what the wallet signed.
+      const resimTx = deps.rpc.simulateTransaction.mock.calls[0][0] as any;
+      const delegatedEntry = resimTx.operations[0].auth[1] as xdr.SorobanAuthorizationEntry;
+      expect(getAddressCredentials(delegatedEntry.credentials()).address().toXDR("hex")).toBe(
+        Address.fromString(walletAddress).toScAddress().toXDR("hex")
+      );
+      expect(
+        delegatedEntry.rootInvocation().function().contractFn().args().map((arg) => arg.toXDR("hex"))
+      ).toEqual(expectedArgs);
+    });
+
+    it(`signs Ed25519 signers over the ${scheme} digest`, async () => {
+      const deps = makeDeps();
+      const contractId = deps.getContractId();
+      const ed25519Key = Buffer.alloc(32, 0x42);
+      const ed25519Signer: ContractSigner = {
+        tag: "External",
+        values: [makeContract(70), ed25519Key],
+      };
+      prepareSubmission(deps, scheme);
+      deps.externalSigners.canSignEd25519.mockReturnValue(true);
+      deps.externalSigners.signEd25519Digest.mockReturnValue(Buffer.alloc(64, 1));
+      const manager = new MultiSignerManager(deps);
+
+      const result = await manager.operation(
+        pingOperation([makeAddressAuthEntry(contractId)]),
+        [{ signer: ed25519Signer, type: "ed25519", ed25519PublicKey: ed25519Key.toString("hex") }],
+        {}
+      );
+
+      expect(result).toEqual({ success: true, hash: "tx-scheme" });
+      expect(deps.externalSigners.signEd25519Digest).toHaveBeenCalledWith(
+        ed25519Key,
+        expectedDigest(contractId, scheme).authDigest
+      );
+    });
+  }
+
+  it("resolves the scheme once per transaction and hands it to passkey signing", async () => {
+    const deps = makeDeps();
+    const contractId = deps.getContractId();
+    prepareSubmission(deps, "legacy-concat");
+    deps.signAuthEntry.mockImplementation(async (entry) => entry);
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.operation(
+      pingOperation([makeAddressAuthEntry(contractId), makeAddressAuthEntry(contractId)]),
+      [{
+        signer: makeExternalSigner(3, 4, 5),
+        type: "passkey",
+        credentialId: Buffer.alloc(20, 5).toString("base64url"),
+      }],
+      {}
+    );
+
+    expect(result).toEqual({ success: true, hash: "tx-scheme" });
+    expect(deps.resolveAuthDigestScheme).toHaveBeenCalledTimes(1);
+    expect(deps.resolveAuthDigestScheme).toHaveBeenCalledWith(contractId);
+    expect(deps.signAuthEntry).toHaveBeenCalledTimes(2);
+    for (const call of deps.signAuthEntry.mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({ authDigestScheme: "legacy-concat" }));
+    }
+  });
+
+  it("fails before any signer is prompted when the wallet's scheme is unknown", async () => {
+    const deps = makeDeps();
+    const contractId = deps.getContractId();
+    const walletAddress = makeAccount(25);
+    prepareSubmission(deps, "preimage-v1");
+    deps.resolveAuthDigestScheme.mockRejectedValue(
+      new AuthDigestSchemeError(contractId, "cd".repeat(32))
+    );
+    deps.externalSigners.canSignFor.mockReturnValue(true);
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.operation(
+      pingOperation([makeAddressAuthEntry(contractId)]),
+      [
+        {
+          signer: makeExternalSigner(3, 4, 5),
+          type: "passkey",
+          credentialId: Buffer.alloc(20, 5).toString("base64url"),
+        },
+        { signer: makeDelegatedSigner(25), type: "wallet", walletAddress },
+      ],
+      {}
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBeInstanceOf(AuthDigestSchemeError);
+      expect(result.error.code).toBe(SmartAccountErrorCode.AUTH_DIGEST_SCHEME_UNKNOWN);
+    }
+    expect(deps.signAuthEntry).not.toHaveBeenCalled();
+    expect(deps.externalSigners.signAuthEntry).not.toHaveBeenCalled();
+    expect(deps.sendAndPoll).not.toHaveBeenCalled();
   });
 });

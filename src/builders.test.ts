@@ -8,6 +8,7 @@ import {
   createDefaultContext,
   createCallContractContext,
   createCreateContractContext,
+  createCreateContractExternalRefContext,
   createThresholdParams,
   createWeightedThresholdParams,
   createSpendingLimitParams,
@@ -64,6 +65,18 @@ describe("context type builders", () => {
     expect(ctx.tag).toBe("CreateContract");
     expect((ctx.values[0] as Buffer).length).toBe(32);
   });
+
+  it("creates CreateContractExternalRef for a contract owner and tag", () => {
+    expect(createCreateContractExternalRefContext(C, "account-v1")).toEqual({
+      tag: "CreateContractExternalRef",
+      values: [C, "account-v1"],
+    });
+    expect(() => createCreateContractExternalRefContext(G, "account-v1")).toThrow(ValidationError);
+    expect(() => createCreateContractExternalRefContext("nope", "account-v1")).toThrow(
+      ValidationError
+    );
+    expect(() => createCreateContractExternalRefContext(C, 7 as never)).toThrow(ValidationError);
+  });
 });
 
 describe("policy param builders", () => {
@@ -112,5 +125,8 @@ describe("display helpers", () => {
     expect(formatContextType(createCreateContractContext("aa".repeat(32)))).toContain(
       "Create Contract"
     );
+    expect(
+      formatContextType(createCreateContractExternalRefContext(C, "account-v1"))
+    ).toBe(`Create Contract from Ref: ${truncateAddress(C)} / account-v1`);
   });
 });

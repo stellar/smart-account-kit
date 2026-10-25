@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { StrKey } from "@stellar/stellar-sdk";
 import type { Signer as ContractSigner } from "smart-account-kit-bindings";
 import {
   validateContextRule,
@@ -14,7 +15,7 @@ import { MAX_EXTERNAL_KEY_SIZE, MAX_POLICIES, MAX_SIGNERS } from "./constants";
 import { DEFAULT_DEPLOYER_PUBLIC_KEY } from "./utils";
 
 function delegated(seed: number): ContractSigner {
-  return { tag: "Delegated", values: [`G${"A".repeat(55)}`.slice(0, 56) + seed] };
+  return { tag: "Delegated", values: [StrKey.encodeEd25519PublicKey(Buffer.alloc(32, seed))] };
 }
 
 function external(keyLen: number): ContractSigner {
@@ -75,6 +76,30 @@ describe("validateSigners", () => {
     expect(() => validateSigners([external(MAX_EXTERNAL_KEY_SIZE + 1)])).toThrow(
       ValidationError
     );
+  });
+
+  it("rejects a delegated signer that is the smart account itself", () => {
+    const account = "CACCOUNT";
+    const self: ContractSigner = { tag: "Delegated", values: [account] };
+
+    expect(() => validateSigner(self, account)).toThrow(ValidationError);
+    expect(() => validateSigners([delegated(1), self], 0, account)).toThrow(
+      "cannot be its own delegated signer"
+    );
+    expect(() =>
+      validateContextRule({ name: "self", signers: [self], policyCount: 0, account })
+    ).toThrow(ValidationError);
+  });
+
+  it("rejects a delegated contract signer, with or without an account", () => {
+    const contract = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const other: ContractSigner = { tag: "Delegated", values: [contract] };
+
+    expect(() => validateSigner(other)).toThrow("must be a Stellar account");
+    expect(() => validateSigner(other, StrKey.encodeContract(Buffer.alloc(32, 8)))).toThrow(
+      "must be a Stellar account"
+    );
+    expect(() => validateSigner(delegated(1))).not.toThrow();
   });
 
   it("rejects the shared default deployer as a delegated signer", () => {

@@ -10,7 +10,11 @@ export type SignerAddMode =
   | "ed25519";
 
 /** Which context type the rule targets. */
-export type ContextTypeOption = "default" | "call_contract" | "create_contract";
+export type ContextTypeOption =
+  | "default"
+  | "call_contract"
+  | "create_contract"
+  | "create_contract_external_ref";
 
 /** A signer staged in the rule-builder form. */
 export interface SignerEntry {
