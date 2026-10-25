@@ -111,8 +111,10 @@ describe("auth-payload", () => {
       authDigestSchemes: new Map([[mapped, "preimage-v1" as const]]),
     };
 
-    function assertUpgrade(target: xdr.ScVal[], withPolicy = true) {
-      const root = makeContractInvocation(wallet, "upgrade", [], target);
+    const walletOperator = xdr.ScVal.scvAddress(Address.fromString(wallet).toScAddress());
+
+    function assertUpgrade(target: xdr.ScVal[], withPolicy = true, operator = walletOperator) {
+      const root = makeContractInvocation(wallet, "upgrade", [], [...target, operator]);
       const entry = withRootInvocation(makeAuthEntry(wallet), root);
       assertWalletMutationIntent(
         entry,
@@ -137,6 +139,15 @@ describe("auth-payload", () => {
 
     it("accepts mapped and accepted hashes", () => {
       expect(() => assertUpgrade([xdr.ScVal.scvBytes(Buffer.from(mapped, "hex"))])).not.toThrow();
+    });
+
+    it("refuses an operator other than the wallet", () => {
+      const other = xdr.ScVal.scvAddress(
+        Address.contract(hash(Buffer.from("other-operator"))).toScAddress()
+      );
+      expect(() =>
+        assertUpgrade([xdr.ScVal.scvBytes(Buffer.from(mapped, "hex"))], true, other)
+      ).toThrow("operator must be the wallet");
     });
 
     it("refuses upgrades without the target policy", () => {

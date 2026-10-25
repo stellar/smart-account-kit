@@ -112,6 +112,14 @@ export function assertWalletMutationIntent(
       return fail("The admin signing path requires an upgrade target policy.");
     }
     assertUpgradeTarget(upgradeTargetPolicy, Buffer.from(target.bytes()));
+    const operator = rootArgs.args()[1];
+    if (
+      !operator ||
+      operator.switch().name !== "scvAddress" ||
+      Address.fromScAddress(operator.address()).toString() !== contractId
+    ) {
+      fail("The upgrade operator must be the wallet itself, as kit.upgrade() sets it.");
+    }
   }
 }
 
