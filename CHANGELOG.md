@@ -2,7 +2,7 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## Unreleased
+## 0.9.0 — 2026-10-25
 
 ### Security
 
@@ -63,7 +63,8 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 
 ### Maintenance
 
-- Regenerate the bindings from the stellar-accounts v0.8.0 account build (`c514d35e…`).
+- Regenerate the bindings from the stellar-accounts v0.8.0 account build (`c514d35e…`) and
+  release them as `smart-account-kit-bindings@0.5.0`.
 - Add the stellar-accounts v0.7.3 and v0.8.0 deployment manifest
   ([`docs/deployments-stellar-accounts-0.8-2026-10-25.md`](docs/deployments-stellar-accounts-0.8-2026-10-25.md)).
   It records the build hashes, the testnet and mainnet deployments, and the testnet rehearsal.

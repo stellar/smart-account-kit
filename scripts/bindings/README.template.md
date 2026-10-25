@@ -41,7 +41,7 @@ The repository wrapper preserves package metadata, formatting, and this README a
 
 ```bash
 ACCOUNT_WASM=/path/to/multisig_account_example.wasm \
-BINDINGS_VERSION=0.4.0 \
+BINDINGS_VERSION=0.5.0 \
 pnpm build:bindings
 ```
 
