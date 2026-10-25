@@ -2,7 +2,9 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## Unreleased
+## 0.9.1 — 2026-10-25
+
+This release keeps `smart-account-kit-bindings@0.5.0` unchanged.
 
 ### Security
 
