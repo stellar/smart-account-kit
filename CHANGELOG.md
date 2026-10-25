@@ -18,6 +18,10 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 - The relayer proxy failed every Channels submission with `Unsupported cache mode: default`.
   axios 1.20 sets that fetch cache mode, and the Workers runtime rejects it. The proxy now sets
   the Channels client cache mode to `no-store`.
+- `fundWallet()` now submits through RPC by default, also when a relayer is configured. The
+  temporary Friendbot account pays its own fee. The relayer proxy sponsors only calls from
+  allowlisted wallets, so it refused this transfer with
+  `Only address-bound V2 wallet credentials are allowed`. Pass `forceMethod` to override.
 
 ## 0.9.0 — 2026-10-25
 

@@ -1386,9 +1386,11 @@ export class SmartAccountKit {
    * Only works on Stellar testnet. Creates a temporary account, funds it
    * via Friendbot, then transfers XLM to the smart account contract.
    * This is necessary because Friendbot can't fund contract addresses directly.
+   * The temporary account pays its own fee, so this submits through RPC even
+   * when a relayer is configured.
    *
    * @param nativeTokenContract - Native XLM token SAC address (required for transfer)
-   * @param options - Optional settings
+   * @param options - Optional settings; `forceMethod` overrides the RPC default
    * @returns Whether the funding was successful, and the amount funded
    */
   async fundWallet(

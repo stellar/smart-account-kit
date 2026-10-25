@@ -237,7 +237,7 @@ import { SmartAccountKit } from 'smart-account-kit';
 | `execute(target, targetFn, targetArgs)` | Build a smart-account-mediated contract call |
 | `executeAndSubmit(target, targetFn, targetArgs, options?)` | Build + sign + submit a smart-account-mediated call |
 | `upgrade(newWasmHash)` | Build an upgrade transaction (32-byte hex string or `Buffer`) |
-| `fundWallet(nativeTokenContract, options?)` | Fund the wallet via Friendbot (testnet only) |
+| `fundWallet(nativeTokenContract, options?)` | Fund the wallet via Friendbot (testnet only). The temporary Friendbot account pays its own fee, so this submits through RPC unless `options.forceMethod` is set |
 | `transfer(tokenContract, recipient, amount, options?)` | Passkey token transfer (signed as a direct token invocation, so token-scoped context rules and their policies apply) |
 | `getContractDetailsFromIndexer(contractId)` | Get contract details from the indexer |
 | `convertPolicyParams(policyType, params)` | Convert native policy params to an `xdr.ScVal` |

@@ -414,12 +414,48 @@ describe("tx-ops", () => {
     expect(simulateTransaction).toHaveBeenCalledTimes(2);
     expect(assembleTransactionMock).toHaveBeenCalledTimes(1);
     expect(preparedTx.sign).toHaveBeenCalledTimes(1);
-    expect(sendAndPollMock).toHaveBeenCalledWith(preparedTx, { forceMethod: undefined });
+    expect(sendAndPollMock).toHaveBeenCalledWith(preparedTx, { forceMethod: "rpc" });
     expect(result).toEqual({
       success: true,
       hash: "fund-hash",
       amount: 10_000 - FRIENDBOT_RESERVE_XLM,
     });
+  });
+
+  it("fundWallet submits through RPC and signs the fee even when a relayer is configured", async () => {
+    const account = new Account(makeAccount(8).publicKey(), "1");
+    const preparedTx = { sign: vi.fn() };
+    const simulateTransaction = vi.fn().mockResolvedValue({
+      result: { auth: [] },
+      latestLedger: 100,
+    });
+    const sendAndPollMock = vi.fn().mockResolvedValue({ success: true, hash: "fund-hash" });
+    assembleTransactionMock.mockReturnValue({ build: () => preparedTx });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 200 })) as typeof fetch);
+
+    const result = await fundWallet(
+      {
+        getContractId: () => makeContractAddress("contract"),
+        rpc: {
+          getAccount: vi.fn().mockResolvedValue(account),
+          getAccountEntry: vi
+            .fn()
+            .mockResolvedValue({ balance: () => ({ toString: () => "100000000000" }) }),
+          simulateTransaction,
+        } as never,
+        networkPassphrase: "Test SDF Network ; September 2015",
+        timeoutInSeconds: 30,
+        // A configured relayer sponsors unless the caller forces RPC.
+        shouldUseFeeSponsoring: (options) => options?.forceMethod !== "rpc",
+        hasSourceAccountAuth: () => false,
+        sendAndPoll: sendAndPollMock,
+      },
+      makeContractAddress("token")
+    );
+
+    expect(preparedTx.sign).toHaveBeenCalledTimes(1);
+    expect(sendAndPollMock).toHaveBeenCalledWith(preparedTx, { forceMethod: "rpc" });
+    expect(result.success).toBe(true);
   });
 });
 

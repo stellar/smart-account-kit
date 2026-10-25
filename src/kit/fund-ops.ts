@@ -244,7 +244,10 @@ export async function fundWallet(
       signedAuthEntries
     );
 
-    const submissionOpts: SubmissionOptions = { forceMethod: options?.forceMethod };
+    // The Friendbot-funded temp account pays its own fee. A relayer sponsors
+    // only calls from allowlisted wallets, so it refuses this G-address
+    // transfer. Submit through RPC unless the caller forces a method.
+    const submissionOpts: SubmissionOptions = { forceMethod: options?.forceMethod ?? "rpc" };
     signFeePayer(preparedTx, tempKeypair, deps, submissionOpts);
 
     const txResult = await deps.sendAndPoll(preparedTx, submissionOpts);
