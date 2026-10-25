@@ -18,6 +18,7 @@ import {
   PluginTransportError,
 } from "@openzeppelin/relayer-plugin-channels";
 import worker, {
+  createClient,
   extractMissingAccount,
   getClientIP,
   RequestRateLimiter,
@@ -46,6 +47,7 @@ vi.mock("@openzeppelin/relayer-plugin-channels", () => {
     }
   }
   class ChannelsClient {
+    axiosClient = { defaults: {} as { fetchOptions?: RequestInit } };
     submitSorobanTransaction = submitSorobanTransaction;
     submitTransaction = submitTransaction;
   }
@@ -491,6 +493,15 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("Channels client", () => {
+  it("uses a fetch cache mode that the Workers runtime accepts", () => {
+    const client = createClient(makeEnv(), API_KEY) as unknown as {
+      axiosClient: { defaults: { fetchOptions?: RequestInit } };
+    };
+    expect(client.axiosClient.defaults.fetchOptions).toEqual({ cache: "no-store" });
+  });
 });
 
 describe("request boundary", () => {

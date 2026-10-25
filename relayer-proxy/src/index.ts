@@ -835,8 +835,28 @@ async function validateSubmission(env: Env, body: SubmissionBody): Promise<void>
   else await validateFuncSubmission(env, body);
 }
 
-function createClient(env: Env, apiKey: string): ChannelsClient {
-  return new ChannelsClient({ baseUrl: env.RELAYER_BASE_URL, apiKey });
+/**
+ * axios 1.20 sets the fetch `cache` mode to "default" on every request. The
+ * Workers runtime rejects that mode ("Unsupported cache mode: default"), so
+ * every Channels submission failed. Give the client a mode Workers accepts.
+ */
+const WORKERS_FETCH_OPTIONS: RequestInit = { cache: "no-store" };
+
+type AxiosBackedClient = {
+  axiosClient?: { defaults: { fetchOptions?: RequestInit } };
+};
+
+export function createClient(env: Env, apiKey: string): ChannelsClient {
+  const client = new ChannelsClient({ baseUrl: env.RELAYER_BASE_URL, apiKey });
+  const { axiosClient } = client as unknown as AxiosBackedClient;
+  if (!axiosClient) {
+    throw new RequestError("Channels client has no HTTP client", 500);
+  }
+  axiosClient.defaults.fetchOptions = {
+    ...axiosClient.defaults.fetchOptions,
+    ...WORKERS_FETCH_OPTIONS,
+  };
+  return client;
 }
 
 export function extractMissingAccount(errorMessage: string): string | null {

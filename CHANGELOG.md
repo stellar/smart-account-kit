@@ -13,6 +13,12 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 - Fix the relayer proxy `ALLOWED_ORIGINS` default. The hosted demo runs at
   `https://smart-account-kit.pages.dev`, not `https://smart-account-kit-demo.pages.dev`.
 
+### Fixed
+
+- The relayer proxy failed every Channels submission with `Unsupported cache mode: default`.
+  axios 1.20 sets that fetch cache mode, and the Workers runtime rejects it. The proxy now sets
+  the Channels client cache mode to `no-store`.
+
 ## 0.9.0 — 2026-10-25
 
 ### Security
