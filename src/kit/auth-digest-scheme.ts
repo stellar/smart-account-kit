@@ -76,6 +76,37 @@ export function assertKnownAuthDigestScheme(
   }
 }
 
+export interface UpgradeTargetPolicy {
+  acceptedWasmHashes: readonly string[];
+  authDigestSchemes: ReadonlyMap<string, AuthDigestScheme>;
+}
+
+/** Validate upgrade targets before building or signing an upgrade. */
+export function assertUpgradeTarget(
+  policy: UpgradeTargetPolicy,
+  newWasmHash: string | Buffer
+): Buffer {
+  const wasmHash =
+    typeof newWasmHash === "string" ? Buffer.from(newWasmHash, "hex") : newWasmHash;
+  if (wasmHash.length !== 32) {
+    throw new ValidationError(
+      `newWasmHash must be a 32-byte hash (got ${wasmHash.length} bytes)`,
+      SmartAccountErrorCode.INVALID_INPUT,
+      { length: wasmHash.length }
+    );
+  }
+  const targetHash = wasmHash.toString("hex");
+  if (!policy.acceptedWasmHashes.includes(targetHash)) {
+    throw new ValidationError(
+      `newWasmHash ${targetHash} is not in \`acceptedWasmHashes\`, so the SDK would refuse to connect to the wallet after the upgrade`,
+      SmartAccountErrorCode.INVALID_INPUT,
+      { field: "newWasmHash", wasmHash: targetHash }
+    );
+  }
+  assertKnownAuthDigestScheme(policy.authDigestSchemes, targetHash, "newWasmHash");
+  return wasmHash;
+}
+
 export function isAuthDigestScheme(value: unknown): value is AuthDigestScheme {
   return AUTH_DIGEST_SCHEMES.includes(value as AuthDigestScheme);
 }

@@ -327,6 +327,58 @@ describe("SmartAccountKit top-level surface", () => {
     );
   });
 
+  for (const method of ["signAdmin", "signAndSubmitAdmin"] as const) {
+    it.each([
+      ["ef".repeat(32), "acceptedWasmHashes"],
+      ["cd".repeat(32), "no known authorization digest scheme"],
+    ])(`${method} refuses raw upgrade target %s before signing`, async (target, message) => {
+      const contractId = Address.contract(hash(Buffer.from("upgrade-wallet"))).toString();
+      const kit = new SmartAccountKit({
+        rpcUrl: "https://rpc.example",
+        networkPassphrase: Networks.TESTNET,
+        accountWasmHash: LEGACY_HASH,
+        acceptedWasmHashes: [LEGACY_HASH, "cd".repeat(32)],
+        authDigestSchemes: { ["ef".repeat(32)]: "preimage-v1" },
+        webauthnVerifierAddress: contractId,
+      });
+      Object.assign(kit, { _contractId: contractId, wallet: {} });
+      const startAuthentication = vi.spyOn((kit as any).webAuthn, "startAuthentication");
+      const sendAndPoll = vi.spyOn(kit as any, "sendAndPoll");
+      const entry = makeAuthEntry();
+      entry.credentials().address().address(Address.fromString(contractId).toScAddress());
+      const args = new xdr.InvokeContractArgs({
+        contractAddress: Address.fromString(contractId).toScAddress(),
+        functionName: "upgrade",
+        args: [xdr.ScVal.scvBytes(Buffer.from(target, "hex")), Address.fromString(contractId).toScVal()],
+      });
+      entry.rootInvocation().function(
+        xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(args)
+      );
+      const transaction = {
+        built: {
+          operations: [{ type: "invokeHostFunction", func: xdr.HostFunction.hostFunctionTypeInvokeContract(args) }],
+        },
+        simulationData: { result: { auth: [entry] } },
+        signAuthEntries: vi.fn(async ({ authorizeEntry }) => authorizeEntry(entry)),
+      };
+      const result = kit[method](transaction as any, {
+        credentialId: "credential",
+        resolveContextRuleIds: () => [0],
+      });
+      if (method === "signAdmin") {
+        await expect(result).rejects.toThrow(message);
+      } else {
+        const submitted = await result;
+        expect(submitted).toMatchObject({
+          success: false,
+          error: { code: SmartAccountErrorCode.INVALID_INPUT, message: expect.stringContaining(message) },
+        });
+      }
+      expect(startAuthentication).not.toHaveBeenCalled();
+      expect(sendAndPoll).not.toHaveBeenCalled();
+    });
+  }
+
   it("signAdmin binds wallet mutation signing to the transaction host function", async () => {
     const authEntry = makeAuthEntry();
     const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(

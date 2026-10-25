@@ -54,7 +54,7 @@ import {
 } from "./test-utils";
 import { signersEqual } from "../signer-utils";
 import { computeEntryAuthDigest } from "../signers";
-import { AUTH_DIGEST_SCHEMES, type AuthDigestScheme } from "../kit/auth-digest-scheme";
+import { AUTH_DIGEST_SCHEMES, buildAuthDigestSchemeTable, type AuthDigestScheme } from "../kit/auth-digest-scheme";
 import {
   AuthDigestSchemeError,
   SignerNotFoundError,
@@ -89,6 +89,8 @@ function makeDeps() {
     deployerPublicKey: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 5)).publicKey(),
     signAuthEntry: vi.fn(),
     resolveAuthDigestScheme: vi.fn().mockResolvedValue("preimage-v1"),
+    acceptedWasmHashes: ["ab".repeat(32), "cd".repeat(32)],
+    authDigestSchemes: buildAuthDigestSchemeTable({ ["ab".repeat(32)]: "preimage-v1" }),
     sendAndPoll: vi.fn(),
     hasSourceAccountAuth: vi.fn().mockReturnValue(false),
     shouldUseFeeSponsoring: vi.fn().mockReturnValue(false),
@@ -120,7 +122,8 @@ function makeBuiltTransaction(auth: xdr.SorobanAuthorizationEntry[] = []) {
 
 function makeWalletMutation(
   contractId: string,
-  functionName = "add_signer"
+  functionName = "add_signer",
+  args: xdr.ScVal[] = []
 ): {
   hostFunction: xdr.HostFunction;
   authEntry: xdr.SorobanAuthorizationEntry;
@@ -128,7 +131,7 @@ function makeWalletMutation(
   const invokeArgs = new xdr.InvokeContractArgs({
     contractAddress: Address.fromString(contractId).toScAddress(),
     functionName,
-    args: [],
+    args,
   });
   return {
     hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(invokeArgs),
@@ -571,6 +574,49 @@ describe("MultiSignerManager", () => {
     }
     expect(deps.signAuthEntry).not.toHaveBeenCalled();
     expect(deps.sendAndPoll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ef".repeat(32), "acceptedWasmHashes"],
+    ["cd".repeat(32), "no known authorization digest scheme"],
+    ["ab".repeat(32), undefined],
+  ])("checks raw upgrade target %s on the multi-signer admin path", async (target, error) => {
+    const deps = makeDeps();
+    const contractId = deps.getContractId();
+    const { hostFunction, authEntry } = makeWalletMutation(contractId, "upgrade", [
+      xdr.ScVal.scvBytes(Buffer.from(target, "hex")),
+      Address.fromString(contractId).toScVal(),
+    ]);
+    deps.rpc.getLatestLedger.mockResolvedValue({ sequence: 475 });
+    deps.rpc.simulateTransaction.mockResolvedValue({ result: { auth: [] } });
+    deps.shouldUseFeeSponsoring.mockReturnValue(true);
+    deps.sendAndPoll.mockResolvedValue({ success: true, hash: "tx-upgrade" });
+    deps.signAuthEntry.mockImplementation(async (entry) => entry);
+    assembleTransactionMock.mockReturnValue({ build: () => ({ sign: vi.fn() }) });
+    vi.mocked(resolveContextRuleIdsForEntry).mockResolvedValue([12]);
+    const result = await new MultiSignerManager(deps).adminOperation(
+      {
+        built: { operations: [{ type: "invokeHostFunction", func: hostFunction, auth: [authEntry] }] },
+      } as any,
+      [{
+        signer: makeExternalSigner(3, 4, 5),
+        type: "passkey",
+        credentialId: Buffer.alloc(20, 5).toString("base64url"),
+      }]
+    );
+    if (error) {
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.code).toBe(SmartAccountErrorCode.INVALID_INPUT);
+        expect(result.error.message).toContain(error);
+      }
+      expect(deps.signAuthEntry).not.toHaveBeenCalled();
+      expect(deps.resolveAuthDigestScheme).not.toHaveBeenCalled();
+      expect(deps.sendAndPoll).not.toHaveBeenCalled();
+    } else {
+      expect(result).toEqual({ success: true, hash: "tx-upgrade" });
+      expect(deps.signAuthEntry).toHaveBeenCalledOnce();
+    }
   });
 
   it("binds admin multi-signer authorization to the transaction host function", async () => {

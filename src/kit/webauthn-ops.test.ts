@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import base64url from "base64url";
-import { StrKey, hash } from "@stellar/stellar-sdk";
+import { Address, StrKey, hash, xdr } from "@stellar/stellar-sdk";
 import type { Signer as ContractSigner } from "smart-account-kit-bindings";
 import {
   authenticatePasskey,
@@ -8,7 +8,7 @@ import {
   signAuthEntry,
 } from "./webauthn-ops";
 import { readAuthPayload, getAddressCredentials } from "./auth-payload";
-import { AUTH_DIGEST_SCHEMES } from "./auth-digest-scheme";
+import { AUTH_DIGEST_SCHEMES, buildAuthDigestSchemeTable } from "./auth-digest-scheme";
 import { makeAddressAuthEntry } from "../managers/test-utils";
 import { computeEntryAuthDigest } from "../signers";
 import {
@@ -122,10 +122,43 @@ describe("signAuthEntry", () => {
       rpc: {} as never,
       timeoutInSeconds: 30,
       resolveAuthDigestScheme,
+      acceptedWasmHashes: ["ab".repeat(32), "cd".repeat(32)],
+      authDigestSchemes: buildAuthDigestSchemeTable({ ["ab".repeat(32)]: "preimage-v1" }),
       webAuthn: { startRegistration: vi.fn(), startAuthentication },
     } as never;
     return { deps, startAuthentication, update, calculateExpiration, resolveAuthDigestScheme };
   }
+
+  it.each([
+    ["ef".repeat(32), "acceptedWasmHashes"],
+    ["cd".repeat(32), "no known authorization digest scheme"],
+    ["ab".repeat(32), undefined],
+  ])("checks raw upgrade target %s before WebAuthn signing", async (target, error) => {
+    const { deps, startAuthentication } = makeSigningDeps();
+    const entry = makeAddressAuthEntry(CONTRACT);
+    const args = new xdr.InvokeContractArgs({
+      contractAddress: Address.fromString(CONTRACT).toScAddress(),
+      functionName: "upgrade",
+      args: [xdr.ScVal.scvBytes(Buffer.from(target, "hex")), Address.fromString(CONTRACT).toScVal()],
+    });
+    entry.rootInvocation().function(
+      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(args)
+    );
+    const result = signAuthEntry(deps, entry, {
+      credentialId,
+      contextRuleIds: [0],
+      signer,
+      walletMutationHostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(args),
+    });
+    if (error) {
+      await expect(result).rejects.toThrow(error);
+      expect(startAuthentication).not.toHaveBeenCalled();
+    } else {
+      const signed = await result;
+      expect(readAuthPayload(getAddressCredentials(signed.credentials()).signature()).signers.size).toBe(1);
+      expect(startAuthentication).toHaveBeenCalledOnce();
+    }
+  });
 
   it("signs an auth entry into an AuthPayload keyed by the WebAuthn signer", async () => {
     const { deps, startAuthentication, update, calculateExpiration } = makeSigningDeps();

@@ -6,6 +6,10 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 
 ### Breaking security changes
 
+- Admin signing methods refuse a raw `upgrade` call unless the target WASM hash is in
+  `acceptedWasmHashes` and has a known authorization digest scheme, the same rule as `kit.upgrade()`.
+- `MultiSignerManager` dependencies now require `acceptedWasmHashes` and `authDigestSchemes`.
+  Code that constructs the manager directly must pass both.
 - `signers.addDelegated` accepts only G-addresses, matching `createDelegatedSigner`.
 - Reject a Delegated signer that is the wallet itself in `rules.add`, `signers.addDelegated`, and
   `signers.addBatch`, and refuse to sign an admin transaction that adds one, mirroring

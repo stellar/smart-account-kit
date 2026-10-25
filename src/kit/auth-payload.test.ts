@@ -102,6 +102,56 @@ function withRootInvocation(
 }
 
 describe("auth-payload", () => {
+  describe("upgrade targets on the admin path", () => {
+    const wallet = Address.contract(hash(Buffer.from("wallet-admin"))).toString();
+    const mapped = "ab".repeat(32);
+    const unmapped = "cd".repeat(32);
+    const policy = {
+      acceptedWasmHashes: [mapped, unmapped],
+      authDigestSchemes: new Map([[mapped, "preimage-v1" as const]]),
+    };
+
+    function assertUpgrade(target: xdr.ScVal[], withPolicy = true) {
+      const root = makeContractInvocation(wallet, "upgrade", [], target);
+      const entry = withRootInvocation(makeAuthEntry(wallet), root);
+      assertWalletMutationIntent(
+        entry,
+        wallet,
+        xdr.HostFunction.hostFunctionTypeInvokeContract(root.function().contractFn()),
+        withPolicy ? policy : undefined
+      );
+    }
+
+    it("refuses unaccepted hashes even when their digest scheme is mapped", () => {
+      policy.authDigestSchemes.set("ef".repeat(32), "preimage-v1");
+      expect(() => assertUpgrade([xdr.ScVal.scvBytes(Buffer.alloc(32, 0xef))])).toThrow(
+        "acceptedWasmHashes"
+      );
+    });
+
+    it("refuses accepted hashes without a digest scheme", () => {
+      expect(() => assertUpgrade([xdr.ScVal.scvBytes(Buffer.from(unmapped, "hex"))])).toThrow(
+        "no known authorization digest scheme"
+      );
+    });
+
+    it("accepts mapped and accepted hashes", () => {
+      expect(() => assertUpgrade([xdr.ScVal.scvBytes(Buffer.from(mapped, "hex"))])).not.toThrow();
+    });
+
+    it("refuses upgrades without the target policy", () => {
+      expect(() => assertUpgrade([xdr.ScVal.scvBytes(Buffer.from(mapped, "hex"))], false)).toThrow(
+        "requires an upgrade target policy"
+      );
+    });
+
+    it("refuses missing, non-byte, and incorrectly sized targets", () => {
+      expect(() => assertUpgrade([])).toThrow("32-byte");
+      expect(() => assertUpgrade([xdr.ScVal.scvSymbol("hash")])).toThrow("32-byte");
+      expect(() => assertUpgrade([xdr.ScVal.scvBytes(Buffer.alloc(31))])).toThrow("32-byte");
+    });
+  });
+
   it("refuses a wallet mutation on a generic signing path", () => {
     const wallet = Address.contract(hash(Buffer.from("wallet-admin"))).toString();
     const entry = withRootInvocation(

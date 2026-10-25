@@ -159,6 +159,7 @@ import {
 import { normalizeSignatureExpirationLedger } from "./kit/auth-payload.js";
 import {
   assertKnownAuthDigestScheme,
+  assertUpgradeTarget,
   buildAuthDigestSchemeTable,
   resolveAuthDigestScheme,
   type AuthDigestScheme,
@@ -621,6 +622,8 @@ export class SmartAccountKit {
       deployerKeypair: this.deployerKeypair,
       deployerPublicKey: this.deployerPublicKey,
       signAuthEntry: (entry, options) => this.signAuthEntryInternal(entry, options),
+      acceptedWasmHashes: this.acceptedWasmHashes,
+      authDigestSchemes: this.authDigestSchemes,
       resolveAuthDigestScheme: (contractId) => this.resolveAuthDigestScheme(contractId),
       sendAndPoll: (tx, options) => this.sendAndPoll(tx, options),
       hasSourceAccountAuth: (tx) => this.hasSourceAccountAuth(tx),
@@ -1356,6 +1359,8 @@ export class SmartAccountKit {
         requireWallet: () => this.requireWallet(),
         rpc: this.rpc,
         timeoutInSeconds: this.timeoutInSeconds,
+        acceptedWasmHashes: this.acceptedWasmHashes,
+        authDigestSchemes: this.authDigestSchemes,
         resolveAuthDigestScheme: (contractId) => this.resolveAuthDigestScheme(contractId),
       },
       entry,
@@ -1533,24 +1538,13 @@ export class SmartAccountKit {
     newWasmHash: string | Buffer
   ): Promise<Awaited<ReturnType<SmartAccountClient["upgrade"]>>> {
     const { wallet, contractId } = this.requireWallet();
-    const wasmHash =
-      typeof newWasmHash === "string" ? Buffer.from(newWasmHash, "hex") : newWasmHash;
-    if (wasmHash.length !== 32) {
-      throw new ValidationError(
-        `newWasmHash must be a 32-byte hash (got ${wasmHash.length} bytes)`,
-        SmartAccountErrorCode.INVALID_INPUT,
-        { length: wasmHash.length }
-      );
-    }
-    const targetHash = wasmHash.toString("hex");
-    if (!this.acceptedWasmHashes.includes(targetHash)) {
-      throw new ValidationError(
-        `newWasmHash ${targetHash} is not in \`acceptedWasmHashes\`, so the SDK would refuse to connect to the wallet after the upgrade`,
-        SmartAccountErrorCode.INVALID_INPUT,
-        { field: "newWasmHash", wasmHash: targetHash }
-      );
-    }
-    assertKnownAuthDigestScheme(this.authDigestSchemes, targetHash, "newWasmHash");
+    const wasmHash = assertUpgradeTarget(
+      {
+        acceptedWasmHashes: this.acceptedWasmHashes,
+        authDigestSchemes: this.authDigestSchemes,
+      },
+      newWasmHash
+    );
     return wallet.upgrade({ new_wasm_hash: wasmHash, operator: contractId });
   }
 

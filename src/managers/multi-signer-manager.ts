@@ -49,7 +49,7 @@ import {
   signFeePayer,
 } from "../kit/tx-ops.js";
 import { computeEntryAuthDigest } from "../signers.js";
-import type { AuthDigestScheme } from "../kit/auth-digest-scheme.js";
+import type { AuthDigestScheme, UpgradeTargetPolicy } from "../kit/auth-digest-scheme.js";
 import type { SignAuthEntryOptions } from "../kit/webauthn-ops.js";
 import { validateAddress, validateAmount } from "../utils.js";
 import {
@@ -71,7 +71,7 @@ export interface MultiSignerOptions {
   ) => number[] | Promise<number[]>;
 }
 
-export interface MultiSignerManagerDeps {
+export interface MultiSignerManagerDeps extends UpgradeTargetPolicy {
   getContractId: () => string | undefined;
   isConnected: () => boolean;
   getRules: (contextRuleType: ContextRuleType) => Promise<Array<{ signers: ContractSigner[] }>>;
@@ -336,7 +336,8 @@ export class MultiSignerManager {
         assertWalletMutationIntent(
           entry,
           contractId,
-          allowWalletMutation ? hostFunc : undefined
+          allowWalletMutation ? hostFunc : undefined,
+          this.deps
         );
         authDigestScheme ??= await this.deps.resolveAuthDigestScheme(contractId);
 

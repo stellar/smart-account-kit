@@ -29,7 +29,7 @@ import {
   writeAuthPayload,
 } from "./auth-payload.js";
 import { computeEntryAuthDigest } from "../signers.js";
-import type { AuthDigestScheme } from "./auth-digest-scheme.js";
+import type { AuthDigestScheme, UpgradeTargetPolicy } from "./auth-digest-scheme.js";
 import {
   findWebAuthnSignerInRules,
 } from "./context-rules.js";
@@ -46,7 +46,7 @@ type WebAuthnDeps = {
 
 type RequireWallet = () => { wallet: SmartAccountClient; contractId: string };
 
-type SignAuthEntryDeps = WebAuthnDeps & {
+type SignAuthEntryDeps = WebAuthnDeps & UpgradeTargetPolicy & {
   networkPassphrase: string;
   storage: StorageAdapter;
   calculateExpiration: () => Promise<number>;
@@ -157,7 +157,8 @@ export async function signAuthEntry(
   assertWalletMutationIntent(
     normalizedEntry,
     contractId,
-    options?.walletMutationHostFunction
+    options?.walletMutationHostFunction,
+    deps
   );
   let requestedExpiration = options?.expiration;
   if (requestedExpiration == null) {

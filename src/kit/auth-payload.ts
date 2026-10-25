@@ -12,6 +12,7 @@ import { signersEqual } from "../signer-utils.js";
 import type { WebAuthnSigData } from "../contract-types.js";
 import { SmartAccountErrorCode, ValidationError } from "../errors.js";
 import { validateSigner } from "../validation.js";
+import { assertUpgradeTarget, type UpgradeTargetPolicy } from "./auth-digest-scheme.js";
 
 /** Smart-account functions that can change authority or execute wallet actions. */
 export const WALLET_MUTATION_FUNCTIONS = new Set([
@@ -42,12 +43,14 @@ const SIGNER_ARGUMENTS: Record<string, { index: number; list: boolean }> = {
  * mutation must be the root invocation and must match that function exactly.
  * Every signer the mutation adds must pass `validateSigner` for this wallet,
  * so a transaction built from the raw client cannot make the wallet its own
- * delegated signer either.
+ * delegated signer either. Upgrades must use accepted code with a known
+ * authorization digest scheme.
  */
 export function assertWalletMutationIntent(
   entry: xdr.SorobanAuthorizationEntry,
   contractId: string,
-  hostFunction?: xdr.HostFunction
+  hostFunction?: xdr.HostFunction,
+  upgradeTargetPolicy?: UpgradeTargetPolicy
 ): void {
   const mutations: Array<{
     invocation: xdr.SorobanAuthorizedInvocation;
@@ -100,6 +103,16 @@ export function assertWalletMutationIntent(
     fail("The admin authorization root does not match the transaction host function.");
   }
   assertAddedSignersValid(rootArgs, contractId);
+  if (mutations[0].name === "upgrade") {
+    const target = rootArgs.args()[0];
+    if (!target || target.switch().name !== "scvBytes") {
+      fail("The upgrade target must be a 32-byte WASM hash.");
+    }
+    if (!upgradeTargetPolicy) {
+      return fail("The admin signing path requires an upgrade target policy.");
+    }
+    assertUpgradeTarget(upgradeTargetPolicy, Buffer.from(target.bytes()));
+  }
 }
 
 /**
