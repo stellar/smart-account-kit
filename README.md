@@ -215,7 +215,7 @@ import { SmartAccountKit } from 'smart-account-kit';
 | `signAndSubmit(transaction, options?)` | Sign, re-simulate, and submit a non-administrative transaction |
 | `signAdmin(transaction, options?)` | Sign one administrative smart-account transaction |
 | `signAndSubmitAdmin(transaction, options?)` | Sign, re-simulate, and submit one administrative transaction |
-| `signAuthEntry(authEntry, options?)` | Sign a single auth entry (low-level) |
+| `signAuthEntry(authEntry, { contextRuleIds, ... })` | Sign a single auth entry (low-level). The caller selects the rule IDs; the SDK does not read them from the entry |
 | `execute(target, targetFn, targetArgs)` | Build a smart-account-mediated contract call |
 | `executeAndSubmit(target, targetFn, targetArgs, options?)` | Build + sign + submit a smart-account-mediated call |
 | `upgrade(newWasmHash)` | Build an upgrade transaction (32-byte hex string or `Buffer`) |

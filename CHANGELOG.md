@@ -4,8 +4,21 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 
 ## Unreleased
 
+### Security
+
+- Restrict direct relayer transfers to Stellar Asset Contracts or custom tokens in `ALLOWED_TOKEN_CONTRACT_IDS`.
+  Require exactly one matching authorization entry from an allowlisted wallet.
+  Reject transfers when RPC cannot verify the token contract.
+  Operators that sponsor custom SEP-41 token transfers must list those tokens in
+  `ALLOWED_TOKEN_CONTRACT_IDS`.
+
 ### Breaking security changes
 
+- `signAuthEntry` and `signAuthEntryWithSigners` require caller-selected `contextRuleIds`, also for
+  partially signed entries. They no longer read the rule IDs from a supplied AuthPayload. A dApp
+  could pre-fill those IDs to select an uncapped rule and bypass a spending-limit policy.
+- Every signing path refuses an entry whose existing AuthPayload rule IDs differ from the selected
+  rules, before it signs.
 - Admin signing methods refuse a raw `upgrade` call unless the target WASM hash is in
   `acceptedWasmHashes` and has a known authorization digest scheme, the same rule as `kit.upgrade()`.
 - `MultiSignerManager` dependencies now require `acceptedWasmHashes` and `authDigestSchemes`.

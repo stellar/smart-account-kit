@@ -219,10 +219,10 @@ export interface SignAuthEntryWithSignersOptions {
    */
   authDigestScheme: AuthDigestScheme;
   /**
-   * Context rule ids bound into the auth digest. Required unless the entry's
-   * AuthPayload already carries them (for example, a partially signed entry).
+   * Caller-approved context rule ids bound into the auth digest. Required even
+   * for partially signed entries; supplied payload ids are not trusted.
    */
-  contextRuleIds?: number[];
+  contextRuleIds: number[];
   /**
    * Signature expiration ledger. Required unless the entry already has a
    * non-zero `signatureExpirationLedger`. On a partially signed entry it must
@@ -331,10 +331,10 @@ export async function signAuthEntryWithSigners(
       { existing: existingExpiration, requested: expiration }
     );
   }
-  const contextRuleIds = options.contextRuleIds ?? authPayload.context_rule_ids;
-  if (contextRuleIds.length === 0) {
+  const contextRuleIds = options.contextRuleIds;
+  if (!contextRuleIds?.length) {
     throw new ValidationError(
-      "contextRuleIds are required to sign smart account auth entries when the payload does not already include them",
+      "contextRuleIds are required from the caller to sign smart account auth entries",
       SmartAccountErrorCode.INVALID_INPUT
     );
   }

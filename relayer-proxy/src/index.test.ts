@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Account,
   Address,
+  Contract,
   hash,
   Keypair,
   nativeToScVal,
@@ -117,6 +118,7 @@ function makeEnv(
     allowedDeployers?: string;
     allowedHashes?: string;
     allowedWallets?: string;
+    allowedTokens?: string;
     allowedWalletFunctions?: string;
     maxFee?: string;
     maxTotalFee?: string;
@@ -137,6 +139,7 @@ function makeEnv(
     ALLOWED_DEPLOYER_ADDRESSES: opts.allowedDeployers ?? DEPLOYER,
     ALLOWED_ACCOUNT_WASM_HASHES: opts.allowedHashes ?? WASM_HASH,
     ALLOWED_WALLET_CONTRACT_IDS: opts.allowedWallets ?? WALLET,
+    ALLOWED_TOKEN_CONTRACT_IDS: opts.allowedTokens,
     ALLOWED_WALLET_FUNCTIONS:
       opts.allowedWalletFunctions ??
       "execute,upgrade,add_policy,remove_policy,add_signer,remove_signer,add_context_rule,remove_context_rule,batch_add_signer,update_context_rule_name,update_context_rule_valid_until",
@@ -373,6 +376,29 @@ function transferSubmission(
   });
 }
 
+function contractInstance(contract: string, executable: xdr.ContractExecutable) {
+  return {
+    latestLedger: 100,
+    entries: [
+      {
+        key: new Contract(contract).getFootprint(),
+        lastModifiedLedgerSeq: 100,
+        val: xdr.LedgerEntryData.contractData(
+          new xdr.ContractDataEntry({
+            ext: new xdr.ExtensionPoint(0),
+            contract: Address.fromString(contract).toScAddress(),
+            key: xdr.ScVal.scvLedgerKeyContractInstance(),
+            durability: xdr.ContractDataDurability.persistent(),
+            val: xdr.ScVal.scvContractInstance(
+              new xdr.ScContractInstance({ executable, storage: null })
+            ),
+          })
+        ),
+      },
+    ],
+  };
+}
+
 function unsupportedSubmission() {
   return {
     ...walletSubmission(),
@@ -440,6 +466,9 @@ async function post(body: unknown, env = makeEnv()) {
 }
 
 beforeEach(() => {
+  vi.spyOn(RpcServer.prototype, "getLedgerEntries").mockResolvedValue(
+    contractInstance(TOKEN, xdr.ContractExecutable.contractExecutableStellarAsset())
+  );
   vi.spyOn(RpcServer.prototype, "simulateTransaction").mockResolvedValue({
     transactionData: {},
     minResourceFee: "5000",
@@ -690,11 +719,14 @@ describe("wallet invocation validation", () => {
     expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
   });
 
-  it("accepts the SDK's direct wallet-authorized token transfer", async () => {
+  it("accepts a direct wallet-authorized Stellar Asset Contract transfer", async () => {
     const body = transferSubmission();
     const res = await post(body);
     expect(res.status).toBe(200);
     expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+    expect(RpcServer.prototype.getLedgerEntries).toHaveBeenCalledWith(
+      new Contract(TOKEN).getFootprint()
+    );
   });
 
   it("rejects a non-allowlisted wallet contract", async () => {
@@ -730,13 +762,131 @@ describe("wallet invocation validation", () => {
     );
   });
 
-  it("accepts a transfer of ANY token when the wallet authorizes it", async () => {
-    // Wallet authorization and fee controls apply without a token allowlist.
+  it("rejects a transfer with no auth entries at the request boundary", async () => {
+    await expectRejected(
+      { ...transferSubmission(), auth: [] },
+      "Request must include 'xdr' OR ('func' and 'auth')",
+      {},
+      400
+    );
+  });
+
+  it("rejects a transfer with multiple auth entries", async () => {
+    const body = transferSubmission();
+    body.auth.push(body.auth[0]);
+    await expectRejected(body, "Transfer must contain exactly one auth entry");
+  });
+
+  it("rejects a transfer to a non-SAC contract outside the token allowlist", async () => {
+    vi.mocked(RpcServer.prototype.getLedgerEntries).mockResolvedValueOnce(
+      contractInstance(
+        OTHER_WALLET,
+        xdr.ContractExecutable.contractExecutableWasm(hexBytes(WASM_HASH))
+      )
+    );
+    await expectRejected(
+      transferSubmission({ token: OTHER_WALLET }),
+      "Token contract is not allowed"
+    );
+    expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects an arbitrary target even when the wallet WASM is allowlisted", async () => {
+    vi.mocked(RpcServer.prototype.getLedgerEntries).mockImplementation(
+      async (key) =>
+        contractInstance(
+          Address.fromScAddress(key.contractData().contract()).toString(),
+          xdr.ContractExecutable.contractExecutableWasm(hexBytes(WASM_HASH))
+        )
+    );
+    await expectRejected(
+      transferSubmission(),
+      "Token contract is not allowed",
+      { allowedWallets: "" }
+    );
+  });
+
+  it("accepts a custom token from the token allowlist CSV", async () => {
     const body = transferSubmission({ token: OTHER_WALLET });
-    const res = await post(body);
+    const res = await post(
+      body,
+      makeEnv({ allowedTokens: ` ${TOKEN}, ${OTHER_WALLET} , ` })
+    );
     expect(res.status).toBe(200);
     expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+    expect(RpcServer.prototype.getLedgerEntries).not.toHaveBeenCalled();
   });
+
+  it("rejects a transfer when token verification RPC fails", async () => {
+    vi.mocked(RpcServer.prototype.getLedgerEntries).mockRejectedValueOnce(
+      new Error("RPC unavailable")
+    );
+    await expectRejected(
+      transferSubmission(),
+      "Could not verify token contract",
+      {},
+      503
+    );
+    expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a transfer whose target is an account, not a contract", async () => {
+    await expectRejected(
+      transferSubmission({ token: DEPLOYER }),
+      "Token transfer target must be a contract"
+    );
+    expect(RpcServer.prototype.getLedgerEntries).not.toHaveBeenCalled();
+  });
+
+  it("rejects a transfer when the token instance is missing", async () => {
+    vi.mocked(RpcServer.prototype.getLedgerEntries).mockResolvedValueOnce({
+      latestLedger: 100,
+      entries: [],
+    });
+    await expectRejected(transferSubmission(), "Token contract is not allowed");
+  });
+
+  it("rejects V1 credentials for direct token transfers", async () => {
+    await expectRejected(
+      transferSubmission({ v1Credentials: true }),
+      "Only address-bound V2 wallet credentials are allowed"
+    );
+  });
+
+  it("requires an allowlisted wallet for a direct token transfer", async () => {
+    await expectRejected(
+      transferSubmission({ wallet: OTHER_WALLET }),
+      "Transfer auth does not exactly match func and wallet",
+      { allowedHashes: "" }
+    );
+  });
+
+  it.each(["credential", "root", "child"])(
+    "rejects a transfer with a mismatched %s authorization",
+    async (change) => {
+      const body = transferSubmission();
+      const entry = xdr.SorobanAuthorizationEntry.fromXDR(body.auth[0], "base64");
+      if (change === "credential") {
+        entry.credentials().addressV2().address(
+          Address.fromString(OTHER_WALLET).toScAddress()
+        );
+      } else if (change === "root") {
+        entry.rootInvocation().function().contractFn().functionName("approve");
+      } else {
+        entry.rootInvocation().subInvocations([
+          xdr.SorobanAuthorizationEntry.fromXDR(
+            body.auth[0],
+            "base64"
+          ).rootInvocation(),
+        ]);
+      }
+      body.auth = [entry.toXDR("base64")];
+      await expectRejected(
+        body,
+        "Transfer auth does not exactly match func and wallet"
+      );
+    }
+  );
 
   it("applies the simulated fee ceiling to wallet invocations", async () => {
     vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({

@@ -29,6 +29,7 @@ import {
   submissionFailure,
 } from "../contract-errors.js";
 import { isDefaultDeployer } from "../utils.js";
+import { getAddressCredentials } from "./auth-payload.js";
 import { ValidationError } from "../errors.js";
 
 /**
@@ -640,7 +641,12 @@ export async function sign(
     authorizeEntry: async (entry: xdr.SorobanAuthorizationEntry) => {
       const clone = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
       const authEntries = transaction.simulationData?.result?.auth || [];
-      const entryIndex = authEntries.findIndex((authEntry) => authEntry.toXDR("base64") === entry.toXDR("base64"));
+      const entryKey = authorizationKey(entry);
+      const entryIndex = authEntries.findIndex(
+        (authEntry) =>
+          authEntry.credentials().switch().name !== "sorobanCredentialsSourceAccount" &&
+          authorizationKey(authEntry) === entryKey
+      );
       return deps.signAuthEntry(clone, {
         credentialId,
         expiration,
@@ -653,6 +659,20 @@ export async function sign(
   });
 
   return transaction;
+}
+
+/**
+ * Identify an auth entry by what its signature cannot change: the address,
+ * the nonce, and the root invocation. A signed entry still matches its
+ * simulation entry, but an entry with a changed invocation does not.
+ */
+function authorizationKey(entry: xdr.SorobanAuthorizationEntry): string {
+  const credentials = getAddressCredentials(entry.credentials());
+  return [
+    credentials.address().toXDR("base64"),
+    credentials.nonce().toString(),
+    entry.rootInvocation().toXDR("base64"),
+  ].join(":");
 }
 
 export async function signAndSubmit(

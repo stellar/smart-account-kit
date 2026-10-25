@@ -37,6 +37,13 @@ Body: { "xdr": "base64-signed-transaction-envelope" }
 ```
 `func` submissions may contain an allowlisted wallet invocation with address-bound V2 credentials or an allowlisted direct token transfer. They may also contain one `createContractV2` function with one matching V1 deploy authorization entry. A deployment must contain one External WebAuthn signer and a credential-derived salt.
 
+Direct token transfers require exactly one address-bound V2 authorization entry from an allowlisted wallet.
+The wallet must match the transfer's `from` address.
+The authorization root must match the complete transfer call and contain no sub-invocations.
+The target must be a Stellar Asset Contract or a custom token in `ALLOWED_TOKEN_CONTRACT_IDS`.
+The proxy checks the contract instance through RPC to confirm the Stellar Asset Contract executable.
+It rejects the transfer if this check fails or RPC returns an error.
+
 Signed `xdr` accepts one source-signed dedicated-deployer `createContractV2` operation. Its source must equal its preimage deployer. The shared deterministic deployer cannot be an XDR source.
 
 These checks constrain relayer spending. They do not prove wallet ownership. The SDK performs wallet-birth, code, signer, and passkey verification before connection.
@@ -63,7 +70,12 @@ wrangler deploy
 ```
 
 The proxy keeps its non-secret runtime config in `wrangler.toml`. This config includes both resource-fee and total-fee ceilings.
-It also includes exact origins, allowlists, the RPC URL, and rate limits. Empty allowlists reject requests.
+It also includes exact origins, allowlists, the RPC URL, and rate limits.
+Empty wallet and deployer allowlists reject requests.
+`ALLOWED_TOKEN_CONTRACT_IDS` optionally lists approved custom token contract IDs, separated by commas.
+An empty or omitted value permits only Stellar Asset Contracts for direct transfers.
+Listed custom tokens do not require the Stellar Asset Contract executable check.
+Operators must review these custom tokens before adding their IDs.
 
 ## Tests
 

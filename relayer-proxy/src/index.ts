@@ -459,6 +459,28 @@ async function walletContractIsAllowed(
   }
 }
 
+async function tokenContractIsAllowed(
+  env: Env,
+  contractId: string
+): Promise<boolean> {
+  if (csvSet(env.ALLOWED_TOKEN_CONTRACT_IDS).has(contractId)) return true;
+  if (!env.STELLAR_RPC_URL) {
+    throw new RequestError("STELLAR_RPC_URL is required for token verification", 500);
+  }
+  try {
+    const response = await new RpcServer(env.STELLAR_RPC_URL).getLedgerEntries(
+      new Contract(contractId).getFootprint()
+    );
+    const entry = response.entries[0];
+    if (!entry) return false;
+    const executable = entry.val.contractData().val().instance().executable();
+    return executable.switch().name === "contractExecutableStellarAsset";
+  } catch (error) {
+    console.error("Token allowlist RPC verification failed:", error);
+    throw new RequestError("Could not verify token contract", 503);
+  }
+}
+
 function validateAuthorizedInvocation(
   invocation: xdr.SorobanAuthorizedInvocation,
   contractId: string
@@ -598,9 +620,11 @@ async function validateDirectTokenTransfer(
   invoke: xdr.InvokeContractArgs,
   auth: xdr.SorobanAuthorizationEntry[]
 ): Promise<void> {
-  // Token allowlists do not improve the fee-abuse controls. Authorization,
-  // on-chain code checks, fee caps, and rate limits provide those controls.
-  // Keep token selection open so wallets can transfer supported assets.
+  // A transfer function name and wallet authorization do not prove a token target.
+  // Sponsor only Stellar Asset Contracts or explicitly approved custom tokens.
+  if (auth.length !== 1) {
+    throw new RequestError("Transfer must contain exactly one auth entry", 403);
+  }
   const args = invoke.args();
   if (args.length !== 3 || args[0].switch().name !== "scvAddress") {
     throw new RequestError("Token transfer has an invalid argument shape", 403);
@@ -631,6 +655,13 @@ async function validateDirectTokenTransfer(
         403
       );
     }
+  }
+  if (invoke.contractAddress().switch().name !== "scAddressTypeContract") {
+    throw new RequestError("Token transfer target must be a contract", 403);
+  }
+  const token = Address.fromScAddress(invoke.contractAddress()).toString();
+  if (!(await tokenContractIsAllowed(env, token))) {
+    throw new RequestError("Token contract is not allowed", 403);
   }
 }
 
