@@ -7,9 +7,12 @@ RELAYER_BASE_URL="https://channels.openzeppelin.com/testnet"
 STELLAR_RPC_URL="https://soroban-testnet.stellar.org"
 ALLOWED_ORIGINS="http://localhost:5173"
 ALLOWED_DEPLOYER_ADDRESSES="GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N"
-# stellar-accounts v0.8.0, v0.7.3, and stellar-contracts@1e513890 account builds.
-# The same list gates wallet calls and sponsored deployments.
+# Account builds a sponsored wallet call may run: stellar-accounts v0.8.0, v0.7.3,
+# and stellar-contracts@1e513890.
 ALLOWED_ACCOUNT_WASM_HASHES="c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1,203e2970d9fed24fb5fca2e0aeebb3c1e4648b76dd6601567178e6474c9fec6f,1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a"
+# Account builds a sponsored deployment may install. Empty falls back to
+# ALLOWED_ACCOUNT_WASM_HASHES.
+ALLOWED_DEPLOY_WASM_HASHES="c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1"
 ALLOWED_WALLET_CONTRACT_IDS=""
 # Optional CSV of approved custom token contract IDs. Empty permits only Stellar Asset Contracts.
 ALLOWED_TOKEN_CONTRACT_IDS=""

@@ -72,6 +72,11 @@ wrangler deploy
 The proxy keeps its non-secret runtime config in `wrangler.toml`. This config includes both resource-fee and total-fee ceilings.
 It also includes exact origins, allowlists, the RPC URL, and rate limits.
 Empty wallet and deployer allowlists reject requests.
+`ALLOWED_ACCOUNT_WASM_HASHES` lists the account builds that a sponsored wallet call may run.
+`ALLOWED_DEPLOY_WASM_HASHES` lists the account builds that a sponsored deployment may install.
+An empty or omitted deploy list uses `ALLOWED_ACCOUNT_WASM_HASHES`.
+Keep older builds in the wallet list so that their wallets keep fee sponsorship.
+Remove them from the deploy list so that the proxy stops sponsoring new wallets on them.
 `ALLOWED_TOKEN_CONTRACT_IDS` optionally lists approved custom token contract IDs, separated by commas.
 An empty or omitted value permits only Stellar Asset Contracts for direct transfers.
 Listed custom tokens do not require the Stellar Asset Contract executable check.

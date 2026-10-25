@@ -117,6 +117,7 @@ function makeEnv(
     origins?: string;
     allowedDeployers?: string;
     allowedHashes?: string;
+    allowedDeployHashes?: string;
     allowedWallets?: string;
     allowedTokens?: string;
     allowedWalletFunctions?: string;
@@ -138,6 +139,7 @@ function makeEnv(
     ALLOWED_ORIGINS: opts.origins ?? "https://demo.example",
     ALLOWED_DEPLOYER_ADDRESSES: opts.allowedDeployers ?? DEPLOYER,
     ALLOWED_ACCOUNT_WASM_HASHES: opts.allowedHashes ?? WASM_HASH,
+    ALLOWED_DEPLOY_WASM_HASHES: opts.allowedDeployHashes,
     ALLOWED_WALLET_CONTRACT_IDS: opts.allowedWallets ?? WALLET,
     ALLOWED_TOKEN_CONTRACT_IDS: opts.allowedTokens,
     ALLOWED_WALLET_FUNCTIONS:
@@ -619,6 +621,40 @@ describe("sign-only deployment validation", () => {
     await expectRejected(
       deploySubmission({ wasmHash: "99".repeat(32) }),
       "Deploy WASM hash is not allowlisted"
+    );
+  });
+
+  it("uses ALLOWED_DEPLOY_WASM_HASHES for deployments when it is set", async () => {
+    const otherHash = "aa".repeat(32);
+    await expectRejected(
+      deploySubmission(),
+      "Deploy WASM hash is not allowlisted",
+      403,
+      { allowedHashes: `${WASM_HASH},${otherHash}`, allowedDeployHashes: otherHash }
+    );
+
+    const body = deploySubmission();
+    const res = await post(
+      body,
+      makeEnv({ allowedHashes: otherHash, allowedDeployHashes: ` ${WASM_HASH.toUpperCase()} ` })
+    );
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("falls back to ALLOWED_ACCOUNT_WASM_HASHES when the deploy list is empty", async () => {
+    const body = deploySubmission();
+    const res = await post(body, makeEnv({ allowedDeployHashes: " " }));
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("rejects an invalid ALLOWED_DEPLOY_WASM_HASHES entry", async () => {
+    await expectRejected(
+      deploySubmission(),
+      "ALLOWED_DEPLOY_WASM_HASHES contains an invalid hash",
+      500,
+      { allowedDeployHashes: "not-a-hash" }
     );
   });
 

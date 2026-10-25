@@ -174,17 +174,29 @@ function networkPassphrase(env: Env): string {
   throw new RequestError("NETWORK must be testnet or mainnet", 500);
 }
 
-function allowedWasmHashes(env: Env): Set<string> {
-  const hashes = csvSet(env.ALLOWED_ACCOUNT_WASM_HASHES, true);
-  for (const value of hashes) {
-    if (!/^[0-9a-f]{64}$/.test(value)) {
-      throw new RequestError(
-        "ALLOWED_ACCOUNT_WASM_HASHES contains an invalid hash",
-        500
-      );
+function wasmHashSet(value: string | undefined, name: string): Set<string> {
+  const hashes = csvSet(value, true);
+  for (const hash of hashes) {
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new RequestError(`${name} contains an invalid hash`, 500);
     }
   }
   return hashes;
+}
+
+/** Account code a sponsored wallet call may run. */
+function allowedWasmHashes(env: Env): Set<string> {
+  return wasmHashSet(env.ALLOWED_ACCOUNT_WASM_HASHES, "ALLOWED_ACCOUNT_WASM_HASHES");
+}
+
+/**
+ * Account code a sponsored deployment may install. Unset or empty falls back to
+ * ALLOWED_ACCOUNT_WASM_HASHES, so wallets can keep running older builds that
+ * the proxy no longer deploys.
+ */
+function allowedDeployWasmHashes(env: Env): Set<string> {
+  if (!env.ALLOWED_DEPLOY_WASM_HASHES?.trim()) return allowedWasmHashes(env);
+  return wasmHashSet(env.ALLOWED_DEPLOY_WASM_HASHES, "ALLOWED_DEPLOY_WASM_HASHES");
 }
 
 function toHex(bytes: Uint8Array): string {
@@ -516,7 +528,7 @@ function validateDeployFunction(
   if (executable.switch().name !== "contractExecutableWasm") {
     throw new RequestError("Deploy executable must be approved WASM", 403);
   }
-  if (!allowedWasmHashes(env).has(toHex(executable.wasmHash()))) {
+  if (!allowedDeployWasmHashes(env).has(toHex(executable.wasmHash()))) {
     throw new RequestError("Deploy WASM hash is not allowlisted", 403);
   }
   const preimage = deploy.contractIdPreimage();
