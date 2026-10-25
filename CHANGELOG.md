@@ -10,6 +10,8 @@ All reviews in this changelog are internal engineering reviews unless a linked r
   sponsored deployment may install. An empty or omitted value uses `ALLOWED_ACCOUNT_WASM_HASHES`.
   The default allows only the stellar-accounts v0.8.0 build (`c514d35e…`), so the proxy no longer
   sponsors new `1b5f4534…` wallets. Wallets on `1b5f4534…` and `203e2970…` keep fee sponsorship.
+- Fix the relayer proxy `ALLOWED_ORIGINS` default. The hosted demo runs at
+  `https://smart-account-kit.pages.dev`, not `https://smart-account-kit-demo.pages.dev`.
 
 ## 0.9.0 — 2026-10-25
 

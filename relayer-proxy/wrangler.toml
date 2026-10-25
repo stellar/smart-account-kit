@@ -33,7 +33,7 @@ cpu_ms = 300_000
 NETWORK = "testnet"
 RELAYER_BASE_URL = "https://channels.openzeppelin.com/testnet"
 STELLAR_RPC_URL = "https://soroban-testnet.stellar.org"
-ALLOWED_ORIGINS = "https://smart-account-kit-demo.pages.dev"
+ALLOWED_ORIGINS = "https://smart-account-kit.pages.dev"
 ALLOWED_DEPLOYER_ADDRESSES = "GAAH4OT36RRCCAGKARGPN2HLHT2NOBVFHO4GUHA6CF7UKQ4MMV24WQ4N"
 # Account builds a sponsored wallet call may run: stellar-accounts v0.8.0
 # (c514d35e…), v0.7.3 (203e2970…), and stellar-contracts@1e513890 (1b5f4534…).
