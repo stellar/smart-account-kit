@@ -586,6 +586,23 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   }
 }
 
+/**
+ * The wallet address of a wallet auth entry. RPC simulation returns V1 address
+ * credentials for smart accounts, and a caller may send V2. Both name the
+ * wallet, and the wallet's `__check_auth` verifies the signature on chain.
+ * Source-account and delegated credentials stay refused.
+ */
+function walletAuthAddress(entry: xdr.SorobanAuthorizationEntry): string {
+  const credentials = entry.credentials();
+  switch (credentials.switch().name) {
+    case "sorobanCredentialsAddress":
+      return Address.fromScAddress(credentials.address().address()).toString();
+    case "sorobanCredentialsAddressV2":
+      return Address.fromScAddress(credentials.addressV2().address()).toString();
+  }
+  throw new RequestError("Only address credentials are allowed for wallet auth", 403);
+}
+
 async function validateWalletInvocation(
   env: Env,
   invoke: xdr.InvokeContractArgs,
@@ -602,16 +619,7 @@ async function validateWalletInvocation(
     throw new RequestError("Wallet function is not allowlisted", 403);
   }
   for (const entry of auth) {
-    const credentials = entry.credentials();
-    if (credentials.switch().name !== "sorobanCredentialsAddressV2") {
-      throw new RequestError(
-        "Only address-bound V2 wallet credentials are allowed",
-        403
-      );
-    }
-    const signer = Address.fromScAddress(
-      credentials.addressV2().address()
-    ).toString();
+    const signer = walletAuthAddress(entry);
     if (signer !== contractId) {
       throw new RequestError("Auth credential is not for the invoked wallet", 403);
     }
@@ -643,16 +651,7 @@ async function validateDirectTokenTransfer(
   }
   const from = Address.fromScAddress(args[0].address()).toString();
   for (const entry of auth) {
-    const credentials = entry.credentials();
-    if (credentials.switch().name !== "sorobanCredentialsAddressV2") {
-      throw new RequestError(
-        "Only address-bound V2 wallet credentials are allowed",
-        403
-      );
-    }
-    const wallet = Address.fromScAddress(
-      credentials.addressV2().address()
-    ).toString();
+    const wallet = walletAuthAddress(entry);
     const root = entry.rootInvocation();
     const rootFn = root.function();
     if (

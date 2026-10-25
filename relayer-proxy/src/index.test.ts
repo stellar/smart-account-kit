@@ -791,10 +791,23 @@ describe("wallet invocation validation", () => {
     );
   });
 
-  it("rejects V1 credentials for wallet invocations", async () => {
+  it("accepts V1 credentials for wallet invocations, as RPC simulation returns them", async () => {
+    const body = walletSubmission({ v1Credentials: true });
+    const res = await post(body);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
+  });
+
+  it("rejects source-account credentials for wallet invocations", async () => {
+    const body = walletSubmission();
+    const entry = xdr.SorobanAuthorizationEntry.fromXDR(body.auth[0], "base64");
+    const sourceEntry = new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+      rootInvocation: entry.rootInvocation(),
+    });
     await expectRejected(
-      walletSubmission({ v1Credentials: true }),
-      "Only address-bound V2 wallet credentials are allowed"
+      { ...body, auth: [sourceEntry.toXDR("base64")] },
+      "Only address credentials are allowed for wallet auth"
     );
   });
 
@@ -893,11 +906,11 @@ describe("wallet invocation validation", () => {
     await expectRejected(transferSubmission(), "Token contract is not allowed");
   });
 
-  it("rejects V1 credentials for direct token transfers", async () => {
-    await expectRejected(
-      transferSubmission({ v1Credentials: true }),
-      "Only address-bound V2 wallet credentials are allowed"
-    );
+  it("accepts V1 credentials for direct token transfers", async () => {
+    const body = transferSubmission({ v1Credentials: true });
+    const res = await post(body);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(body);
   });
 
   it("requires an allowlisted wallet for a direct token transfer", async () => {

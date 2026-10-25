@@ -20,8 +20,12 @@ All reviews in this changelog are internal engineering reviews unless a linked r
   the Channels client cache mode to `no-store`.
 - `fundWallet()` now submits through RPC by default, also when a relayer is configured. The
   temporary Friendbot account pays its own fee. The relayer proxy sponsors only calls from
-  allowlisted wallets, so it refused this transfer with
-  `Only address-bound V2 wallet credentials are allowed`. Pass `forceMethod` to override.
+  allowlisted wallets, so it refused this transfer. Pass `forceMethod` to override.
+- The relayer proxy refused every wallet call and direct token transfer with
+  `Only address-bound V2 wallet credentials are allowed`. RPC simulation returns V1 address
+  credentials for smart accounts, and the SDK signs them as returned. The proxy now accepts V1
+  and V2 address credentials for wallet auth. It still refuses source-account and delegated
+  credentials. The wallet's `__check_auth` verifies the signature on chain in both cases.
 
 ## 0.9.0 — 2026-10-25
 
