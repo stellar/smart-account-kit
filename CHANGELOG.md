@@ -6,6 +6,11 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 
 ### Breaking security changes
 
+- `signAuthEntry` and `signAuthEntryWithSigners` require caller-selected `contextRuleIds`, also for
+  partially signed entries. They no longer read the rule IDs from a supplied AuthPayload. A dApp
+  could pre-fill those IDs to select an uncapped rule and bypass a spending-limit policy.
+- Every signing path refuses an entry whose existing AuthPayload rule IDs differ from the selected
+  rules, before it signs.
 - `signers.addDelegated` accepts only G-addresses, matching `createDelegatedSigner`.
 - Reject a Delegated signer that is the wallet itself in `rules.add`, `signers.addDelegated`, and
   `signers.addBatch`, and refuse to sign an admin transaction that adds one, mirroring

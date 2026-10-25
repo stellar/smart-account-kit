@@ -360,6 +360,16 @@ export class MultiSignerManager {
             }
           );
 
+        const existingPayload = readAuthPayload(
+          getAddressCredentials(signedEntry.credentials()).signature()
+        );
+        if (
+          existingPayload.context_rule_ids.length > 0 &&
+          existingPayload.context_rule_ids.join(",") !== resolvedContextRuleIds.join(",")
+        ) {
+          throw new ValidationError("Existing auth payload uses different context rule IDs");
+        }
+
         for (const [index, passkeySigner] of passkeySigners.entries()) {
           onLog(`Signing with passkey ${index + 1}/${passkeySigners.length}...`);
           signedEntry = await this.deps.signAuthEntry(signedEntry, {

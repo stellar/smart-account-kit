@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import base64url from "base64url";
-import { StrKey, hash } from "@stellar/stellar-sdk";
+import { StrKey, hash, xdr } from "@stellar/stellar-sdk";
 import type { Signer as ContractSigner } from "smart-account-kit-bindings";
 import {
   authenticatePasskey,
   createPasskey,
   signAuthEntry,
 } from "./webauthn-ops";
-import { readAuthPayload, getAddressCredentials } from "./auth-payload";
+import { readAuthPayload, writeAuthPayload, getAddressCredentials } from "./auth-payload";
 import { AUTH_DIGEST_SCHEMES } from "./auth-digest-scheme";
 import { makeAddressAuthEntry } from "../managers/test-utils";
+import { buildTokenTransferHostFunction } from "./tx-ops";
 import { computeEntryAuthDigest } from "../signers";
 import {
   AuthDigestSchemeError,
@@ -211,6 +212,27 @@ describe("signAuthEntry", () => {
         signer,
       })
     ).rejects.toBeInstanceOf(AuthDigestSchemeError);
+    expect(startAuthentication).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, [2]])("rejects supplied Default rule IDs before the passkey prompt (pin: %j)", async (contextRuleIds) => {
+    const { deps, startAuthentication } = makeSigningDeps();
+    const entry = makeAddressAuthEntry(CONTRACT);
+    entry.rootInvocation().function(
+      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+        buildTokenTransferHostFunction(OTHER_CONTRACT, CONTRACT, VERIFIER, 100_000_000n).invokeContract()
+      )
+    );
+    getAddressCredentials(entry.credentials()).signature(writeAuthPayload({
+      context_rule_ids: [0],
+      signers: new Map(),
+    }));
+
+    await expect(signAuthEntry(deps, entry, {
+      credentialId,
+      signer,
+      contextRuleIds,
+    })).rejects.toThrow(contextRuleIds ? /different context rule IDs/ : /contextRuleIds are required/);
     expect(startAuthentication).not.toHaveBeenCalled();
   });
 

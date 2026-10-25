@@ -812,6 +812,32 @@ describe("MultiSignerManager authorization digest schemes", () => {
     });
   }
 
+  it.each(["automatic", "explicit"])("rejects supplied rule IDs that differ from the %s selection", async (selection) => {
+    const deps = makeDeps();
+    prepareSubmission(deps, "preimage-v1");
+    const ed25519Key = Buffer.alloc(32, 0x42);
+    const signer: ContractSigner = { tag: "External", values: [makeContract(70), ed25519Key] };
+    deps.externalSigners.canSignEd25519.mockReturnValue(true);
+    deps.externalSigners.signEd25519Digest.mockReturnValue(Buffer.alloc(64, 1));
+    const entry = makeAddressAuthEntry(deps.getContractId());
+    getAddressCredentials(entry.credentials()).signature(writeAuthPayload({
+      context_rule_ids: [0],
+      signers: new Map(),
+    }));
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.operation(
+      pingOperation([entry]),
+      [{ signer, type: "ed25519", ed25519PublicKey: ed25519Key.toString("hex") }],
+      selection === "explicit" ? { resolveContextRuleIds: () => [12] } : {}
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(/different context rule IDs/);
+    expect(deps.externalSigners.signEd25519Digest).not.toHaveBeenCalled();
+    expect(deps.sendAndPoll).not.toHaveBeenCalled();
+  });
+
   it("resolves the scheme once per transaction and hands it to passkey signing", async () => {
     const deps = makeDeps();
     const contractId = deps.getContractId();

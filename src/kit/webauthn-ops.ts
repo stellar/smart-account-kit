@@ -124,6 +124,7 @@ export async function authenticatePasskey(
 export interface SignAuthEntryOptions {
   credentialId?: string;
   expiration?: number;
+  /** Caller-approved rule IDs; never inferred from the supplied payload. */
   contextRuleIds?: number[];
   signer?: ContractSigner;
   /** Internal declaration from a dedicated admin transaction path. */
@@ -175,11 +176,18 @@ export async function signAuthEntry(
     throw new Error("A credential ID is required to sign smart account auth entries");
   }
 
-  const contextRuleIds = options?.contextRuleIds ?? authPayload.context_rule_ids;
-  if (contextRuleIds.length === 0) {
+  const contextRuleIds = options?.contextRuleIds;
+  if (!contextRuleIds?.length) {
     throw new Error(
-      "contextRuleIds are required to sign smart account auth entries when the payload does not already include them"
+      "contextRuleIds are required from the caller to sign smart account auth entries"
     );
+  }
+
+  if (
+    authPayload.context_rule_ids.length > 0 &&
+    authPayload.context_rule_ids.join(",") !== contextRuleIds.join(",")
+  ) {
+    throw new Error("Existing auth payload uses different context rule IDs");
   }
 
   const credentialIdBuffer = base64url.toBuffer(credentialId);
@@ -223,13 +231,6 @@ export async function signAuthEntry(
     client_data: base64url.toBuffer(authResponse.response.clientDataJSON),
     signature: Buffer.from(compactedSignature),
   };
-
-  if (
-    authPayload.context_rule_ids.length > 0 &&
-    authPayload.context_rule_ids.join(",") !== contextRuleIds.join(",")
-  ) {
-    throw new Error("Existing auth payload uses different context rule IDs");
-  }
 
   authPayload.context_rule_ids = contextRuleIds;
   upsertAuthPayloadSigner(authPayload, signer, buildWebAuthnSignatureBytes(webAuthnSigData));

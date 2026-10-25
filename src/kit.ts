@@ -1321,7 +1321,7 @@ export class SmartAccountKit {
    * - `multiSigners.operation()` or `multiSigners.adminOperation()` for multiple signers
    *
    * @param entry - The authorization entry to sign
-   * @param options - Signing options (credentialId, expiration)
+   * @param options - Signing options (credentialId, expiration, required contextRuleIds)
    * @returns The signed authorization entry
    */
   async signAuthEntry(

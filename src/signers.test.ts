@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Keypair, hash, xdr } from "@stellar/stellar-sdk";
 import { Address, xdr as stellarXdr } from "@stellar/stellar-sdk";
 import {
@@ -7,6 +7,7 @@ import {
   buildPreimageAuthDigest,
   getAddressCredentials,
   readAuthPayload,
+  writeAuthPayload,
 } from "./kit/auth-payload";
 import { AUTH_DIGEST_SCHEMES, type AuthDigestScheme } from "./kit/auth-digest-scheme";
 import {
@@ -326,10 +327,11 @@ describe("signAuthEntryWithSigners", () => {
       contextRuleIds: [3],
       expiration: 500,
     });
-    // Second signer reads ids and expiration from the payload; no options needed.
+    // The second signer confirms the rule IDs and retains the existing expiration.
     const second = await signAuthEntryWithSigners(first, [signerB], {
       networkPassphrase: TESTNET,
       authDigestScheme: "legacy-concat",
+      contextRuleIds: [3],
     });
 
     const payload = readAuthPayload(getAddressCredentials(second.credentials()).signature());
@@ -376,6 +378,21 @@ describe("signAuthEntryWithSigners", () => {
         contextRuleIds: [4],
       })
     ).rejects.toThrow(/different context rule IDs/);
+  });
+
+  it("rejects supplied rule IDs without an explicit caller choice", async () => {
+    const entry = makeAddressAuthEntry(contractId);
+    getAddressCredentials(entry.credentials()).signature(writeAuthPayload({
+      context_rule_ids: [0],
+      signers: new Map(),
+    }));
+    const signAuthDigest = vi.fn(async () => Buffer.alloc(64));
+
+    await expect(signAuthEntryWithSigners(entry, [{ signer: signerA.signer, signAuthDigest }], {
+      networkPassphrase: TESTNET,
+      authDigestScheme: "preimage-v1",
+    })).rejects.toThrow(/contextRuleIds are required/);
+    expect(signAuthDigest).not.toHaveBeenCalled();
   });
 
   it("requires rule ids, an expiration, and at least one signer", async () => {
@@ -480,6 +497,7 @@ describe("signAuthEntryWithSigners", () => {
       signAuthEntryWithSigners(first, [signerB], {
         networkPassphrase: TESTNET,
         authDigestScheme: "legacy-concat",
+        contextRuleIds: [3],
         expiration: 600,
       })
     ).rejects.toThrow(/different expiration ledger/);
@@ -487,6 +505,7 @@ describe("signAuthEntryWithSigners", () => {
       signAuthEntryWithSigners(first, [signerB], {
         networkPassphrase: TESTNET,
         authDigestScheme: "legacy-concat",
+        contextRuleIds: [3],
         expiration: 500,
       })
     ).resolves.toBeDefined();
