@@ -656,6 +656,9 @@ async function validateDirectTokenTransfer(
       );
     }
   }
+  if (invoke.contractAddress().switch().name !== "scAddressTypeContract") {
+    throw new RequestError("Token transfer target must be a contract", 403);
+  }
   const token = Address.fromScAddress(invoke.contractAddress()).toString();
   if (!(await tokenContractIsAllowed(env, token))) {
     throw new RequestError("Token contract is not allowed", 403);

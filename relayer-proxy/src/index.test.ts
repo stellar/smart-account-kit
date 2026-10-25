@@ -830,6 +830,14 @@ describe("wallet invocation validation", () => {
     expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
   });
 
+  it("rejects a transfer whose target is an account, not a contract", async () => {
+    await expectRejected(
+      transferSubmission({ token: DEPLOYER }),
+      "Token transfer target must be a contract"
+    );
+    expect(RpcServer.prototype.getLedgerEntries).not.toHaveBeenCalled();
+  });
+
   it("rejects a transfer when the token instance is missing", async () => {
     vi.mocked(RpcServer.prototype.getLedgerEntries).mockResolvedValueOnce({
       latestLedger: 100,

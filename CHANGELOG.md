@@ -9,6 +9,8 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 - Restrict direct relayer transfers to Stellar Asset Contracts or custom tokens in `ALLOWED_TOKEN_CONTRACT_IDS`.
   Require exactly one matching authorization entry from an allowlisted wallet.
   Reject transfers when RPC cannot verify the token contract.
+  Operators that sponsor custom SEP-41 token transfers must list those tokens in
+  `ALLOWED_TOKEN_CONTRACT_IDS`.
 
 ### Breaking security changes
 
