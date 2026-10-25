@@ -28,6 +28,7 @@ import {
   DEFAULT_SPENDING_LIMIT_POLICY_ADDRESS,
   DEFAULT_WEIGHTED_THRESHOLD_POLICY_ADDRESS,
   LEDGERS_PER_DAY,
+  OTHER_POLICY_ADDRESSES,
   STROOPS_PER_XLM,
   truncateAddress,
 } from "./constants";
@@ -172,6 +173,10 @@ registerPolicyType(
   import.meta.env.VITE_WEIGHTED_THRESHOLD_POLICY_ADDRESS || DEFAULT_WEIGHTED_THRESHOLD_POLICY_ADDRESS,
   "weighted_threshold"
 );
+// The v0.8.0 mainnet policies, and the 1e513890 policies that earlier rules use.
+for (const [type, addresses] of Object.entries(OTHER_POLICY_ADDRESSES)) {
+  for (const address of addresses) registerPolicyType(address, type as KnownPolicyType);
+}
 
 /**
  * Build policy-client deps for read-only getters. Getters only need

@@ -9,7 +9,7 @@ TypeScript SDK for deploying and managing OpenZeppelin smart account contracts o
 > This SDK, demo, relayer proxy, and indexer integration have not received an independent third-party security audit.
 > Defects can cause unauthorized transactions, loss of access, or permanent asset loss.
 > The underlying OpenZeppelin Stellar contracts have a [separate audit](https://www.openzeppelin.com/news/stellar-contracts-rc-v0.7.0-audit) with a different scope.
-> The [deployed artifacts](docs/deployments-protocol-27-2026-07-09.md) use a later source revision than that audit scope.
+> The deployed artifacts ([v0.8.0 set](docs/deployments-stellar-accounts-0.8-2026-10-25.md), [Protocol 27 set](docs/deployments-protocol-27-2026-07-09.md)) use later source revisions than that audit scope.
 > Do not store or control assets you cannot afford to lose.
 > Limit balances, signer permissions, policy allowances, and relayer permissions.
 > Monitor wallets and maintain recovery and authorized upgrade paths.
@@ -103,7 +103,25 @@ if (result.success) {
 }
 ```
 
-The current Protocol 27 testnet/mainnet deployed contract IDs and WASM hashes are recorded in [`docs/deployments-protocol-27-2026-07-09.md`](docs/deployments-protocol-27-2026-07-09.md); ready-to-use testnet defaults live in `demo/.env.example`.
+New wallets should use the stellar-accounts v0.8.0 account build `c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1` and the v0.8.0 policies. Keep the existing verifiers. The testnet and mainnet IDs are in [`docs/deployments-stellar-accounts-0.8-2026-10-25.md`](docs/deployments-stellar-accounts-0.8-2026-10-25.md). The verifier IDs and the earlier set are in [`docs/deployments-protocol-27-2026-07-09.md`](docs/deployments-protocol-27-2026-07-09.md). Ready-to-use testnet defaults live in `demo/.env.example`.
+
+If your app already has wallets on `1b5f4534…`, keep that hash in `acceptedWasmHashes` and `acceptedBirthWasmHashes` when you change `accountWasmHash`. Both lists default to `[accountWasmHash]`, so otherwise those wallets stop connecting. Add `203e2970…` and `c514d35e…` to `acceptedWasmHashes` for wallets that upgrade.
+
+```typescript
+const kit = new SmartAccountKit({
+  // ...
+  accountWasmHash: 'c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1',
+  acceptedWasmHashes: [
+    'c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1', // stellar-accounts v0.8.0
+    '203e2970d9fed24fb5fca2e0aeebb3c1e4648b76dd6601567178e6474c9fec6f', // stellar-accounts v0.7.3
+    '1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a', // stellar-contracts@1e513890
+  ],
+  acceptedBirthWasmHashes: [
+    'c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1',
+    '1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a',
+  ],
+});
+```
 
 ## Configuration
 
@@ -1127,7 +1145,7 @@ pnpm build:all
 
 `pnpm build:all` builds the checked-in bindings and SDK; it does not regenerate bindings. Run `pnpm build:bindings` explicitly when the smart-account contract interface changes. That command resolves the binding source from explicit env/args first (`ACCOUNT_WASM=/path/to/optimized-contract.wasm` for a local artifact), falling back to `demo/.env.example`, and prints the source and hash it binds against.
 
-The optimized Protocol 27 testnet/mainnet artifact hashes, deployed contract IDs, and transaction provenance are recorded in [`docs/deployments-protocol-27-2026-07-09.md`](docs/deployments-protocol-27-2026-07-09.md).
+The optimized artifact hashes, deployed contract IDs, and transaction provenance are recorded in [`docs/deployments-stellar-accounts-0.8-2026-10-25.md`](docs/deployments-stellar-accounts-0.8-2026-10-25.md) (account and policies) and [`docs/deployments-protocol-27-2026-07-09.md`](docs/deployments-protocol-27-2026-07-09.md) (verifiers and the earlier set).
 
 Key variables in `demo/.env`:
 
@@ -1180,7 +1198,8 @@ Publish `smart-account-kit-bindings` first only when its generated code changed.
 - [v0.7.0 migration guide](docs/migration-v0.7.0.md) — verified wallet connection and storage changes
 - [Deterministic deployer security model](docs/security-deterministic-deployer.md) — connection and deployer controls
 - [Indexer response contract](indexer/README.md) — required discovery and provenance schema
-- [Protocol 27 deployments](docs/deployments-protocol-27-2026-07-09.md) — testnet/mainnet contract IDs and WASM hashes
+- [stellar-accounts v0.8.0 deployments](docs/deployments-stellar-accounts-0.8-2026-10-25.md) — current account build and policies, testnet/mainnet
+- [Protocol 27 deployments](docs/deployments-protocol-27-2026-07-09.md) — verifiers and the earlier account and policy set
 - [Releasing](docs/releasing.md) — npm publish flow
 
 ## Related

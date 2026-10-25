@@ -64,6 +64,24 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 ### Maintenance
 
 - Regenerate the bindings from the stellar-accounts v0.8.0 account build (`c514d35e…`).
+- Add the stellar-accounts v0.7.3 and v0.8.0 deployment manifest
+  ([`docs/deployments-stellar-accounts-0.8-2026-10-25.md`](docs/deployments-stellar-accounts-0.8-2026-10-25.md)).
+  It records the build hashes, the testnet and mainnet deployments, and the testnet rehearsal.
+- Deploy the v0.8.0 threshold, weighted-threshold, and spending-limit policies to testnet and
+  mainnet. The 1e513890 policies cannot install on `CreateContractExternalRef` rules. The
+  verifiers do not change.
+- The demo and the indexer demo now default to the v0.8.0 account build (`c514d35e…`) and the
+  v0.8.0 testnet policies.
+- The demo accepts all three account builds as current wallet code. It accepts only wallets born
+  on `1b5f4534…` or `c514d35e…`. It keeps its IndexedDB store name, so saved credentials stay
+  visible.
+- The demo and the indexer demo read the 1e513890 policies that earlier rules use. The demo does
+  not offer them for new rules. The indexer demo also reads the v0.8.0 mainnet policies.
+- The relayer proxy `ALLOWED_ACCOUNT_WASM_HASHES` default lists `c514d35e…`, `203e2970…`, and
+  `1b5f4534…`. This one list controls wallet calls and sponsored deployments. Upgraded wallets
+  keep fee sponsorship.
+- The README recommends `c514d35e…` and the v0.8.0 policies for new wallets. It shows how to keep
+  `1b5f4534…` wallets in `acceptedWasmHashes` and `acceptedBirthWasmHashes`.
 
 ## 0.8.0 — 2026-09-08
 

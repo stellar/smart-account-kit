@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import type { Buffer } from "buffer";
 import type { ContextRule } from "smart-account-kit-bindings";
-import { CONFIG, KNOWN_POLICIES } from "./config";
+import { CONFIG, KNOWN_POLICIES, RECOGNIZED_POLICIES } from "./config";
 import { useLog } from "./hooks/useLog";
 import { useKit } from "./hooks/useKit";
 import { useExternalWallets } from "./hooks/useExternalWallets";
@@ -124,7 +124,7 @@ function App() {
           onLog={log}
           onAddRule={handleAddRule}
           onEditRule={handleEditRule}
-          knownPolicies={KNOWN_POLICIES}
+          knownPolicies={RECOGNIZED_POLICIES}
           activeCredentialId={session.credentialId}
           connectedWallets={wallets.connectedWallets}
           connectWallet={wallets.connectWallet}
@@ -153,6 +153,7 @@ function App() {
           onSuccess={handleRuleBuilderSuccess}
           editingRule={editingRule}
           availablePolicies={KNOWN_POLICIES}
+          recognizedPolicies={RECOGNIZED_POLICIES}
           webauthnVerifierAddress={webauthnVerifier}
           ed25519VerifierAddress={CONFIG.ed25519VerifierAddress}
           activeCredentialId={session.credentialId}

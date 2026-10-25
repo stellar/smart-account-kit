@@ -65,6 +65,8 @@ interface ContextRuleBuilderProps {
   editingRule?: ContextRule | null;
   /** Available policy contracts */
   availablePolicies: KnownPolicy[];
+  /** Policy contracts whose params can be read on an existing rule */
+  recognizedPolicies?: KnownPolicy[];
   /** WebAuthn verifier address for passkey signers */
   webauthnVerifierAddress: string;
   /** Ed25519 verifier address for ed25519 signers */
@@ -97,6 +99,7 @@ export function ContextRuleBuilder({
   onSuccess,
   editingRule,
   availablePolicies,
+  recognizedPolicies = [],
   webauthnVerifierAddress,
   ed25519VerifierAddress,
   activeCredentialId,
@@ -151,6 +154,18 @@ export function ContextRuleBuilder({
         (policy) => policy.type !== "weighted_threshold" || WEIGHTED_THRESHOLD_ENABLED
       ),
     [availablePolicies]
+  );
+
+  // Rules can reference policies that are no longer offered (for example the
+  // 1e513890 deployments). Read those too, so an edit keeps their live params.
+  const readablePolicies = useMemo(
+    () => [
+      ...visiblePolicies,
+      ...recognizedPolicies.filter(
+        (policy) => !visiblePolicies.some((visible) => visible.address === policy.address)
+      ),
+    ],
+    [visiblePolicies, recognizedPolicies]
   );
 
   const isEditing = !!editingRule;
@@ -231,7 +246,7 @@ export function ContextRuleBuilder({
       }
 
       // Load policies with their live on-chain params via the typed policy clients
-      void readRulePolicyParams(kit, editingRule, visiblePolicies)
+      void readRulePolicyParams(kit, editingRule, readablePolicies)
         .then(setSelectedPolicies)
         .catch((loadError) => {
           console.warn("Failed to load rule policies:", loadError);
@@ -253,7 +268,7 @@ export function ContextRuleBuilder({
     setSelectedPolicyToAdd("");
     setSelectedSignerId("");
     setEd25519Secret("");
-  }, [isOpen, editingRule, activeCredentialId, kit, visiblePolicies]);
+  }, [isOpen, editingRule, activeCredentialId, kit, readablePolicies]);
 
   // Candidate signers (on-chain + pending) for the "existing" add mode
   const existingSignerEntries: SignerEntryInfo[] = useMemo(() => {

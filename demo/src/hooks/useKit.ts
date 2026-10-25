@@ -5,7 +5,13 @@ import {
   StellarWalletsKitAdapter,
   type StoredCredential,
 } from "smart-account-kit";
-import { CONFIG, buildDemoStorageName } from "../config";
+import {
+  ACCEPTED_BIRTH_WASM_HASHES,
+  ACCEPTED_WASM_HASHES,
+  CONFIG,
+  buildDemoStorageName,
+  withAccountWasmHash,
+} from "../config";
 import type { LogFn } from "../types";
 
 /**
@@ -60,6 +66,13 @@ export function useKit(log: LogFn) {
           rpcUrl: CONFIG.rpcUrl,
           networkPassphrase: CONFIG.networkPassphrase,
           accountWasmHash,
+          // Keep wallets on earlier account builds connectable after the
+          // default moved to stellar-accounts v0.8.0.
+          acceptedWasmHashes: withAccountWasmHash(ACCEPTED_WASM_HASHES, accountWasmHash),
+          acceptedBirthWasmHashes: withAccountWasmHash(
+            ACCEPTED_BIRTH_WASM_HASHES,
+            accountWasmHash
+          ),
           webauthnVerifierAddress: webauthnVerifier,
           // Enables Ed25519 external signers (kit.externalSigners.addEd25519FromSecret)
           ed25519VerifierAddress: CONFIG.ed25519VerifierAddress,

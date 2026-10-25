@@ -59,7 +59,7 @@ Confirm the regenerated bindings match the canonical deployed WASM before commit
 pnpm verify:bindings
 ```
 
-`verify:bindings` regenerates from the canonical testnet WASM hash recorded in [`deployments-protocol-27-2026-07-09.md`](deployments-protocol-27-2026-07-09.md), diffs against the checked-in `packages/smart-account-kit-bindings/src/index.ts`, and exits nonzero on drift. Never hand-edit the generated bindings to resolve drift — fix it on the contract side and regenerate.
+`verify:bindings` regenerates from the canonical testnet WASM hash, stellar-accounts v0.8.0 `c514d35e…`, recorded in [`deployments-stellar-accounts-0.8-2026-10-25.md`](deployments-stellar-accounts-0.8-2026-10-25.md), diffs against the checked-in `packages/smart-account-kit-bindings/src/index.ts`, and exits nonzero on drift. Never hand-edit the generated bindings to resolve drift — fix it on the contract side and regenerate.
 
 ## Validate
 

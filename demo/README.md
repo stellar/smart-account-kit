@@ -29,13 +29,21 @@ The checked-in `.env.example` shows the current default deployment set used by t
 
 | Contract | Default value |
 |----------|---------------|
-| **Smart Account WASM Hash** | `1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a` |
+| **Smart Account WASM Hash** (stellar-accounts v0.8.0) | `c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1` |
 | **WebAuthn Verifier** | `CC7EKIHQP3TN4CARQDND6CEOY2UXLWWC2X5GHTD5NLAT7BG5GPZIOM3F` |
 | **Ed25519 Verifier** | `CAAVTMCBXEIBPR64EAASKFXERVPYFZA2JYP5A3BG6PESWEFUJX5IHKN4` |
 | **Native XLM Token** | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
-| **Threshold Policy** | `CB3FATQKCIRIQOCYRUPCQ2KREQ7T4RPKS7EAEOZWPEPUKWEDRVROBCEG` |
-| **Spending Limit Policy** | `CABXBYJNZ7IUW4G3D6BND5YCAQF3ASSDMDAOKQQ63UYFSO7WUU2TIP5G` |
-| **Weighted Threshold Policy** | `CCMZ6X4KM3RC7HXWCZDTH7CMWIJXFPN6HLGKJBM63MCOW2AJ2V5W7YXY` |
+| **Threshold Policy** (v0.8.0) | `CAZ2WFUDXGX265LOEARFEOYYUL6F4BYWXZLGUAWZNJY3MRFPNLSZVS4S` |
+| **Spending Limit Policy** (v0.8.0) | `CC3CEYQAP6NPNFIYSWL5MVZRCPJZGWX4XO7WDEJOUVGO2FZX5OONYPA5` |
+| **Weighted Threshold Policy** (v0.8.0) | `CDBYLFLUNPAYGE3AHZSMB4TFWECFCCHX6CJFMFO6HRPKK2W5PFU2LCKE` |
+
+New wallets deploy the stellar-accounts v0.8.0 account build.
+The demo still connects wallets born on the earlier `1b5f4534…` build.
+It also accepts wallets that upgraded to `203e2970…` or `c514d35e…`.
+Rules created before this default keep the 1e513890 policies.
+The demo reads and labels those policies, but offers only the v0.8.0 policies for new rules.
+The verifiers did not change.
+See [`deployments-stellar-accounts-0.8-2026-10-25.md`](../docs/deployments-stellar-accounts-0.8-2026-10-25.md).
 
 The demo does not pin a default smart-account contract ID. Smart accounts are deployed per wallet from the uploaded WASM hash because deployment requires constructor args for `signers` and `policies`. If you need to regenerate bindings from a specific deployed instance for debugging, you can set `VITE_ACCOUNT_CONTRACT_ID` locally in `.env`.
 
@@ -45,12 +53,12 @@ These are the current checked-in testnet artifacts corresponding to the deployed
 
 | Contract | Uploaded WASM hash |
 |----------|--------------------|
-| **Smart Account** | `1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a` |
+| **Smart Account** | `c514d35ea67eaea9bfc1fb3327854c0c06111bc1ddebd4fe217c504c1004b9e1` |
 | **WebAuthn Verifier** | `e63a030d0f1a1481e36059a4837c433083b33e704c1f9625b7314795b6d72b76` |
 | **Ed25519 Verifier** | `60e8798db610bdaf3370d39ebda56ee1dc2c15ce1c3a9e28b528bfa24a06b477` |
-| **Threshold Policy** | `cb6c0bd9cd06abba05f924ff4157b41aa1dd3891803c7c93b3b158e20986e592` |
-| **Spending Limit Policy** | `e41b563c4454f5a6742acfa6d44e1ece96d443bb5f40efddd6ed05180210219a` |
-| **Weighted Threshold Policy** | `7565d0a585254be47001281baef5bbc5d539ccbe1c813196b3c45995a6c15b74` |
+| **Threshold Policy** | `f72a11de6e2d5d2495d98fe61e04cd13544e64156a5a3be83ef8c2e403d14a94` |
+| **Spending Limit Policy** | `9bc17db0a804d6c82231a268c43bac1413650ea92cac0022e0d0a3b66ddc8189` |
+| **Weighted Threshold Policy** | `79b4e299c39c9bfb7a64d03c896b510cee382770714ac9b2f00ee2c9df4c5d13` |
 
 ## Setup
 
