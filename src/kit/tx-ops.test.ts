@@ -687,3 +687,73 @@ describe("buildDirectTokenTransfer", () => {
     ).rejects.toThrow(/spending limit/i);
   });
 });
+
+describe("sign (context rule resolution for signed entries)", () => {
+  const wallet = Address.contract(Buffer.alloc(32, 1)).toString();
+  const token = Address.contract(Buffer.alloc(32, 5)).toString();
+
+  function makeEntry(signature: xdr.ScVal, functionName = "transfer") {
+    return new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsAddressV2(
+        new xdr.SorobanAddressCredentials({
+          address: Address.fromString(wallet).toScAddress(),
+          nonce: xdr.Int64.fromString("1"),
+          signatureExpirationLedger: 100,
+          signature,
+        })
+      ),
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({
+            contractAddress: Address.fromString(token).toScAddress(),
+            functionName,
+            args: [],
+          })
+        ),
+        subInvocations: [],
+      }),
+    });
+  }
+
+  function makeTransaction(simulated: xdr.SorobanAuthorizationEntry, passed: xdr.SorobanAuthorizationEntry) {
+    return {
+      built: { operations: [{ type: "invokeHostFunction", auth: [passed] }] },
+      simulationData: { result: { auth: [simulated] } },
+      signAuthEntries: async ({ authorizeEntry }: { authorizeEntry: (e: xdr.SorobanAuthorizationEntry) => Promise<unknown> }) => {
+        await authorizeEntry(passed);
+      },
+    } as never;
+  }
+
+  it("resolves rule ids for an entry that the wallet already signed", async () => {
+    const unsigned = makeEntry(xdr.ScVal.scvVoid());
+    const presigned = makeEntry(xdr.ScVal.scvBytes(Buffer.from("partly signed")));
+    const resolveContextRuleIds = vi.fn(async () => [7]);
+    const signAuthEntry = vi.fn(async (entry: xdr.SorobanAuthorizationEntry) => entry);
+
+    await sign(
+      { getContractId: () => wallet, getCredentialId: () => "Y3JlZA", signAuthEntry },
+      makeTransaction(unsigned, presigned),
+      { credentialId: "Y3JlZA", resolveContextRuleIds }
+    );
+
+    expect(resolveContextRuleIds).toHaveBeenCalledWith(expect.anything(), 0);
+    expect(signAuthEntry.mock.calls[0][1]).toMatchObject({ contextRuleIds: [7] });
+  });
+
+  it("does not resolve rule ids for an entry with a changed invocation", async () => {
+    const unsigned = makeEntry(xdr.ScVal.scvVoid());
+    const changed = makeEntry(xdr.ScVal.scvVoid(), "approve");
+    const resolveContextRuleIds = vi.fn(async () => [7]);
+    const signAuthEntry = vi.fn(async (entry: xdr.SorobanAuthorizationEntry) => entry);
+
+    await sign(
+      { getContractId: () => wallet, getCredentialId: () => "Y3JlZA", signAuthEntry },
+      makeTransaction(unsigned, changed),
+      { credentialId: "Y3JlZA", resolveContextRuleIds }
+    );
+
+    expect(resolveContextRuleIds).not.toHaveBeenCalled();
+    expect(signAuthEntry.mock.calls[0][1]).toMatchObject({ contextRuleIds: undefined });
+  });
+});
