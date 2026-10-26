@@ -13,6 +13,51 @@ import { buildI128ScVal } from "./tx-ops.js";
 const I128_MAX = (1n << 127n) - 1n;
 const I128_MIN = -(1n << 127n);
 
+type XdrEncodable = { toXDR: (format?: "raw") => Uint8Array };
+
+function isXdrEncodable(value: unknown): value is XdrEncodable {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { toXDR?: unknown }).toXDR === "function"
+  );
+}
+
+/**
+ * Return custom policy params as an `xdr.ScVal` from the kit's SDK, or
+ * `undefined` when the value is not an XDR object.
+ *
+ * An app on another copy of `@stellar/stellar-sdk` (for example an older
+ * 16.x next to the kit's own copy) passes an `xdr.ScVal` that fails
+ * `instanceof`. The wire format is the same, so re-decode its bytes with the
+ * kit's SDK.
+ *
+ * @throws {ValidationError} If the object's `toXDR()` does not give ScVal bytes
+ */
+function toKitScVal(value: unknown, address: string): xdr.ScVal | undefined {
+  if (value instanceof xdr.ScVal) {
+    return value;
+  }
+  if (!isXdrEncodable(value)) {
+    return undefined;
+  }
+  try {
+    const bytes = value.toXDR();
+    if (!(bytes instanceof Uint8Array)) {
+      throw new TypeError("toXDR() did not return bytes");
+    }
+    return xdr.ScVal.fromXDR(Buffer.from(bytes));
+  } catch (error) {
+    throw new ValidationError(
+      `Policy ${address}: custom policy installParams has toXDR() but does not encode an ` +
+        `xdr.ScVal. It may come from a different @stellar/stellar-sdk copy; pass an ` +
+        `xdr.ScVal whose toXDR() returns valid ScVal bytes.`,
+      SmartAccountErrorCode.INVALID_INPUT,
+      { address, cause: error instanceof Error ? error.message : String(error) }
+    );
+  }
+}
+
 function policyAddressToScVal(address: string): xdr.ScVal {
   try {
     return new Address(address).toScVal();
@@ -171,7 +216,8 @@ export function convertPolicyParams(
  * account `__constructor` expects.
  *
  * Known policy types are converted via {@link convertPolicyParams}; `"custom"`
- * (or omitted-type) policies must supply an `xdr.ScVal` directly.
+ * (or omitted-type) policies must supply an `xdr.ScVal` directly. An ScVal
+ * from another `@stellar/stellar-sdk` copy is re-decoded with the kit's SDK.
  *
  * @throws {ValidationError} If a custom policy's installParams is not an ScVal
  */
@@ -183,15 +229,18 @@ export function buildConstructorPolicies(
     let scParams: xdr.ScVal;
     if (policy.type && policy.type !== "custom") {
       scParams = convertPolicyParams(policy.type, policy.installParams);
-    } else if (policy.installParams instanceof xdr.ScVal) {
-      scParams = policy.installParams;
     } else {
-      throw new ValidationError(
-        `Policy ${policy.address}: custom policies must provide installParams as an xdr.ScVal ` +
-          `(or set a known 'type').`,
-        SmartAccountErrorCode.INVALID_INPUT,
-        { address: policy.address }
-      );
+      const custom = toKitScVal(policy.installParams, policy.address);
+      if (!custom) {
+        throw new ValidationError(
+          `Policy ${policy.address}: custom policies must provide installParams as an xdr.ScVal ` +
+            `(or set a known 'type'). An xdr.ScVal from a different @stellar/stellar-sdk copy ` +
+            `must still provide toXDR().`,
+          SmartAccountErrorCode.INVALID_INPUT,
+          { address: policy.address }
+        );
+      }
+      scParams = custom;
     }
     map.set(policy.address, scParams);
   }
@@ -214,11 +263,13 @@ export function buildPoliciesScVal(
 
     const policyType = policyTypes.get(address);
     let scParams: xdr.ScVal;
+    const customScVal =
+      policyType && policyType !== "custom" ? undefined : toKitScVal(params, address);
 
     if (policyType && policyType !== "custom") {
       scParams = convertPolicyParams(policyType, params);
-    } else if (params instanceof xdr.ScVal) {
-      scParams = params;
+    } else if (customScVal) {
+      scParams = customScVal;
     } else {
       // Custom (or unknown-type) policy: convert via the wallet spec. Never
       // silently fall back to Void — shipping the wrong ScVal shape on-chain is
@@ -228,7 +279,8 @@ export function buildPoliciesScVal(
       const spec = walletObj.spec as { nativeToScVal?: (val: unknown, type: xdr.ScSpecTypeDef) => xdr.ScVal } | undefined;
       if (!spec || typeof spec.nativeToScVal !== "function") {
         throw new ValidationError(
-          `Policy ${address}: custom policy params could not be converted — provide installParams as an xdr.ScVal or set a known policy 'type'.`,
+          `Policy ${address}: custom policy params could not be converted — provide installParams as an xdr.ScVal or set a known policy 'type'. ` +
+            `An xdr.ScVal from a different @stellar/stellar-sdk copy must still provide toXDR().`,
           SmartAccountErrorCode.INVALID_INPUT,
           { address }
         );
@@ -237,7 +289,8 @@ export function buildPoliciesScVal(
         scParams = spec.nativeToScVal(params, xdr.ScSpecTypeDef.scSpecTypeVal());
       } catch (error) {
         throw new ValidationError(
-          `Policy ${address}: failed to convert custom policy params into an ScVal.`,
+          `Policy ${address}: failed to convert custom policy params into an ScVal. ` +
+            `If you passed an xdr.ScVal, it may come from a different @stellar/stellar-sdk copy.`,
           SmartAccountErrorCode.INVALID_INPUT,
           { address, cause: error instanceof Error ? error.message : String(error) }
         );

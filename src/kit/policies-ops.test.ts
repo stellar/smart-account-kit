@@ -10,6 +10,7 @@ import {
 } from "../builders";
 import {
   buildConstructorPolicies,
+  buildPoliciesScVal,
   convertPolicyParams,
   sortPolicyMap,
 } from "./policies-ops";
@@ -22,6 +23,15 @@ function makeClient() {
     rpcUrl: "https://soroban-testnet.stellar.org",
     networkPassphrase: "Test SDF Network ; September 2015",
   });
+}
+
+/**
+ * An ScVal as another copy of `@stellar/stellar-sdk` hands it over: not an
+ * instance of the kit's `xdr.ScVal`, with a `toXDR()` that returns plain bytes.
+ */
+function foreignScVal(value: xdr.ScVal): { toXDR: () => Uint8Array } {
+  const bytes = Uint8Array.from(value.toXDR());
+  return { toXDR: () => bytes };
 }
 
 function makePasskeySigner() {
@@ -168,11 +178,76 @@ describe("buildConstructorPolicies", () => {
       buildConstructorPolicies([
         { address: POLICY_A, type: "custom", installParams: { foo: 1 } },
       ])
-    ).toThrow(ValidationError);
+    ).toThrow(/different @stellar\/stellar-sdk copy/);
+  });
+
+  it("re-decodes an ScVal from another @stellar/stellar-sdk copy", () => {
+    const original = xdr.ScVal.scvVec([xdr.ScVal.scvU32(7), xdr.ScVal.scvSymbol("cap")]);
+    const map = buildConstructorPolicies([
+      { address: POLICY_A, type: "custom", installParams: foreignScVal(original) },
+      { address: POLICY_B, installParams: foreignScVal(xdr.ScVal.scvVoid()) },
+    ]);
+    const decoded = map.get(POLICY_A);
+    expect(decoded).toBeInstanceOf(xdr.ScVal);
+    expect(decoded!.toXDR("base64")).toBe(original.toXDR("base64"));
+    expect(map.get(POLICY_B)).toBeInstanceOf(xdr.ScVal);
+  });
+
+  it.each([
+    ["bytes that are not an ScVal", () => Uint8Array.from([0xff, 0xff, 0xff, 0xff])],
+    ["a toXDR() that is not bytes", () => "AAAAAQ==" as unknown as Uint8Array],
+    [
+      "a toXDR() that throws",
+      () => {
+        throw new Error("boom");
+      },
+    ],
+  ])("refuses a foreign object with %s", (_label, toXDR) => {
+    let caught: unknown;
+    try {
+      buildConstructorPolicies([
+        { address: POLICY_A, type: "custom", installParams: { toXDR } },
+      ]);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ValidationError);
+    expect((caught as ValidationError).code).toBe(SmartAccountErrorCode.INVALID_INPUT);
+    expect((caught as ValidationError).message).toMatch(
+      /does not encode an xdr\.ScVal\. It may come from a different @stellar\/stellar-sdk copy/
+    );
   });
 
   it("returns an empty map for no policies", () => {
     expect(buildConstructorPolicies([]).size).toBe(0);
+  });
+});
+
+describe("buildPoliciesScVal", () => {
+  const POLICY = "CB2WQXF2XXDGUV2CTVQ23RLN3ESI3IY5KKX3KVXWBNRTTWDHZM76NVKJ";
+
+  it("re-decodes a custom ScVal from another @stellar/stellar-sdk copy", () => {
+    const original = xdr.ScVal.scvU32(42);
+    const result = buildPoliciesScVal(
+      makeClient(),
+      new Map<string, unknown>([[POLICY, foreignScVal(original)]]),
+      new Map([[POLICY, "custom" as const]])
+    );
+    const [entry] = result.map()!;
+    expect(entry.val()).toBeInstanceOf(xdr.ScVal);
+    expect(entry.val().toXDR("base64")).toBe(original.toXDR("base64"));
+  });
+
+  it("refuses a foreign object whose toXDR() is not an ScVal", () => {
+    expect(() =>
+      buildPoliciesScVal(
+        makeClient(),
+        new Map<string, unknown>([
+          [POLICY, { toXDR: () => Uint8Array.from([0xff, 0xff, 0xff, 0xff]) }],
+        ]),
+        new Map([[POLICY, "custom" as const]])
+      )
+    ).toThrow(/different @stellar\/stellar-sdk copy/);
   });
 });
 
