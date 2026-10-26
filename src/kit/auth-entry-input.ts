@@ -77,8 +77,9 @@ export function toAuthEntry(
     if (encoded.length === 0 || !BASE64_PATTERN.test(encoded)) {
       throw invalidEntry(fieldName, "the string is not valid base64");
     }
+    let decoded: xdr.SorobanAuthorizationEntry;
     try {
-      return xdr.SorobanAuthorizationEntry.fromXDR(encoded, "base64");
+      decoded = xdr.SorobanAuthorizationEntry.fromXDR(encoded, "base64");
     } catch (error) {
       throw invalidEntry(
         fieldName,
@@ -86,6 +87,12 @@ export function toAuthEntry(
         error
       );
     }
+    // The pattern allows nonzero unused bits before the padding (for example
+    // `AB==` decodes like `AA==`). Accept only the one canonical encoding.
+    if (decoded.toXDR("base64") !== encoded) {
+      throw invalidEntry(fieldName, "the string is not canonical base64 XDR");
+    }
+    return decoded;
   }
 
   // An XDR object from another copy of the SDK. The wire format is the same,

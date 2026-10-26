@@ -21,6 +21,21 @@ function expectInvalidEntry(fn: () => unknown, message: RegExp): void {
   expect((caught as ValidationError).message).toMatch(message);
 }
 
+/** A base64 auth entry whose encoding ends with exactly `padding`. */
+function entryWithPadding(padding: "=" | "=="): string {
+  // XDR pads strings to 4 bytes, so each 4-character step in the function
+  // name moves the entry length by 4 bytes and cycles the base64 padding.
+  for (const name of ["transfer", "transfer1234", "transfer12345678"]) {
+    const entry = makeAddressAuthEntry(makeContract(1));
+    entry.rootInvocation().function().contractFn().functionName(name);
+    const encoded = entry.toXDR("base64");
+    if (encoded.endsWith(padding) && !encoded.endsWith(`=${padding}`)) {
+      return encoded;
+    }
+  }
+  throw new Error(`no fixture ends with ${padding}`);
+}
+
 describe("toAuthEntry", () => {
   it("returns a kit XDR object unchanged", () => {
     const entry = makeAddressAuthEntry(makeContract(1));
@@ -72,6 +87,46 @@ describe("toAuthEntry", () => {
     expectInvalidEntry(() => toAuthEntry("AAAA="), /not valid base64/);
     expectInvalidEntry(() => toAuthEntry(""), /not valid base64/);
     expectInvalidEntry(() => toAuthEntry("   "), /not valid base64/);
+  });
+
+  describe("rejects nonzero unused bits before the padding", () => {
+    const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    /** Set an unused low bit in the last data character before the padding. */
+    function setUnusedBit(encoded: string): string {
+      const index = encoded.indexOf("=") - 1;
+      const value = ALPHABET.indexOf(encoded[index]);
+      // "==" leaves 4 unused bits in that character, "=" leaves 2.
+      expect(value & (encoded.endsWith("==") ? 0b1111 : 0b11)).toBe(0);
+      return encoded.slice(0, index) + ALPHABET[value | 1] + encoded.slice(index + 1);
+    }
+
+    for (const padding of ["==", "="] as const) {
+      it(`with "${padding}" padding`, () => {
+        const canonical = entryWithPadding(padding);
+        const altered = setUnusedBit(canonical);
+
+        expect(altered).not.toBe(canonical);
+        // Both strings carry the same bytes.
+        expect(Buffer.from(altered, "base64")).toEqual(Buffer.from(canonical, "base64"));
+        expect(toAuthEntry(canonical).toXDR("base64")).toBe(canonical);
+        expectInvalidEntry(() => toAuthEntry(altered), /not canonical base64/);
+      });
+    }
+  });
+
+  it("rejects the URL-safe alphabet, missing padding, and inner whitespace", () => {
+    const canonical = entryWithPadding("=");
+
+    expectInvalidEntry(
+      () => toAuthEntry(canonical.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")),
+      /not valid base64/
+    );
+    expectInvalidEntry(() => toAuthEntry(canonical.replace(/=+$/, "")), /not valid base64/);
+    expectInvalidEntry(
+      () => toAuthEntry(`${canonical.slice(0, 8)}\n${canonical.slice(8)}`),
+      /not valid base64/
+    );
   });
 
   it("rejects valid base64 that is not a SorobanAuthorizationEntry", () => {
