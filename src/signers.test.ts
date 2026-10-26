@@ -15,7 +15,8 @@ import {
   computeEntryAuthDigest,
   signAuthEntryWithSigners,
 } from "./signers";
-import { ValidationError } from "./errors";
+import { SmartAccountErrorCode, ValidationError } from "./errors";
+import { buildInvocationContextTypes } from "./kit/context-rules";
 import { signersEqual } from "./signer-utils";
 import {
   ForeignXdrObject,
@@ -514,6 +515,104 @@ describe("signAuthEntryWithSigners", () => {
         expiration: 500,
       })
     ).resolves.toBeDefined();
+  });
+});
+
+describe("CAP-84 muxed contract addresses on the sign-only path", () => {
+  const verifier = makeContract(30);
+  const wallet = makeContract(31);
+  const token = makeContract(32);
+  const keypair = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 14));
+  const signer = new Ed25519Signer(keypair, verifier);
+  const muxed = stellarXdr.ScAddress.scAddressTypeMuxedContract(
+    new stellarXdr.MuxedContract({
+      id: stellarXdr.Uint64.fromString("42"),
+      contractId: Address.fromString(makeContract(33)).toScAddress().contractId(),
+    })
+  );
+  const options = {
+    networkPassphrase: TESTNET,
+    authDigestScheme: "preimage-v1" as const,
+    contextRuleIds: [0],
+    expiration: 500,
+  };
+
+  function invocation(
+    contract: stellarXdr.ScAddress,
+    functionName: string,
+    args: stellarXdr.ScVal[] = [],
+    subInvocations: stellarXdr.SorobanAuthorizedInvocation[] = []
+  ): stellarXdr.SorobanAuthorizedInvocation {
+    return new stellarXdr.SorobanAuthorizedInvocation({
+      function: stellarXdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+        new stellarXdr.InvokeContractArgs({ contractAddress: contract, functionName, args })
+      ),
+      subInvocations,
+    });
+  }
+
+  function walletEntry(
+    root: stellarXdr.SorobanAuthorizedInvocation
+  ): stellarXdr.SorobanAuthorizationEntry {
+    return new stellarXdr.SorobanAuthorizationEntry({
+      credentials: makeAddressAuthEntry(wallet).credentials(),
+      rootInvocation: root,
+    });
+  }
+
+  it("signs a token transfer whose opaque `to` argument is a muxed contract", async () => {
+    const entry = walletEntry(
+      invocation(Address.fromString(token).toScAddress(), "transfer", [
+        stellarXdr.ScVal.scvAddress(Address.fromString(wallet).toScAddress()),
+        stellarXdr.ScVal.scvAddress(muxed),
+        stellarXdr.ScVal.scvI128(
+          new stellarXdr.Int128Parts({
+            hi: stellarXdr.Int64.fromString("0"),
+            lo: stellarXdr.Uint64.fromString("1000000"),
+          })
+        ),
+      ])
+    );
+
+    expect(buildInvocationContextTypes(entry)).toEqual([
+      { tag: "CallContract", values: [token] },
+    ]);
+    const signed = await signAuthEntryWithSigners(entry, [signer], options);
+    const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
+    const [[, sig]] = Array.from(payload.signers.entries());
+    const { authDigest } = computeEntryAuthDigest(
+      TESTNET,
+      stellarXdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR()),
+      500,
+      [0],
+      "preimage-v1"
+    );
+    expect(keypair.verify(authDigest, sig)).toBe(true);
+  });
+
+  it("refuses a muxed credential address with a ValidationError", async () => {
+    const entry = makeAddressAuthEntry(wallet);
+    getAddressCredentials(entry.credentials()).address(muxed);
+    await expect(signAuthEntryWithSigners(entry, [signer], options)).rejects.toMatchObject({
+      name: "ValidationError",
+      code: SmartAccountErrorCode.INVALID_INPUT,
+      message:
+        "Auth entry credential address has an unsupported address type: scAddressTypeMuxedContract",
+    });
+  });
+
+  it("refuses a muxed sub-invocation target with a ValidationError", async () => {
+    const entry = walletEntry(
+      invocation(Address.fromString(wallet).toScAddress(), "__check_auth", [], [
+        invocation(muxed, "transfer"),
+      ])
+    );
+    await expect(signAuthEntryWithSigners(entry, [signer], options)).rejects.toMatchObject({
+      name: "ValidationError",
+      code: SmartAccountErrorCode.INVALID_INPUT,
+      message:
+        "Authorized invocation target has an unsupported address type: scAddressTypeMuxedContract",
+    });
   });
 });
 

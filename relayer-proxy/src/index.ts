@@ -39,6 +39,7 @@ import {
   TESTNET_RETRY_DURATION_MS,
   UNKNOWN_IP,
 } from "./constants";
+import { declaredSorobanDataProblem } from "./soroban-data";
 
 interface StoredApiKey {
   apiKey: string;
@@ -205,6 +206,27 @@ function toHex(bytes: Uint8Array): string {
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, i) => byte === right[i]);
+}
+
+/**
+ * The `C…` strkey of a contract address in request XDR. Every other address
+ * type gets a 403. This includes a CAP-84 muxed contract (`W…`), which
+ * `Address.fromScAddress` cannot convert and which would otherwise give a 500.
+ */
+function contractIdOf(address: xdr.ScAddress, message: string): string {
+  if (address.switch().name !== "scAddressTypeContract") {
+    throw new RequestError(message, 403);
+  }
+  return Address.fromScAddress(address).toString();
+}
+
+/** Like `contractIdOf`, but also accepts a `G…` account address. */
+function accountOrContractIdOf(address: xdr.ScAddress, message: string): string {
+  const type = address.switch().name;
+  if (type !== "scAddressTypeAccount" && type !== "scAddressTypeContract") {
+    throw new RequestError(message, 403);
+  }
+  return Address.fromScAddress(address).toString();
 }
 
 export function getClientIP(request: Request): string {
@@ -448,6 +470,9 @@ async function walletContractIsAllowed(
   env: Env,
   contractId: string
 ): Promise<boolean> {
+  // Only a `C…` contract can be a wallet. `new Contract(G…)` throws, which
+  // would give a retryable 503 for a request that can never succeed.
+  if (!StrKey.isValidContract(contractId)) return false;
   if (csvSet(env.ALLOWED_WALLET_CONTRACT_IDS).has(contractId)) return true;
   const hashes = allowedWasmHashes(env);
   if (hashes.size === 0) return false;
@@ -504,9 +529,10 @@ function validateAuthorizedInvocation(
       403
     );
   }
-  const invokedContract = Address.fromScAddress(
-    fn.contractFn().contractAddress()
-  ).toString();
+  const invokedContract = contractIdOf(
+    fn.contractFn().contractAddress(),
+    "Auth entry target must be a contract"
+  );
   if (invokedContract !== contractId) {
     throw new RequestError("Auth entry targets a non-allowlisted contract", 403);
   }
@@ -535,9 +561,10 @@ function validateDeployFunction(
   if (preimage.switch().name !== "contractIdPreimageFromAddress") {
     throw new RequestError("Deploy must use an address contract-id preimage", 403);
   }
-  const deployer = Address.fromScAddress(
-    preimage.fromAddress().address()
-  ).toString();
+  const deployer = accountOrContractIdOf(
+    preimage.fromAddress().address(),
+    "Deploy preimage address must be an account or contract"
+  );
   if (
     requireAllowedDeployer &&
     !csvSet(env.ALLOWED_DEPLOYER_ADDRESSES).has(deployer)
@@ -575,6 +602,12 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   ) {
     throw new RequestError("Deploy initial signer must be External", 403);
   }
+  // The verifier is a contract. Refuse every other address arm, such as a
+  // CAP-84 muxed contract, which the constructor traps on after the sponsor pays.
+  contractIdOf(
+    signer[1].address(),
+    "Deploy initial signer verifier must be a contract"
+  );
   const keyData = signer[2].bytes();
   if (keyData.length <= 65 || keyData[0] !== 0x04) {
     throw new RequestError("Deploy initial signer has invalid WebAuthn key data", 403);
@@ -583,6 +616,18 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   const salt = deploy.contractIdPreimage().fromAddress().salt();
   if (!bytesEqual(hash(credentialId), salt)) {
     throw new RequestError("Deploy salt does not match the signer credential id", 403);
+  }
+  // The constructor takes `policies: Map<Address, Val>` and installs each key
+  // as a policy contract. Refuse every other key, such as a CAP-84 muxed
+  // contract, which the constructor traps on after the sponsor pays. The
+  // policy values stay opaque.
+  const policyKeyMessage = "Deploy policy key must be a contract address";
+  for (const entry of args[1].map() ?? []) {
+    const key = entry.key();
+    if (key.switch().name !== "scvAddress") {
+      throw new RequestError(policyKeyMessage, 403);
+    }
+    contractIdOf(key.address(), policyKeyMessage);
   }
 }
 
@@ -594,11 +639,12 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
  */
 function walletAuthAddress(entry: xdr.SorobanAuthorizationEntry): string {
   const credentials = entry.credentials();
+  const message = "Auth credential address must be an account or contract";
   switch (credentials.switch().name) {
     case "sorobanCredentialsAddress":
-      return Address.fromScAddress(credentials.address().address()).toString();
+      return accountOrContractIdOf(credentials.address().address(), message);
     case "sorobanCredentialsAddressV2":
-      return Address.fromScAddress(credentials.addressV2().address()).toString();
+      return accountOrContractIdOf(credentials.addressV2().address(), message);
   }
   throw new RequestError("Only address credentials are allowed for wallet auth", 403);
 }
@@ -608,7 +654,10 @@ async function validateWalletInvocation(
   invoke: xdr.InvokeContractArgs,
   auth: xdr.SorobanAuthorizationEntry[]
 ): Promise<void> {
-  const contractId = Address.fromScAddress(invoke.contractAddress()).toString();
+  const contractId = contractIdOf(
+    invoke.contractAddress(),
+    "Wallet invocation target must be a contract"
+  );
   if (!(await walletContractIsAllowed(env, contractId))) {
     throw new RequestError("Wallet contract is not allowlisted", 403);
   }
@@ -649,7 +698,12 @@ async function validateDirectTokenTransfer(
   if (args.length !== 3 || args[0].switch().name !== "scvAddress") {
     throw new RequestError("Token transfer has an invalid argument shape", 403);
   }
-  const from = Address.fromScAddress(args[0].address()).toString();
+  // A sponsored transfer must come from a wallet contract. A `G…` source
+  // otherwise reaches walletContractIsAllowed and gives a retryable 503.
+  const from = contractIdOf(
+    args[0].address(),
+    "Token transfer source must be a contract"
+  );
   for (const entry of auth) {
     const wallet = walletAuthAddress(entry);
     const root = entry.rootInvocation();
@@ -667,10 +721,10 @@ async function validateDirectTokenTransfer(
       );
     }
   }
-  if (invoke.contractAddress().switch().name !== "scAddressTypeContract") {
-    throw new RequestError("Token transfer target must be a contract", 403);
-  }
-  const token = Address.fromScAddress(invoke.contractAddress()).toString();
+  const token = contractIdOf(
+    invoke.contractAddress(),
+    "Token transfer target must be a contract"
+  );
   if (!(await tokenContractIsAllowed(env, token))) {
     throw new RequestError("Token contract is not allowed", 403);
   }
@@ -701,7 +755,10 @@ async function validateFuncSubmission(
     if (credentials.switch().name !== "sorobanCredentialsAddress") {
       throw new RequestError("Deploy requires V1 address credentials", 403);
     }
-    const signer = Address.fromScAddress(credentials.address().address()).toString();
+    const signer = accountOrContractIdOf(
+      credentials.address().address(),
+      "Deploy credential address must be an account or contract"
+    );
     const root = entry.rootInvocation();
     const rootFunction = root.function();
     if (
@@ -733,9 +790,6 @@ async function validateFuncSubmission(
     );
   }
 
-  if (!env.STELLAR_RPC_URL) {
-    throw new RequestError("STELLAR_RPC_URL is required for fee validation", 500);
-  }
   const simulationTx = new TransactionBuilder(new Account(SIMULATION_SOURCE, "0"), {
     fee: "100",
     networkPassphrase: networkPassphrase(env),
@@ -743,8 +797,22 @@ async function validateFuncSubmission(
     .addOperation(Operation.invokeHostFunction({ func, auth }))
     .setTimeout(30)
     .build();
+  await simulateWithinFeeCeiling(env, simulationTx);
+}
+
+/**
+ * Simulate a submission before the API-key read. Refuse a failed or
+ * restore-needed result, and a resource fee above the configured ceiling.
+ */
+async function simulateWithinFeeCeiling(
+  env: Env,
+  transaction: Transaction
+): Promise<RpcApi.SimulateTransactionSuccessResponse> {
+  if (!env.STELLAR_RPC_URL) {
+    throw new RequestError("STELLAR_RPC_URL is required for fee validation", 500);
+  }
   const simulation = await new RpcServer(env.STELLAR_RPC_URL).simulateTransaction(
-    simulationTx
+    transaction
   );
   if (
     !RpcApi.isSimulationSuccess(simulation) ||
@@ -755,6 +823,7 @@ async function validateFuncSubmission(
   if (BigInt(simulation.minResourceFee) > maxResourceFee(env)) {
     throw new RequestError("Resource fee exceeds configured maximum", 413);
   }
+  return simulation;
 }
 
 function validateSourceSignature(transaction: Transaction): void {
@@ -774,10 +843,39 @@ function validateSourceSignature(transaction: Transaction): void {
   }
 }
 
-function validateXdrSubmission(
+/**
+ * A dedicated-deployer envelope carries the one auth entry that simulation
+ * returns for a source-authorized deployment: source-account credentials, the
+ * operation's own createContractV2 as the root, and no sub-invocations.
+ */
+function validateXdrDeployAuth(operation: Operation.InvokeHostFunction): void {
+  const auth = operation.auth ?? [];
+  if (auth.length !== 1) {
+    throw new RequestError("Deploy must contain exactly one auth entry", 403);
+  }
+  const entry = auth[0];
+  if (entry.credentials().switch().name !== "sorobanCredentialsSourceAccount") {
+    throw new RequestError("Signed xdr deploy requires source-account credentials", 403);
+  }
+  const root = entry.rootInvocation();
+  const rootFunction = root.function();
+  if (
+    root.subInvocations().length !== 0 ||
+    rootFunction.switch().name !==
+      "sorobanAuthorizedFunctionTypeCreateContractV2HostFn" ||
+    !bytesEqual(
+      rootFunction.createContractV2HostFn().toXDR(),
+      operation.func.createContractV2().toXDR()
+    )
+  ) {
+    throw new RequestError("Deploy auth does not exactly match the operation", 403);
+  }
+}
+
+async function validateXdrSubmission(
   env: Env,
   body: Extract<SubmissionBody, { mode: "xdr" }>
-): void {
+): Promise<void> {
   let transaction: Transaction;
   try {
     const decoded = TransactionBuilder.fromXDR(body.xdr, networkPassphrase(env));
@@ -803,34 +901,51 @@ function validateXdrSubmission(
   if (operation.source && operation.source !== transaction.source) {
     throw new RequestError("Operation source must match transaction source", 403);
   }
-  const deployer = validateDeployFunction(
-    env,
-    (operation as Operation.InvokeHostFunction).func,
-    false
-  );
+  const invokeOperation = operation as Operation.InvokeHostFunction;
+  const deployer = validateDeployFunction(env, invokeOperation.func, false);
   if (deployer !== transaction.source) {
     throw new RequestError(
       "Deploy preimage address is not the allowlisted source",
       403
     );
   }
-  let resourceFee: bigint;
+  validateXdrDeployAuth(invokeOperation);
+  let declared: xdr.SorobanTransactionData;
   try {
     const envelope = transaction.toEnvelope();
     if (envelope.switch().name !== "envelopeTypeTx") throw new Error("not v1");
     const ext = envelope.v1().tx().ext();
     if (ext.switch() !== 1) throw new Error("missing Soroban data");
-    resourceFee = ext.sorobanData().resourceFee().toBigInt();
+    declared = ext.sorobanData();
   } catch {
     throw new RequestError("Deploy transaction is missing Soroban resource data");
   }
-  if (resourceFee > maxResourceFee(env)) {
+  if (declared.resourceFee().toBigInt() > maxResourceFee(env)) {
     throw new RequestError("Resource fee exceeds configured maximum", 413);
   }
+  // The static checks cannot see whether the constructor runs. For example, a
+  // policy key with no contract behind it traps on chain after the sponsor
+  // pays. Simulate the signed envelope, as func mode does.
+  const simulation = await simulateWithinFeeCeiling(env, transaction);
+  // Simulation ignores the declared footprint and resources, so compare them
+  // with the simulated data. Func mode needs no such check, because Channels
+  // builds that transaction from its own simulation.
+  let simulated: xdr.SorobanTransactionData;
+  try {
+    simulated = simulation.transactionData.build();
+  } catch {
+    throw new RequestError("Submission simulation returned no resource data");
+  }
+  const problem = declaredSorobanDataProblem(
+    declared,
+    simulated,
+    BigInt(simulation.minResourceFee)
+  );
+  if (problem) throw new RequestError(problem);
 }
 
 async function validateSubmission(env: Env, body: SubmissionBody): Promise<void> {
-  if (body.mode === "xdr") validateXdrSubmission(env, body);
+  if (body.mode === "xdr") await validateXdrSubmission(env, body);
   else await validateFuncSubmission(env, body);
 }
 

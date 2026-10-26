@@ -29,6 +29,26 @@ export const WALLET_MUTATION_FUNCTIONS = new Set([
   "update_context_rule_valid_until",
 ]);
 
+/**
+ * The strkey of an `ScAddress` from an authorization entry or signer key.
+ *
+ * SDK 16.x decodes some address types that `Address.fromScAddress` cannot
+ * convert, such as a CAP-84 muxed contract (`W…`). The SDK then throws a plain
+ * `Error`. Refuse those addresses with a `ValidationError` instead.
+ */
+export function scAddressToString(address: xdr.ScAddress, field: string): string {
+  try {
+    return Address.fromScAddress(address).toString();
+  } catch {
+    const addressType = address.switch().name;
+    throw new ValidationError(
+      `${field} has an unsupported address type: ${addressType}`,
+      SmartAccountErrorCode.INVALID_INPUT,
+      { field, addressType }
+    );
+  }
+}
+
 /** Where each signer-adding wallet function takes its signers. */
 const SIGNER_ARGUMENTS: Record<string, { index: number; list: boolean }> = {
   add_signer: { index: 1, list: false },
@@ -62,7 +82,7 @@ export function assertWalletMutationIntent(
     const fn = invocation.function();
     if (fn.switch().name === "sorobanAuthorizedFunctionTypeContractFn") {
       const args = fn.contractFn();
-      const target = Address.fromScAddress(args.contractAddress()).toString();
+      const target = scAddressToString(args.contractAddress(), "Authorized invocation target");
       const name = args.functionName().toString();
       if (target === contractId && WALLET_MUTATION_FUNCTIONS.has(name)) {
         mutations.push({ invocation, depth, name });
@@ -116,7 +136,7 @@ export function assertWalletMutationIntent(
     if (
       !operator ||
       operator.switch().name !== "scvAddress" ||
-      Address.fromScAddress(operator.address()).toString() !== contractId
+      scAddressToString(operator.address(), "Upgrade operator") !== contractId
     ) {
       fail("The upgrade operator must be the wallet itself, as kit.upgrade() sets it.");
     }
@@ -196,7 +216,10 @@ export function getAddressCredentials(
 }
 
 export function getAuthEntryAddress(entry: xdr.SorobanAuthorizationEntry): string {
-  return Address.fromScAddress(getAddressCredentials(entry.credentials()).address()).toString();
+  return scAddressToString(
+    getAddressCredentials(entry.credentials()).address(),
+    "Auth entry credential address"
+  );
 }
 
 /**
@@ -526,7 +549,7 @@ export function parseSignerScVal(value: xdr.ScVal): ContractSigner {
 
     return {
       tag: "Delegated",
-      values: [Address.fromScAddress(items[1].address()).toString()],
+      values: [scAddressToString(items[1].address(), "Delegated signer address")],
     };
   }
 
@@ -542,7 +565,7 @@ export function parseSignerScVal(value: xdr.ScVal): ContractSigner {
     return {
       tag: "External",
       values: [
-        Address.fromScAddress(items[1].address()).toString(),
+        scAddressToString(items[1].address(), "External signer verifier address"),
         Buffer.from(items[2].bytes()),
       ],
     };

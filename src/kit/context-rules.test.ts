@@ -13,6 +13,7 @@ import {
 } from "./context-rules";
 import { buildTokenTransferHostFunction } from "./tx-ops";
 import { buildKeyData } from "../utils";
+import { SmartAccountErrorCode, ValidationError } from "../errors";
 
 /** The generated contract spec, used by the RPC read path to decode rules. */
 const CONTRACT_SPEC = new SmartAccountClient({
@@ -726,4 +727,75 @@ describe("CAP-85 external executable references", () => {
   function deployerContract(): string {
     return Address.contract(Buffer.alloc(32, 7)).toString();
   }
+});
+
+describe("CAP-84 muxed contract addresses in context types", () => {
+  const wallet = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
+  const muxed = xdr.ScAddress.scAddressTypeMuxedContract(
+    new xdr.MuxedContract({
+      id: xdr.Uint64.fromString("42"),
+      contractId: Address.fromString(wallet).toScAddress().contractId(),
+    })
+  );
+
+  function entryFor(
+    fn: xdr.SorobanAuthorizedFunction,
+    subInvocations: xdr.SorobanAuthorizedInvocation[] = []
+  ): xdr.SorobanAuthorizationEntry {
+    return new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({ function: fn, subInvocations }),
+    });
+  }
+
+  function expectInvalidInput(run: () => unknown, field: string) {
+    let thrown: unknown;
+    try {
+      run();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as ValidationError).code).toBe(SmartAccountErrorCode.INVALID_INPUT);
+    expect((thrown as ValidationError).message).toBe(
+      `${field} has an unsupported address type: scAddressTypeMuxedContract`
+    );
+  }
+
+  it("refuses a muxed sub-invocation target with a ValidationError", () => {
+    const callWallet = xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+      new xdr.InvokeContractArgs({
+        contractAddress: Address.fromString(wallet).toScAddress(),
+        functionName: "execute",
+        args: [],
+      })
+    );
+    const callMuxed = xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+      new xdr.InvokeContractArgs({ contractAddress: muxed, functionName: "transfer", args: [] })
+    );
+    const entry = entryFor(callWallet, [
+      new xdr.SorobanAuthorizedInvocation({ function: callMuxed, subInvocations: [] }),
+    ]);
+    expectInvalidInput(() => buildInvocationContextTypes(entry), "Authorized invocation target");
+  });
+
+  it("refuses a muxed executable reference owner with a ValidationError", () => {
+    const entry = entryFor(
+      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+        new xdr.CreateContractArgsV2({
+          contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+            new xdr.ContractIdPreimageFromAddress({
+              address: Address.fromString(makeAccount(6)).toScAddress(),
+              salt: Buffer.alloc(32, 3),
+            })
+          ),
+          executable: xdr.ContractExecutable.contractExecutableExternalRef(
+            new xdr.ContractExecutableExternalRef({ executableOwner: muxed, tag: "account-v1" })
+          ),
+          constructorArgs: [],
+        })
+      )
+    );
+    expectInvalidInput(() => buildInvocationContextTypes(entry), "Executable reference owner");
+  });
 });
