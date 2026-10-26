@@ -18,11 +18,15 @@ import {
   compareScVal,
   createAddressCredentials,
   getAddressCredentials,
+  getAuthEntryAddress,
+  parseSignerScVal,
   readAuthPayload,
+  scAddressToString,
   signerToScVal,
   upsertAuthPayloadSigner,
   writeAuthPayload,
 } from "./auth-payload";
+import { SmartAccountErrorCode, ValidationError } from "../errors";
 
 describe("buildWebAuthnSignatureBytes", () => {
   it("encodes WebAuthnSigData to the pinned ScVal XDR (sorted authenticator_data/client_data/signature)", () => {
@@ -558,5 +562,114 @@ describe("compareScVal (Soroban host key order)", () => {
     expect(signerKeys[0].toXDR("hex")).toBe(signerToScVal(signerB).toXDR("hex"));
     expect(signerKeys[1].toXDR("hex")).toBe(signerToScVal(signerA).toXDR("hex"));
     expect(compareScVal(signerKeys[0], signerKeys[1])).toBeLessThan(0);
+  });
+});
+
+describe("CAP-84 muxed contract addresses", () => {
+  const wallet = Address.contract(hash(Buffer.from("wallet-muxed"))).toString();
+  const walletScVal = xdr.ScVal.scvAddress(Address.fromString(wallet).toScAddress());
+  // A muxed contract address (`W…`) over another contract id. SDK 16.x decodes
+  // it, but `Address.fromScAddress` cannot convert it.
+  const muxed = xdr.ScAddress.scAddressTypeMuxedContract(
+    new xdr.MuxedContract({
+      id: xdr.Uint64.fromString("42"),
+      contractId: Address.contract(hash(Buffer.from("muxed-target")))
+        .toScAddress()
+        .contractId(),
+    })
+  );
+  const muxedScVal = xdr.ScVal.scvAddress(muxed);
+  const policy = {
+    acceptedWasmHashes: ["ab".repeat(32)],
+    authDigestSchemes: new Map([["ab".repeat(32), "preimage-v1" as const]]),
+  };
+
+  function expectInvalidInput(run: () => unknown, field: string) {
+    let thrown: unknown;
+    try {
+      run();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as ValidationError).code).toBe(SmartAccountErrorCode.INVALID_INPUT);
+    expect((thrown as ValidationError).message).toBe(
+      `${field} has an unsupported address type: scAddressTypeMuxedContract`
+    );
+  }
+
+  function adminEntry(functionName: string, args: xdr.ScVal[]) {
+    const root = makeContractInvocation(wallet, functionName, [], args);
+    return {
+      entry: withRootInvocation(makeAuthEntry(wallet), root),
+      hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(root.function().contractFn()),
+    };
+  }
+
+  it("keeps account and contract conversions unchanged", () => {
+    const account = makeAccount(40);
+    expect(scAddressToString(Address.fromString(account).toScAddress(), "x")).toBe(account);
+    expect(scAddressToString(Address.fromString(wallet).toScAddress(), "x")).toBe(wallet);
+  });
+
+  it("refuses a muxed sub-invocation target with a ValidationError", () => {
+    const root = makeContractInvocation(wallet, "__check_auth");
+    root.subInvocations([
+      new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({ contractAddress: muxed, functionName: "transfer", args: [] })
+        ),
+        subInvocations: [],
+      }),
+    ]);
+    const entry = withRootInvocation(makeAuthEntry(wallet), root);
+    expectInvalidInput(
+      () => assertWalletMutationIntent(entry, wallet),
+      "Authorized invocation target"
+    );
+  });
+
+  it("refuses a muxed upgrade operator with a ValidationError", () => {
+    const { entry, hostFunction } = adminEntry("upgrade", [
+      xdr.ScVal.scvBytes(Buffer.from("ab".repeat(32), "hex")),
+      muxedScVal,
+    ]);
+    expectInvalidInput(
+      () => assertWalletMutationIntent(entry, wallet, hostFunction, policy),
+      "Upgrade operator"
+    );
+  });
+
+  it("refuses a muxed credential address with a ValidationError", () => {
+    const entry = makeAuthEntry(wallet);
+    getAddressCredentials(entry.credentials()).address(muxed);
+    expectInvalidInput(() => getAuthEntryAddress(entry), "Auth entry credential address");
+  });
+
+  it("refuses muxed Delegated and External signer addresses with a ValidationError", () => {
+    const delegated = xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Delegated"), muxedScVal]);
+    const external = xdr.ScVal.scvVec([
+      xdr.ScVal.scvSymbol("External"),
+      muxedScVal,
+      xdr.ScVal.scvBytes(Buffer.alloc(65, 4)),
+    ]);
+    expectInvalidInput(() => parseSignerScVal(delegated), "Delegated signer address");
+    expectInvalidInput(() => parseSignerScVal(external), "External signer verifier address");
+
+    const { entry, hostFunction } = adminEntry("add_signer", [xdr.ScVal.scvU32(0), delegated]);
+    expectInvalidInput(
+      () => assertWalletMutationIntent(entry, wallet, hostFunction),
+      "Delegated signer address"
+    );
+  });
+
+  it("still accepts the wallet as the upgrade operator", () => {
+    const { entry, hostFunction } = adminEntry("upgrade", [
+      xdr.ScVal.scvBytes(Buffer.from("ab".repeat(32), "hex")),
+      walletScVal,
+    ]);
+    expect(() =>
+      assertWalletMutationIntent(entry, wallet, hostFunction, policy)
+    ).not.toThrow();
   });
 });
