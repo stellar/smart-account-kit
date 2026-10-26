@@ -32,6 +32,7 @@ import {
   DEFAULT_READ_TIMEOUT_SECONDS,
 } from "../constants.js";
 import { ContractError } from "../errors.js";
+import { scAddressToString } from "./auth-payload.js";
 
 type ContextRuleQueryClient = {
   get_context_rule: (args: { context_rule_id: number }) => Promise<AssembledTransaction<ContextRule>>;
@@ -103,7 +104,7 @@ export function buildInvocationContextTypes(
       const args = fn.contractFn();
       contexts.push({
         tag: "CallContract",
-        values: [Address.fromScAddress(args.contractAddress()).toString()],
+        values: [scAddressToString(args.contractAddress(), "Authorized invocation target")],
       });
     } else if (switchName.startsWith("sorobanAuthorizedFunctionTypeCreateContract")) {
       const contextType = extractCreateContractContextType(fn);
@@ -603,7 +604,7 @@ function extractCreateContractContextType(
       return {
         tag: "CreateContractExternalRef",
         values: [
-          Address.fromScAddress(ref.executableOwner()).toString(),
+          scAddressToString(ref.executableOwner(), "Executable reference owner"),
           typeof tag === "string" ? tag : Buffer.from(tag).toString("utf8"),
         ],
       };

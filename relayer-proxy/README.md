@@ -38,7 +38,7 @@ Body: { "xdr": "base64-signed-transaction-envelope" }
 `func` submissions may contain an allowlisted wallet invocation with V1 or V2 address credentials or an allowlisted direct token transfer. They may also contain one `createContractV2` function with one matching V1 deploy authorization entry. A deployment must contain one External WebAuthn signer and a credential-derived salt. Its verifier and every policy-map key must be contract addresses. The policy values are not checked.
 
 Direct token transfers require exactly one V1 or V2 address authorization entry from an allowlisted wallet.
-The wallet must match the transfer's `from` address.
+The transfer's `from` address must be a contract, and the wallet must match it.
 The authorization root must match the complete transfer call and contain no sub-invocations.
 The target must be a Stellar Asset Contract or a custom token in `ALLOWED_TOKEN_CONTRACT_IDS`.
 The proxy checks the contract instance through RPC to confirm the Stellar Asset Contract executable.

@@ -208,6 +208,27 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, i) => byte === right[i]);
 }
 
+/**
+ * The `C…` strkey of a contract address in request XDR. Every other address
+ * type gets a 403. This includes a CAP-84 muxed contract (`W…`), which
+ * `Address.fromScAddress` cannot convert and which would otherwise give a 500.
+ */
+function contractIdOf(address: xdr.ScAddress, message: string): string {
+  if (address.switch().name !== "scAddressTypeContract") {
+    throw new RequestError(message, 403);
+  }
+  return Address.fromScAddress(address).toString();
+}
+
+/** Like `contractIdOf`, but also accepts a `G…` account address. */
+function accountOrContractIdOf(address: xdr.ScAddress, message: string): string {
+  const type = address.switch().name;
+  if (type !== "scAddressTypeAccount" && type !== "scAddressTypeContract") {
+    throw new RequestError(message, 403);
+  }
+  return Address.fromScAddress(address).toString();
+}
+
 export function getClientIP(request: Request): string {
   return request.headers.get(IP_HEADERS.CF_CONNECTING_IP)?.trim() || UNKNOWN_IP;
 }
@@ -449,6 +470,9 @@ async function walletContractIsAllowed(
   env: Env,
   contractId: string
 ): Promise<boolean> {
+  // Only a `C…` contract can be a wallet. `new Contract(G…)` throws, which
+  // would give a retryable 503 for a request that can never succeed.
+  if (!StrKey.isValidContract(contractId)) return false;
   if (csvSet(env.ALLOWED_WALLET_CONTRACT_IDS).has(contractId)) return true;
   const hashes = allowedWasmHashes(env);
   if (hashes.size === 0) return false;
@@ -505,9 +529,10 @@ function validateAuthorizedInvocation(
       403
     );
   }
-  const invokedContract = Address.fromScAddress(
-    fn.contractFn().contractAddress()
-  ).toString();
+  const invokedContract = contractIdOf(
+    fn.contractFn().contractAddress(),
+    "Auth entry target must be a contract"
+  );
   if (invokedContract !== contractId) {
     throw new RequestError("Auth entry targets a non-allowlisted contract", 403);
   }
@@ -536,9 +561,10 @@ function validateDeployFunction(
   if (preimage.switch().name !== "contractIdPreimageFromAddress") {
     throw new RequestError("Deploy must use an address contract-id preimage", 403);
   }
-  const deployer = Address.fromScAddress(
-    preimage.fromAddress().address()
-  ).toString();
+  const deployer = accountOrContractIdOf(
+    preimage.fromAddress().address(),
+    "Deploy preimage address must be an account or contract"
+  );
   if (
     requireAllowedDeployer &&
     !csvSet(env.ALLOWED_DEPLOYER_ADDRESSES).has(deployer)
@@ -578,9 +604,10 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   }
   // The verifier is a contract. Refuse every other address arm, such as a
   // CAP-84 muxed contract, which the constructor traps on after the sponsor pays.
-  if (signer[1].address().switch().name !== "scAddressTypeContract") {
-    throw new RequestError("Deploy initial signer verifier must be a contract", 403);
-  }
+  contractIdOf(
+    signer[1].address(),
+    "Deploy initial signer verifier must be a contract"
+  );
   const keyData = signer[2].bytes();
   if (keyData.length <= 65 || keyData[0] !== 0x04) {
     throw new RequestError("Deploy initial signer has invalid WebAuthn key data", 403);
@@ -594,14 +621,13 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   // as a policy contract. Refuse every other key, such as a CAP-84 muxed
   // contract, which the constructor traps on after the sponsor pays. The
   // policy values stay opaque.
+  const policyKeyMessage = "Deploy policy key must be a contract address";
   for (const entry of args[1].map() ?? []) {
     const key = entry.key();
-    if (
-      key.switch().name !== "scvAddress" ||
-      key.address().switch().name !== "scAddressTypeContract"
-    ) {
-      throw new RequestError("Deploy policy key must be a contract address", 403);
+    if (key.switch().name !== "scvAddress") {
+      throw new RequestError(policyKeyMessage, 403);
     }
+    contractIdOf(key.address(), policyKeyMessage);
   }
 }
 
@@ -613,11 +639,12 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
  */
 function walletAuthAddress(entry: xdr.SorobanAuthorizationEntry): string {
   const credentials = entry.credentials();
+  const message = "Auth credential address must be an account or contract";
   switch (credentials.switch().name) {
     case "sorobanCredentialsAddress":
-      return Address.fromScAddress(credentials.address().address()).toString();
+      return accountOrContractIdOf(credentials.address().address(), message);
     case "sorobanCredentialsAddressV2":
-      return Address.fromScAddress(credentials.addressV2().address()).toString();
+      return accountOrContractIdOf(credentials.addressV2().address(), message);
   }
   throw new RequestError("Only address credentials are allowed for wallet auth", 403);
 }
@@ -627,7 +654,10 @@ async function validateWalletInvocation(
   invoke: xdr.InvokeContractArgs,
   auth: xdr.SorobanAuthorizationEntry[]
 ): Promise<void> {
-  const contractId = Address.fromScAddress(invoke.contractAddress()).toString();
+  const contractId = contractIdOf(
+    invoke.contractAddress(),
+    "Wallet invocation target must be a contract"
+  );
   if (!(await walletContractIsAllowed(env, contractId))) {
     throw new RequestError("Wallet contract is not allowlisted", 403);
   }
@@ -668,7 +698,12 @@ async function validateDirectTokenTransfer(
   if (args.length !== 3 || args[0].switch().name !== "scvAddress") {
     throw new RequestError("Token transfer has an invalid argument shape", 403);
   }
-  const from = Address.fromScAddress(args[0].address()).toString();
+  // A sponsored transfer must come from a wallet contract. A `G…` source
+  // otherwise reaches walletContractIsAllowed and gives a retryable 503.
+  const from = contractIdOf(
+    args[0].address(),
+    "Token transfer source must be a contract"
+  );
   for (const entry of auth) {
     const wallet = walletAuthAddress(entry);
     const root = entry.rootInvocation();
@@ -686,10 +721,10 @@ async function validateDirectTokenTransfer(
       );
     }
   }
-  if (invoke.contractAddress().switch().name !== "scAddressTypeContract") {
-    throw new RequestError("Token transfer target must be a contract", 403);
-  }
-  const token = Address.fromScAddress(invoke.contractAddress()).toString();
+  const token = contractIdOf(
+    invoke.contractAddress(),
+    "Token transfer target must be a contract"
+  );
   if (!(await tokenContractIsAllowed(env, token))) {
     throw new RequestError("Token contract is not allowed", 403);
   }
@@ -720,7 +755,10 @@ async function validateFuncSubmission(
     if (credentials.switch().name !== "sorobanCredentialsAddress") {
       throw new RequestError("Deploy requires V1 address credentials", 403);
     }
-    const signer = Address.fromScAddress(credentials.address().address()).toString();
+    const signer = accountOrContractIdOf(
+      credentials.address().address(),
+      "Deploy credential address must be an account or contract"
+    );
     const root = entry.rootInvocation();
     const rootFunction = root.function();
     if (
