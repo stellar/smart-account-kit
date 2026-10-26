@@ -66,6 +66,13 @@ const WALLET = Address.contract(new Uint8Array(32).fill(1)).toString();
 const OTHER_WALLET = Address.contract(new Uint8Array(32).fill(2)).toString();
 const TOKEN = Address.contract(new Uint8Array(32).fill(5)).toString();
 const WASM_HASH = "84".repeat(32);
+// A CAP-84 muxed contract address (`W...`) over the WALLET contract id.
+const MUXED_WALLET = xdr.ScAddress.scAddressTypeMuxedContract(
+  new xdr.MuxedContract({
+    id: xdr.Uint64.fromString("42"),
+    contractId: Address.fromString(WALLET).toScAddress().contractId(),
+  })
+);
 const MISSING_CHANNEL = Keypair.fromRawEd25519Seed(
   new Uint8Array(32).fill(9)
 ).publicKey();
@@ -198,7 +205,10 @@ const DEPLOY_CREDENTIAL_ID = Uint8Array.from(
   (character) => character.charCodeAt(0),
 );
 
-function deployConstructorArgs(extraSigner = false): xdr.ScVal[] {
+function deployConstructorArgs(
+  extraSigner = false,
+  verifier: xdr.ScAddress = Address.fromString(WALLET).toScAddress()
+): xdr.ScVal[] {
   const publicKey = new Uint8Array(65).fill(7);
   publicKey[0] = 0x04;
   const keyData = new Uint8Array(publicKey.length + DEPLOY_CREDENTIAL_ID.length);
@@ -206,7 +216,7 @@ function deployConstructorArgs(extraSigner = false): xdr.ScVal[] {
   keyData.set(DEPLOY_CREDENTIAL_ID, publicKey.length);
   const signer = xdr.ScVal.scvVec([
     xdr.ScVal.scvSymbol("External"),
-    Address.fromString(WALLET).toScVal(),
+    xdr.ScVal.scvAddress(verifier),
     xdr.ScVal.scvBytes(keyData),
   ]);
   return [
@@ -412,28 +422,108 @@ function unsupportedSubmission() {
   };
 }
 
+/**
+ * The one auth entry that RPC simulation returns for a deployment whose
+ * deployer is the transaction source, as in the kit's dedicated-deployer
+ * envelopes (checked against testnet).
+ */
+function sourceDeployAuth(
+  func: xdr.HostFunction,
+  opts: {
+    credentials?: xdr.SorobanCredentials;
+    subInvocations?: xdr.SorobanAuthorizedInvocation[];
+  } = {}
+): xdr.SorobanAuthorizationEntry {
+  return new xdr.SorobanAuthorizationEntry({
+    credentials:
+      opts.credentials ?? xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+    rootInvocation: new xdr.SorobanAuthorizedInvocation({
+      function:
+        xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+          func.createContractV2()
+        ),
+      subInvocations: opts.subInvocations ?? [],
+    }),
+  });
+}
+
+function contractInstanceKey(contract: string): xdr.LedgerKey {
+  return xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: Address.fromString(contract).toScAddress(),
+      key: xdr.ScVal.scvLedgerKeyContractInstance(),
+      durability: xdr.ContractDataDurability.persistent(),
+    })
+  );
+}
+
+// A deployment reads the account WASM and the verifier, and writes the new
+// account's instance. WALLET stands in for the new account address.
+const DEPLOY_READ_ONLY = [
+  xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({
+      hash: hexBytes(WASM_HASH) as ConstructorParameters<
+        typeof xdr.LedgerKeyContractCode
+      >[0]["hash"],
+    })
+  ),
+  contractInstanceKey(OTHER_WALLET),
+];
+const DEPLOY_READ_WRITE = [contractInstanceKey(WALLET)];
+
+/** Soroban data as simulation returns it for the deployment fixtures. */
+function deploySorobanData(
+  resourceFee = 5_000n,
+  footprint: { readOnly?: xdr.LedgerKey[]; readWrite?: xdr.LedgerKey[] } = {}
+): xdr.SorobanTransactionData {
+  return new SorobanDataBuilder()
+    .setReadOnly(footprint.readOnly ?? DEPLOY_READ_ONLY)
+    .setReadWrite(footprint.readWrite ?? DEPLOY_READ_WRITE)
+    .setResources(5_000_000, 10_000, 2_000)
+    .setResourceFee(resourceFee)
+    .build();
+}
+
+/** A successful simulation result in the shape that RpcServer returns. */
+function deploySimulation(
+  minResourceFee = 5_000n,
+  data = deploySorobanData(minResourceFee)
+) {
+  return {
+    transactionData: new SorobanDataBuilder(data),
+    minResourceFee: minResourceFee.toString(),
+    result: { auth: [], retval: xdr.ScVal.scvVoid() },
+    latestLedger: 100,
+  } as any;
+}
+
 function deployXdr(
   keypair = DEPLOYER_KEYPAIR,
   resourceFee = 5_000n,
   wasmHash = WASM_HASH,
   sign = true,
-  totalFee = "100"
+  totalFee = "100",
+  constructorArgs = deployConstructorArgs(),
+  authFor: (func: xdr.HostFunction) => xdr.SorobanAuthorizationEntry[] = (func) => [
+    sourceDeployAuth(func),
+  ],
+  sorobanData = deploySorobanData(resourceFee)
 ) {
+  const func = Operation.createCustomContract({
+    address: Address.fromString(keypair.publicKey()),
+    wasmHash: hexBytes(wasmHash),
+    salt: hash(DEPLOY_CREDENTIAL_ID),
+    constructorArgs,
+  })
+    .body()
+    .invokeHostFunctionOp()
+    .hostFunction();
   const transaction = new TransactionBuilder(new Account(keypair.publicKey(), "0"), {
     fee: totalFee,
     networkPassphrase: Networks.TESTNET,
   })
-    .addOperation(
-      Operation.createCustomContract({
-        address: Address.fromString(keypair.publicKey()),
-        wasmHash: hexBytes(wasmHash),
-        salt: hash(DEPLOY_CREDENTIAL_ID),
-        constructorArgs: deployConstructorArgs(),
-      })
-    )
-    .setSorobanData(
-      new SorobanDataBuilder().setResourceFee(resourceFee).build()
-    )
+    .addOperation(Operation.invokeHostFunction({ func, auth: authFor(func) }))
+    .setSorobanData(sorobanData)
     .setTimeout(30)
     .build();
   if (sign) transaction.sign(keypair);
@@ -473,10 +563,9 @@ beforeEach(() => {
   vi.spyOn(RpcServer.prototype, "getLedgerEntries").mockResolvedValue(
     contractInstance(TOKEN, xdr.ContractExecutable.contractExecutableStellarAsset())
   );
-  vi.spyOn(RpcServer.prototype, "simulateTransaction").mockResolvedValue({
-    transactionData: {},
-    minResourceFee: "5000",
-  } as any);
+  vi.spyOn(RpcServer.prototype, "simulateTransaction").mockResolvedValue(
+    deploySimulation()
+  );
   submitSorobanTransaction.mockResolvedValue({
     transactionId: "tx1",
     hash: "hash1",
@@ -972,6 +1061,7 @@ describe("signed xdr validation", () => {
     expect(res.status).toBe(200);
     expect(submitTransaction).toHaveBeenCalledWith({ xdr: xdrValue });
     expect(submitSorobanTransaction).not.toHaveBeenCalled();
+    expect(RpcServer.prototype.simulateTransaction).toHaveBeenCalledTimes(1);
   });
 
   it("rejects the shared deployer as an xdr transaction source", async () => {
@@ -1017,6 +1107,354 @@ describe("signed xdr validation", () => {
     expect(res.status).toBe(413);
     expect(kv.get).not.toHaveBeenCalled();
     expect(submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a deployment whose verifier is a muxed contract address", async () => {
+    const kv = seededKV();
+    const res = await post(
+      {
+        xdr: deployXdr(
+          DEPLOYER_KEYPAIR,
+          5_000n,
+          WASM_HASH,
+          true,
+          "100",
+          deployConstructorArgs(false, MUXED_WALLET)
+        ),
+      },
+      makeEnv({ allowedDeployers: SHARED_DEPLOYER, kv })
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({
+      success: false,
+      error: "Deploy initial signer verifier must be a contract",
+    });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+  });
+
+  async function expectXdrRejected(
+    xdrValue: string,
+    error: string,
+    status = 403,
+    opts: { simulated?: boolean; env?: Parameters<typeof makeEnv>[0] } = {}
+  ) {
+    const kv = seededKV();
+    const res = await post({ xdr: xdrValue }, makeEnv({ ...opts.env, kv }));
+    expect(res.status).toBe(status);
+    await expect(res.json()).resolves.toEqual({ success: false, error });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(RpcServer.prototype.simulateTransaction).toHaveBeenCalledTimes(
+      opts.simulated ? 1 : 0
+    );
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+  }
+
+  function policyArgs(key: xdr.ScVal): xdr.ScVal[] {
+    const [signers] = deployConstructorArgs();
+    return [
+      signers,
+      xdr.ScVal.scvMap([new xdr.ScMapEntry({ key, val: xdr.ScVal.scvVoid() })]),
+    ];
+  }
+
+  function deployXdrWith(opts: {
+    constructorArgs?: xdr.ScVal[];
+    authFor?: (func: xdr.HostFunction) => xdr.SorobanAuthorizationEntry[];
+  }) {
+    return deployXdr(
+      DEPLOYER_KEYPAIR,
+      5_000n,
+      WASM_HASH,
+      true,
+      "100",
+      opts.constructorArgs,
+      opts.authFor
+    );
+  }
+
+  it.each([
+    ["a muxed contract", xdr.ScVal.scvAddress(MUXED_WALLET)],
+    ["an account", xdr.ScVal.scvAddress(Address.fromString(DEPLOYER).toScAddress())],
+    ["not an address", xdr.ScVal.scvSymbol("policy")],
+  ])("rejects a deployment whose policy key is %s", async (_label, key) => {
+    await expectXdrRejected(
+      deployXdrWith({ constructorArgs: policyArgs(key) }),
+      "Deploy policy key must be a contract address"
+    );
+  });
+
+  it("refuses a muxed policy key in func mode too", async () => {
+    const body = deploySubmission();
+    const func = xdr.HostFunction.fromXDR(body.func, "base64");
+    func.createContractV2().constructorArgs(
+      policyArgs(xdr.ScVal.scvAddress(MUXED_WALLET))
+    );
+    const kv = seededKV();
+    const res = await post({ ...body, func: func.toXDR("base64") }, makeEnv({ kv }));
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({
+      success: false,
+      error: "Deploy policy key must be a contract address",
+    });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+  });
+
+  it("accepts a contract policy key with an opaque value", async () => {
+    const [signers] = deployConstructorArgs();
+    const xdrValue = deployXdrWith({
+      constructorArgs: [
+        signers,
+        xdr.ScVal.scvMap([
+          new xdr.ScMapEntry({
+            key: xdr.ScVal.scvAddress(Address.fromString(OTHER_WALLET).toScAddress()),
+            val: xdr.ScVal.scvVec([xdr.ScVal.scvU32(7), xdr.ScVal.scvSymbol("any")]),
+          }),
+        ]),
+      ],
+    });
+    const res = await post({ xdr: xdrValue });
+    expect(res.status).toBe(200);
+    expect(submitTransaction).toHaveBeenCalledWith({ xdr: xdrValue });
+  });
+
+  function addressCredentials(address: xdr.ScAddress) {
+    return xdr.SorobanCredentials.sorobanCredentialsAddress(
+      new xdr.SorobanAddressCredentials({
+        address,
+        nonce: xdr.Int64.fromString("1"),
+        signatureExpirationLedger: 100,
+        signature: xdr.ScVal.scvVoid(),
+      })
+    );
+  }
+
+  it.each([
+    ["a muxed contract", MUXED_WALLET],
+    ["the deployer account", Address.fromString(DEPLOYER).toScAddress()],
+  ])("rejects a deployment whose auth credential address is %s", async (_label, address) => {
+    await expectXdrRejected(
+      deployXdrWith({
+        authFor: (func) => [
+          sourceDeployAuth(func, { credentials: addressCredentials(address) }),
+        ],
+      }),
+      "Signed xdr deploy requires source-account credentials"
+    );
+  });
+
+  it("rejects a muxed credential next to a valid source-account entry", async () => {
+    await expectXdrRejected(
+      deployXdrWith({
+        authFor: (func) => [
+          sourceDeployAuth(func),
+          sourceDeployAuth(func, { credentials: addressCredentials(MUXED_WALLET) }),
+        ],
+      }),
+      "Deploy must contain exactly one auth entry"
+    );
+  });
+
+  it("requires exactly one deploy auth entry", async () => {
+    await expectXdrRejected(
+      deployXdrWith({ authFor: () => [] }),
+      "Deploy must contain exactly one auth entry"
+    );
+  });
+
+  it("requires the auth root to match the operation with no sub-invocations", async () => {
+    await expectXdrRejected(
+      deployXdrWith({
+        authFor: (func) => [
+          sourceDeployAuth(func, {
+            subInvocations: [
+              new xdr.SorobanAuthorizedInvocation({
+                function:
+                  xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+                    contractInvocation().invokeContract()
+                  ),
+                subInvocations: [],
+              }),
+            ],
+          }),
+        ],
+      }),
+      "Deploy auth does not exactly match the operation"
+    );
+    const otherFunc = xdr.HostFunction.fromXDR(
+      deploySubmission({ wasmHash: "99".repeat(32) }).func,
+      "base64"
+    );
+    await expectXdrRejected(
+      deployXdrWith({ authFor: () => [sourceDeployAuth(otherFunc)] }),
+      "Deploy auth does not exactly match the operation"
+    );
+  });
+
+  it("simulates the signed envelope before the API-key read", async () => {
+    const order: string[] = [];
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockImplementationOnce(
+      async () => {
+        order.push("simulated");
+        return deploySimulation();
+      }
+    );
+    const kv = seededKV(() => order.push("key"));
+    const xdrValue = deployXdr();
+    const res = await post({ xdr: xdrValue }, makeEnv({ kv }));
+    expect(res.status).toBe(200);
+    expect(order).toEqual(["simulated", "key"]);
+    const simulated = vi.mocked(RpcServer.prototype.simulateTransaction).mock
+      .calls[0][0] as { toXDR(): string };
+    expect(simulated.toXDR()).toBe(xdrValue);
+  });
+
+  it("rejects a deployment whose policy contract does not exist (failed simulation)", async () => {
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({
+      error: "HostError: Error(Context, InvalidAction)",
+      events: [],
+      latestLedger: 100,
+    } as any);
+    await expectXdrRejected(
+      deployXdrWith({
+        constructorArgs: policyArgs(
+          xdr.ScVal.scvAddress(Address.fromString(OTHER_WALLET).toScAddress())
+        ),
+      }),
+      "Submission simulation failed",
+      400,
+      { simulated: true }
+    );
+  });
+
+  it("rejects a deployment whose simulation needs a restore", async () => {
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({
+      transactionData: {},
+      minResourceFee: "5000",
+      result: { auth: [], retval: xdr.ScVal.scvVoid() },
+      restorePreamble: { minResourceFee: "100", transactionData: {} },
+    } as any);
+    await expectXdrRejected(deployXdr(), "Submission simulation failed", 400, {
+      simulated: true,
+    });
+  });
+
+  it("applies the simulated fee ceiling to signed xdr", async () => {
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({
+      transactionData: {},
+      minResourceFee: "1001",
+    } as any);
+    await expectXdrRejected(
+      deployXdr(DEPLOYER_KEYPAIR, 1000n),
+      "Resource fee exceeds configured maximum",
+      413,
+      { simulated: true, env: { maxFee: "1000" } }
+    );
+  });
+
+  function deployXdrDeclaring(sorobanData: xdr.SorobanTransactionData) {
+    return deployXdr(
+      DEPLOYER_KEYPAIR,
+      sorobanData.resourceFee().toBigInt(),
+      WASM_HASH,
+      true,
+      "100",
+      undefined,
+      undefined,
+      sorobanData
+    );
+  }
+
+  it("rejects an empty footprint with a fee at the ceiling (inflated trap)", async () => {
+    // Simulation needs a footprint and 5,000,000 instructions. The envelope
+    // declares no footprint, no resources, and the full resource-fee ceiling.
+    await expectXdrRejected(
+      deployXdrDeclaring(new SorobanDataBuilder().setResourceFee(1_000_000n).build()),
+      "Declared resource fee is too far above the simulated minimum",
+      400,
+      { simulated: true }
+    );
+  });
+
+  it("rejects an empty footprint even with a fee within the margin", async () => {
+    await expectXdrRejected(
+      deployXdrDeclaring(new SorobanDataBuilder().setResourceFee(5_000n).build()),
+      "Declared footprint is missing a simulated read-write key",
+      400,
+      { simulated: true }
+    );
+  });
+
+  it.each([
+    [
+      "read-only",
+      { readOnly: DEPLOY_READ_ONLY.slice(1) },
+      "Declared footprint is missing a simulated read-only key",
+    ],
+    [
+      "read-write",
+      { readWrite: [], readOnly: [...DEPLOY_READ_ONLY, ...DEPLOY_READ_WRITE] },
+      "Declared footprint is missing a simulated read-write key",
+    ],
+  ])("rejects a footprint that lacks one simulated %s key", async (_label, footprint, error) => {
+    await expectXdrRejected(
+      deployXdrDeclaring(deploySorobanData(5_000n, footprint)),
+      error,
+      400,
+      { simulated: true }
+    );
+  });
+
+  it("accepts a simulated read-only key that the envelope lists as read-write", async () => {
+    const xdrValue = deployXdrDeclaring(
+      deploySorobanData(5_000n, {
+        readOnly: [],
+        readWrite: [...DEPLOY_READ_ONLY, ...DEPLOY_READ_WRITE],
+      })
+    );
+    const res = await post({ xdr: xdrValue });
+    expect(res.status).toBe(200);
+    expect(submitTransaction).toHaveBeenCalledWith({ xdr: xdrValue });
+  });
+
+  it("bounds the declared resource fee at 2 * minResourceFee + 10,000", async () => {
+    // A declared fee a little below the new minimum is normal drift.
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce(
+      deploySimulation(5_002n)
+    );
+    const below = await post({ xdr: deployXdr(DEPLOYER_KEYPAIR, 5_000n) });
+    expect(below.status).toBe(200);
+
+    const atBound = await post({ xdr: deployXdr(DEPLOYER_KEYPAIR, 20_000n) });
+    expect(atBound.status).toBe(200);
+    expect(submitTransaction).toHaveBeenCalledTimes(2);
+    submitTransaction.mockClear();
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockClear();
+
+    await expectXdrRejected(
+      deployXdr(DEPLOYER_KEYPAIR, 20_001n),
+      "Declared resource fee is too far above the simulated minimum",
+      400,
+      { simulated: true }
+    );
+  });
+
+  it("rejects a simulation without resource data", async () => {
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({
+      transactionData: {},
+      minResourceFee: "5000",
+    } as any);
+    await expectXdrRejected(
+      deployXdr(),
+      "Submission simulation returned no resource data",
+      400,
+      { simulated: true }
+    );
   });
 
   it("enforces the embedded xdr total-fee ceiling", async () => {

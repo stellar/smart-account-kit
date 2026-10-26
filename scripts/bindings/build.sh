@@ -153,7 +153,9 @@ echo -e "${YELLOW}Patching package.json...${NC}"
 
 cd "$BINDINGS_DIR"
 
-STELLAR_SDK_PEER=$(node -p "require('$KIT_DIR/package.json').peerDependencies['@stellar/stellar-sdk']")
+# The kit lists the SDK only in `dependencies`, so pnpm gives the kit and the
+# bindings their own SDK 16 copy when an app installs another major version.
+STELLAR_SDK_PEER=$(node -p "require('$KIT_DIR/package.json').dependencies['@stellar/stellar-sdk']")
 
 node -e "
 const fs = require('fs');

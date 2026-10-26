@@ -35,7 +35,7 @@ POST /
 Body: { "func": "base64-encoded-func", "auth": ["base64-auth-entry", ...] }
 Body: { "xdr": "base64-signed-transaction-envelope" }
 ```
-`func` submissions may contain an allowlisted wallet invocation with V1 or V2 address credentials or an allowlisted direct token transfer. They may also contain one `createContractV2` function with one matching V1 deploy authorization entry. A deployment must contain one External WebAuthn signer and a credential-derived salt.
+`func` submissions may contain an allowlisted wallet invocation with V1 or V2 address credentials or an allowlisted direct token transfer. They may also contain one `createContractV2` function with one matching V1 deploy authorization entry. A deployment must contain one External WebAuthn signer and a credential-derived salt. Its verifier and every policy-map key must be contract addresses. The policy values are not checked.
 
 Direct token transfers require exactly one V1 or V2 address authorization entry from an allowlisted wallet.
 The wallet must match the transfer's `from` address.
@@ -45,6 +45,16 @@ The proxy checks the contract instance through RPC to confirm the Stellar Asset 
 It rejects the transfer if this check fails or RPC returns an error.
 
 Signed `xdr` accepts one source-signed dedicated-deployer `createContractV2` operation. Its source must equal its preimage deployer. The shared deterministic deployer cannot be an XDR source.
+The operation must contain exactly one authorization entry with source-account credentials.
+Its root must match the operation's `createContractV2` and contain no sub-invocations.
+The proxy simulates the signed envelope before any API key access, as it does for `func` submissions.
+It rejects a failed simulation, a simulation that needs a restore, and a resource fee above the maximum.
+Simulation ignores the footprint and resources that the envelope declares, so the proxy compares them with the simulated data.
+The declared footprint must contain every simulated key. A key that the envelope declares as read-write also satisfies a simulated read-only key.
+The declared resource fee must be at most `2 * minResourceFee + 10000` stroops. This margin covers fee drift between the client's simulation and the proxy's simulation.
+The proxy does not compare instruction or byte counts, because they drift between two simulations.
+An envelope that declares too few resources can still fail on chain after the sponsor pays.
+`MAX_TOTAL_FEE_STROOPS`, the fee margin, and the rate limits bound that loss for each request.
 
 These checks constrain relayer spending. They do not prove wallet ownership. The SDK performs wallet-birth, code, signer, and passkey verification before connection.
 

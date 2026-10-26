@@ -59,7 +59,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
-    "@stellar/stellar-sdk": "^16.3.0",
+    "@stellar/stellar-sdk": "^16.4.1",
     "base64url": "^3.0.1",
     "smart-account-kit-bindings": "workspace:*"
   },
@@ -77,8 +77,7 @@
   },
   "packageManager": "pnpm@10.33.0",
   "peerDependencies": {
-    "@creit-tech/stellar-wallets-kit": ">=2.1.0 <2.6.0",
-    "@stellar/stellar-sdk": "^16.3.0"
+    "@creit-tech/stellar-wallets-kit": ">=2.1.0 <2.6.0"
   },
   "peerDependenciesMeta": {
     "@creit-tech/stellar-wallets-kit": {
