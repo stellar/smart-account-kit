@@ -469,6 +469,9 @@ async function walletContractIsAllowed(
   env: Env,
   contractId: string
 ): Promise<boolean> {
+  // Only a `C…` contract can be a wallet. `new Contract(G…)` throws, which
+  // would give a retryable 503 for a request that can never succeed.
+  if (!StrKey.isValidContract(contractId)) return false;
   if (csvSet(env.ALLOWED_WALLET_CONTRACT_IDS).has(contractId)) return true;
   const hashes = allowedWasmHashes(env);
   if (hashes.size === 0) return false;
@@ -600,9 +603,10 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   }
   // The verifier is a contract. Refuse every other address arm, such as a
   // CAP-84 muxed contract, which the constructor traps on after the sponsor pays.
-  if (signer[1].address().switch().name !== "scAddressTypeContract") {
-    throw new RequestError("Deploy initial signer verifier must be a contract", 403);
-  }
+  contractIdOf(
+    signer[1].address(),
+    "Deploy initial signer verifier must be a contract"
+  );
   const keyData = signer[2].bytes();
   if (keyData.length <= 65 || keyData[0] !== 0x04) {
     throw new RequestError("Deploy initial signer has invalid WebAuthn key data", 403);
@@ -616,14 +620,13 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   // as a policy contract. Refuse every other key, such as a CAP-84 muxed
   // contract, which the constructor traps on after the sponsor pays. The
   // policy values stay opaque.
+  const policyKeyMessage = "Deploy policy key must be a contract address";
   for (const entry of args[1].map() ?? []) {
     const key = entry.key();
-    if (
-      key.switch().name !== "scvAddress" ||
-      key.address().switch().name !== "scAddressTypeContract"
-    ) {
-      throw new RequestError("Deploy policy key must be a contract address", 403);
+    if (key.switch().name !== "scvAddress") {
+      throw new RequestError(policyKeyMessage, 403);
     }
+    contractIdOf(key.address(), policyKeyMessage);
   }
 }
 
@@ -694,9 +697,11 @@ async function validateDirectTokenTransfer(
   if (args.length !== 3 || args[0].switch().name !== "scvAddress") {
     throw new RequestError("Token transfer has an invalid argument shape", 403);
   }
-  const from = accountOrContractIdOf(
+  // A sponsored transfer must come from a wallet contract. A `G…` source
+  // otherwise reaches walletContractIsAllowed and gives a retryable 503.
+  const from = contractIdOf(
     args[0].address(),
-    "Token transfer source must be an account or contract"
+    "Token transfer source must be a contract"
   );
   for (const entry of auth) {
     const wallet = walletAuthAddress(entry);

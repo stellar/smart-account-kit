@@ -931,6 +931,17 @@ describe("wallet invocation validation", () => {
     expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
   });
 
+  it("rejects a transfer whose source and credential are the same account with a 403", async () => {
+    // Before, `new Contract(G…)` threw in walletContractIsAllowed and gave a
+    // retryable 503 for a request that can never succeed.
+    await expectRejected(
+      transferSubmission({ wallet: DEPLOYER }),
+      "Token transfer source must be a contract"
+    );
+    expect(RpcServer.prototype.getLedgerEntries).not.toHaveBeenCalled();
+    expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejects a transfer whose target is an account, not a contract", async () => {
     await expectRejected(
       transferSubmission({ token: DEPLOYER }),
@@ -1090,7 +1101,7 @@ describe("CAP-84 muxed contract addresses", () => {
         withFunc(transferSubmission(), (func) => {
           func.invokeContract().args()[0] = muxedArg;
         }),
-      "Token transfer source must be an account or contract",
+      "Token transfer source must be a contract",
     ],
     [
       "transfer token target",
@@ -1113,6 +1124,38 @@ describe("CAP-84 muxed contract addresses", () => {
     expect(kv.get).not.toHaveBeenCalled();
     expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
     expect(submitSorobanTransaction).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses a muxed preimage address in a signed xdr deploy with a 403", async () => {
+    const func = Operation.createCustomContract({
+      address: Address.fromString(DEPLOYER),
+      wasmHash: hexBytes(WASM_HASH),
+      salt: hash(DEPLOY_CREDENTIAL_ID),
+      constructorArgs: deployConstructorArgs(),
+    })
+      .body()
+      .invokeHostFunctionOp()
+      .hostFunction();
+    func.createContractV2().contractIdPreimage().fromAddress().address(MUXED_WALLET);
+    const transaction = new TransactionBuilder(new Account(DEPLOYER, "0"), {
+      fee: "100",
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(Operation.invokeHostFunction({ func, auth: [sourceDeployAuth(func)] }))
+      .setSorobanData(new SorobanDataBuilder().setResourceFee(5_000n).build())
+      .setTimeout(30)
+      .build();
+    transaction.sign(DEPLOYER_KEYPAIR);
+    const kv = seededKV();
+    const res = await post({ xdr: transaction.toXDR() }, makeEnv({ kv }));
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({
+      success: false,
+      error: "Deploy preimage address must be an account or contract",
+    });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
     expect(submitTransaction).not.toHaveBeenCalled();
   });
 
