@@ -973,6 +973,135 @@ describe("wallet invocation validation", () => {
   });
 });
 
+describe("CAP-84 muxed contract addresses", () => {
+  function withFunc(
+    body: { func: string; auth: string[] },
+    change: (func: xdr.HostFunction) => void
+  ) {
+    const func = xdr.HostFunction.fromXDR(body.func, "base64");
+    change(func);
+    return { ...body, func: func.toXDR("base64") };
+  }
+
+  function withAuth(
+    body: { func: string; auth: string[] },
+    change: (entry: xdr.SorobanAuthorizationEntry) => void
+  ) {
+    const entry = xdr.SorobanAuthorizationEntry.fromXDR(body.auth[0], "base64");
+    change(entry);
+    return { ...body, auth: [entry.toXDR("base64")] };
+  }
+
+  const muxedArg = xdr.ScVal.scvAddress(MUXED_WALLET);
+
+  const cases: Array<[string, () => unknown, string]> = [
+    [
+      "sub-invocation target",
+      () =>
+        withAuth(walletSubmission(), (entry) =>
+          entry.rootInvocation().subInvocations([
+            new xdr.SorobanAuthorizedInvocation({
+              function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+                new xdr.InvokeContractArgs({
+                  contractAddress: MUXED_WALLET,
+                  functionName: "execute",
+                  args: [],
+                })
+              ),
+              subInvocations: [],
+            }),
+          ])
+        ),
+      "Auth entry target must be a contract",
+    ],
+    [
+      "deploy preimage address",
+      () =>
+        withFunc(deploySubmission(), (func) =>
+          func.createContractV2().contractIdPreimage().fromAddress().address(MUXED_WALLET)
+        ),
+      "Deploy preimage address must be an account or contract",
+    ],
+    [
+      "deploy credential address",
+      () =>
+        withAuth(deploySubmission(), (entry) =>
+          entry.credentials().address().address(MUXED_WALLET)
+        ),
+      "Deploy credential address must be an account or contract",
+    ],
+    [
+      "V1 wallet credential address",
+      () =>
+        withAuth(walletSubmission({ v1Credentials: true }), (entry) =>
+          entry.credentials().address().address(MUXED_WALLET)
+        ),
+      "Auth credential address must be an account or contract",
+    ],
+    [
+      "V2 wallet credential address",
+      () =>
+        withAuth(walletSubmission(), (entry) =>
+          entry.credentials().addressV2().address(MUXED_WALLET)
+        ),
+      "Auth credential address must be an account or contract",
+    ],
+    [
+      "invoked wallet contract",
+      () =>
+        withFunc(walletSubmission(), (func) =>
+          func.invokeContract().contractAddress(MUXED_WALLET)
+        ),
+      "Wallet invocation target must be a contract",
+    ],
+    [
+      "transfer source",
+      () =>
+        withFunc(transferSubmission(), (func) => {
+          func.invokeContract().args()[0] = muxedArg;
+        }),
+      "Token transfer source must be an account or contract",
+    ],
+    [
+      "transfer token target",
+      () =>
+        withAuth(
+          withFunc(transferSubmission(), (func) =>
+            func.invokeContract().contractAddress(MUXED_WALLET)
+          ),
+          (entry) => entry.rootInvocation().function().contractFn().contractAddress(MUXED_WALLET)
+        ),
+      "Token transfer target must be a contract",
+    ],
+  ];
+
+  it.each(cases)("refuses a muxed %s with a 403", async (_site, makeBody, error) => {
+    const kv = seededKV();
+    const res = await post(makeBody(), makeEnv({ kv }));
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ success: false, error });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(RpcServer.prototype.simulateTransaction).not.toHaveBeenCalled();
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a transfer whose opaque `to` argument is a muxed contract", async () => {
+    const body = transferSubmission();
+    const toMuxed = withAuth(
+      withFunc(body, (func) => {
+        func.invokeContract().args()[1] = muxedArg;
+      }),
+      (entry) => {
+        entry.rootInvocation().function().contractFn().args()[1] = muxedArg;
+      }
+    );
+    const res = await post(toMuxed);
+    expect(res.status).toBe(200);
+    expect(submitSorobanTransaction).toHaveBeenCalledWith(toMuxed);
+  });
+});
+
 describe("signed xdr validation", () => {
   it("accepts a source-signed dedicated-deployer deployment", async () => {
     const xdrValue = deployXdr();
