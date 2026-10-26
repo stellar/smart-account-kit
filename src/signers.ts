@@ -283,16 +283,18 @@ export interface SignAuthEntryWithSignersOptions {
  * facilitator.settle(signed.toXDR("base64"));
  * ```
  */
-export function signAuthEntryWithSigners(
-  entry: string,
-  signers: readonly AuthDigestSigner[],
-  options: SignAuthEntryWithSignersOptions
-): Promise<string>;
+// The object overload comes first: TypeScript resolves an `any` argument
+// against the first overload, so existing callers keep the object type.
 export function signAuthEntryWithSigners(
   entry: xdr.SorobanAuthorizationEntry,
   signers: readonly AuthDigestSigner[],
   options: SignAuthEntryWithSignersOptions
 ): Promise<xdr.SorobanAuthorizationEntry>;
+export function signAuthEntryWithSigners(
+  entry: string,
+  signers: readonly AuthDigestSigner[],
+  options: SignAuthEntryWithSignersOptions
+): Promise<string>;
 export function signAuthEntryWithSigners(
   entry: AuthEntryInput,
   signers: readonly AuthDigestSigner[],

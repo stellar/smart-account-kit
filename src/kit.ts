@@ -1341,14 +1341,16 @@ export class SmartAccountKit {
    * @returns The signed authorization entry, in the same form as `entry`
    * @throws {ValidationError} If `entry` is not a valid authorization entry
    */
-  signAuthEntry(
-    entry: string,
-    options?: SignAuthEntryPublicOptions
-  ): Promise<string>;
+  // The object overload comes first: TypeScript resolves an `any` argument
+  // against the first overload, so existing callers keep the object type.
   signAuthEntry(
     entry: xdr.SorobanAuthorizationEntry,
     options?: SignAuthEntryPublicOptions
   ): Promise<xdr.SorobanAuthorizationEntry>;
+  signAuthEntry(
+    entry: string,
+    options?: SignAuthEntryPublicOptions
+  ): Promise<string>;
   signAuthEntry(
     entry: AuthEntryInput,
     options?: SignAuthEntryPublicOptions
