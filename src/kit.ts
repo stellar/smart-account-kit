@@ -157,6 +157,7 @@ import {
   resolveContextRuleIdsForEntry,
 } from "./kit/context-rules.js";
 import { normalizeSignatureExpirationLedger } from "./kit/auth-payload.js";
+import { toAuthEntry, type AuthEntryInput } from "./kit/auth-entry-input.js";
 import {
   assertKnownAuthDigestScheme,
   assertUpgradeTarget,
@@ -179,6 +180,13 @@ import {
 type ConnectedContextRuleCache = {
   rules?: Promise<ContextRule[]>;
   signer?: Promise<ContractSigner>;
+};
+
+/** Options for {@link SmartAccountKit.signAuthEntry}. */
+type SignAuthEntryPublicOptions = {
+  credentialId?: string;
+  expiration?: number;
+  contextRuleIds?: number[];
 };
 
 
@@ -1323,23 +1331,40 @@ export class SmartAccountKit {
    * - `signAndSubmitAdmin()` for an account mutation
    * - `multiSigners.operation()` or `multiSigners.adminOperation()` for multiple signers
    *
-   * @param entry - The authorization entry to sign
+   * The entry can be a base64-encoded `SorobanAuthorizationEntry` XDR string
+   * or an `xdr.SorobanAuthorizationEntry`. A string input returns a base64
+   * string, so an app on another Stellar SDK major (for example SDK 17) can
+   * pass `entry.toXdr("base64")` and decode the result with its own SDK.
+   *
+   * @param entry - The authorization entry to sign (base64 XDR or XDR object)
    * @param options - Signing options (credentialId, expiration, required contextRuleIds)
-   * @returns The signed authorization entry
+   * @returns The signed authorization entry, in the same form as `entry`
+   * @throws {ValidationError} If `entry` is not a valid authorization entry
    */
-  async signAuthEntry(
+  // The object overload comes first: TypeScript resolves an `any` argument
+  // against the first overload, so existing callers keep the object type.
+  signAuthEntry(
     entry: xdr.SorobanAuthorizationEntry,
-    options?: {
-      credentialId?: string;
-      expiration?: number;
-      contextRuleIds?: number[];
-    }
-  ): Promise<xdr.SorobanAuthorizationEntry> {
-    return this.signAuthEntryInternal(entry, {
+    options?: SignAuthEntryPublicOptions
+  ): Promise<xdr.SorobanAuthorizationEntry>;
+  signAuthEntry(
+    entry: string,
+    options?: SignAuthEntryPublicOptions
+  ): Promise<string>;
+  signAuthEntry(
+    entry: AuthEntryInput,
+    options?: SignAuthEntryPublicOptions
+  ): Promise<string | xdr.SorobanAuthorizationEntry>;
+  async signAuthEntry(
+    entry: AuthEntryInput,
+    options?: SignAuthEntryPublicOptions
+  ): Promise<string | xdr.SorobanAuthorizationEntry> {
+    const signed = await this.signAuthEntryInternal(toAuthEntry(entry), {
       credentialId: options?.credentialId,
       expiration: options?.expiration,
       contextRuleIds: options?.contextRuleIds,
     });
+    return typeof entry === "string" ? signed.toXDR("base64") : signed;
   }
 
   /** @internal */

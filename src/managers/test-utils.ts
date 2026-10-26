@@ -54,3 +54,31 @@ export function makeAddressAuthEntry(contractId: string): xdr.SorobanAuthorizati
     }),
   });
 }
+
+/**
+ * A base64 `SorobanAuthorizationEntry` built with @stellar/stellar-sdk 17.4.0
+ * only (`xdr.SorobanAuthorizationEntry.fromJson(...).toXdr("base64")`): the
+ * smart account `makeContract(1)` authorizes `transfer(account, makeContract(3),
+ * 1_000_000)` on the token `makeContract(2)` with nonce 42 and no expiration.
+ */
+export const SDK17_TRANSFER_ENTRY_BASE64 =
+  "AAAAAQAAAAHwNp/MwcLIYRcZeueEMnItMe1gDQ47b2vWkI/Xn5HXkwAAAAAAAAAqAAAAAAAAAAEAAAAAAAAAAQasx0lVCs1iO5Iejv9EjSBsYlZWm17++jsqPqNed00WAAAACHRyYW5zZmVyAAAAAwAAABIAAAAB8DafzMHCyGEXGXrnhDJyLTHtYA0OO29r1pCP15+R15MAAAASAAAAAbMne7PWqe6GX5i3/AdH+5OaerH5Fm0eLT5QIt3/i9aVAAAACgAAAAAAAAAAAAAAAAAPQkAAAAAA";
+
+/**
+ * Stands in for an XDR object from another copy of @stellar/stellar-sdk (for
+ * example SDK 17). It has no SDK 16 accessor methods; only `toXDR()` bytes.
+ */
+export class ForeignXdrObject {
+  // SDK 17 exposes union arms as properties, not as `.credentials()` methods.
+  readonly credentials = { type: "sorobanCredentialsAddress" };
+
+  constructor(private readonly bytes: Uint8Array) {}
+
+  toXDR(): Uint8Array {
+    return new Uint8Array(this.bytes);
+  }
+
+  toXdr(): Uint8Array {
+    return this.toXDR();
+  }
+}

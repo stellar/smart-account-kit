@@ -10,6 +10,11 @@ import {
 import { SmartAccountKit } from "./kit";
 import { SmartAccountErrorCode, ValidationError } from "./errors";
 import { buildAuthDigestSchemeTable } from "./kit/auth-digest-scheme";
+import {
+  ForeignXdrObject,
+  makeAddressAuthEntry,
+  makeContract,
+} from "./managers/test-utils";
 
 const LEGACY_HASH = "1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a";
 const PATCHED_LEGACY_HASH = "203e2970d9fed24fb5fca2e0aeebb3c1e4648b76dd6601567178e6474c9fec6f";
@@ -444,6 +449,122 @@ describe("SmartAccountKit top-level surface", () => {
       expiration: 123,
       contextRuleIds: [4],
     });
+  });
+
+  it("signAuthEntry accepts base64 XDR and returns base64 XDR", async () => {
+    const entry = makeAuthEntry();
+    // Stand-in for the WebAuthn path: mark the entry as signed.
+    const signAuthEntryInternal = vi.fn(async (input: xdr.SorobanAuthorizationEntry) => {
+      const signed = xdr.SorobanAuthorizationEntry.fromXDR(input.toXDR());
+      signed.credentials().address().signatureExpirationLedger(777);
+      return signed;
+    });
+    const kit = { signAuthEntryInternal } as unknown as SmartAccountKit;
+    const options = { credentialId: "cred-1", expiration: 777, contextRuleIds: [4] };
+
+    const fromString = await SmartAccountKit.prototype.signAuthEntry.call(
+      kit,
+      entry.toXDR("base64"),
+      options
+    );
+    const fromObject = await SmartAccountKit.prototype.signAuthEntry.call(kit, entry, options);
+
+    expect(typeof fromString).toBe("string");
+    expect(fromObject).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
+    expect(fromString).toBe(fromObject.toXDR("base64"));
+    // The decoded string reaches the signer as the kit's own XDR type.
+    const [decodedInput, decodedOptions] = signAuthEntryInternal.mock.calls[0];
+    expect(decodedInput).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
+    expect(decodedInput.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(decodedOptions).toEqual(options);
+  });
+
+  it("signAuthEntry rejects malformed base64 before it asks for a passkey", async () => {
+    const signAuthEntryInternal = vi.fn(async (entry) => entry);
+
+    const result = SmartAccountKit.prototype.signAuthEntry.call(
+      { signAuthEntryInternal } as unknown as SmartAccountKit,
+      "not base64!!",
+      { contextRuleIds: [4] }
+    );
+
+    await expect(result).rejects.toBeInstanceOf(ValidationError);
+    await expect(result).rejects.toMatchObject({
+      code: SmartAccountErrorCode.INVALID_INPUT,
+    });
+    expect(signAuthEntryInternal).not.toHaveBeenCalled();
+  });
+
+  it("signAuthEntry re-decodes a foreign-SDK XDR object and returns a kit object", async () => {
+    const entry = makeAuthEntry();
+    const signAuthEntryInternal = vi.fn(
+      async (input: xdr.SorobanAuthorizationEntry) =>
+        xdr.SorobanAuthorizationEntry.fromXDR(input.toXDR())
+    );
+    const kit = { signAuthEntryInternal } as unknown as SmartAccountKit;
+    const foreign = new ForeignXdrObject(entry.toXDR());
+
+    const result = await SmartAccountKit.prototype.signAuthEntry.call(
+      kit,
+      foreign as unknown as xdr.SorobanAuthorizationEntry,
+      { contextRuleIds: [4] }
+    );
+
+    expect(signAuthEntryInternal).toHaveBeenCalledOnce();
+    const [decodedInput] = signAuthEntryInternal.mock.calls[0];
+    expect(decodedInput).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
+    expect(decodedInput).not.toBe(foreign);
+    expect(decodedInput.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(typeof result).toBe("object");
+    expect(result).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
+    expect((result as xdr.SorobanAuthorizationEntry).toXDR("base64")).toBe(
+      entry.toXDR("base64")
+    );
+  });
+
+  it("signAuthEntry refuses another wallet's entry the same way for every input form", async () => {
+    // A real kit: signAuthEntry runs the real signAuthEntryInternal and the
+    // WebAuthn-ops refusal, not a stub.
+    const connected = makeContract(1);
+    const kit = new SmartAccountKit({
+      rpcUrl: "https://rpc.example",
+      networkPassphrase: Networks.TESTNET,
+      accountWasmHash: PREIMAGE_HASH,
+      webauthnVerifierAddress: makeContract(9),
+    });
+    Object.assign(kit, { _contractId: connected, _credentialId: "cred-1", wallet: {} });
+    const startAuthentication = vi.spyOn((kit as any).webAuthn, "startAuthentication");
+    const otherWalletEntry = makeAddressAuthEntry(makeContract(2));
+    const options = { credentialId: "cred-1", contextRuleIds: [0] };
+
+    const inputs = {
+      object: otherWalletEntry,
+      base64: otherWalletEntry.toXDR("base64"),
+      foreign: new ForeignXdrObject(otherWalletEntry.toXDR()),
+    };
+    const errors: Record<string, unknown> = {};
+    for (const [form, input] of Object.entries(inputs)) {
+      errors[form] = await kit
+        .signAuthEntry(input as xdr.SorobanAuthorizationEntry, options)
+        .then(
+          () => {
+            throw new Error(`Expected the ${form} entry to be refused`);
+          },
+          (error: unknown) => error
+        );
+    }
+
+    for (const error of Object.values(errors)) {
+      expect(error).toBeInstanceOf(ValidationError);
+      expect(error).toMatchObject({
+        code: SmartAccountErrorCode.INVALID_INPUT,
+        message: "The authorization entry is not for the connected smart account",
+        context: { contractId: connected },
+      });
+    }
+    expect(errors.base64).toEqual(errors.object);
+    expect(errors.foreign).toEqual(errors.object);
+    expect(startAuthentication).not.toHaveBeenCalled();
   });
 
   it("discovery methods pass through to the configured indexer", async () => {

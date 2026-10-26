@@ -18,7 +18,12 @@ import {
 import { SmartAccountErrorCode, ValidationError } from "./errors";
 import { buildInvocationContextTypes } from "./kit/context-rules";
 import { signersEqual } from "./signer-utils";
-import { makeAddressAuthEntry, makeContract } from "./managers/test-utils";
+import {
+  ForeignXdrObject,
+  SDK17_TRANSFER_ENTRY_BASE64,
+  makeAddressAuthEntry,
+  makeContract,
+} from "./managers/test-utils";
 
 const TESTNET = "Test SDF Network ; September 2015";
 const SCHEMES = AUTH_DIGEST_SCHEMES;
@@ -608,5 +613,156 @@ describe("CAP-84 muxed contract addresses on the sign-only path", () => {
       message:
         "Authorized invocation target has an unsupported address type: scAddressTypeMuxedContract",
     });
+  });
+});
+
+describe("base64 XDR input (cross-SDK boundary)", () => {
+  const verifier = makeContract(20);
+  const keypairA = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 12));
+  const keypairB = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 13));
+  const signerA = new Ed25519Signer(keypairA, verifier);
+  const signerB = new Ed25519Signer(keypairB, verifier);
+
+  for (const scheme of SCHEMES) {
+    it(`computeEntryAuthDigest gives the same digest for a string and an object (${scheme})`, () => {
+      const entry = makeAddressAuthEntry(makeContract(21));
+      const fromString = computeEntryAuthDigest(
+        TESTNET,
+        entry.toXDR("base64"),
+        500,
+        [3],
+        scheme
+      );
+      const fromObject = computeEntryAuthDigest(TESTNET, entry, 500, [3], scheme);
+
+      expect(fromString.signaturePayload).toEqual(fromObject.signaturePayload);
+      expect(fromString.authDigest).toEqual(fromObject.authDigest);
+      expect(fromString.delegatedAuthArgs.map((arg) => arg.toXDR("base64"))).toEqual(
+        fromObject.delegatedAuthArgs.map((arg) => arg.toXDR("base64"))
+      );
+    });
+
+    it(`signAuthEntryWithSigners returns base64 for a string, equal to the object result (${scheme})`, async () => {
+      const entry = makeAddressAuthEntry(makeContract(21));
+      const options = {
+        networkPassphrase: TESTNET,
+        authDigestScheme: scheme,
+        contextRuleIds: [3],
+        expiration: 500,
+      };
+
+      const fromString = await signAuthEntryWithSigners(
+        entry.toXDR("base64"),
+        [signerA],
+        options
+      );
+      const fromObject = await signAuthEntryWithSigners(entry, [signerA], options);
+
+      expect(typeof fromString).toBe("string");
+      expect(fromString).toBe(fromObject.toXDR("base64"));
+    });
+  }
+
+  it("adds a second signer to a partially signed base64 entry", async () => {
+    const options = {
+      networkPassphrase: TESTNET,
+      authDigestScheme: "preimage-v1" as const,
+      contextRuleIds: [3],
+      expiration: 500,
+    };
+    const first = await signAuthEntryWithSigners(
+      makeAddressAuthEntry(makeContract(21)).toXDR("base64"),
+      [signerA],
+      options
+    );
+    const second = await signAuthEntryWithSigners(first, [signerB], options);
+
+    const decoded = stellarXdr.SorobanAuthorizationEntry.fromXDR(second, "base64");
+    const payload = readAuthPayload(getAddressCredentials(decoded.credentials()).signature());
+    expect(payload.signers.size).toBe(2);
+  });
+
+  it("signs a base64 entry produced by @stellar/stellar-sdk 17.4.0", async () => {
+    const options = {
+      networkPassphrase: TESTNET,
+      authDigestScheme: "preimage-v1" as const,
+      contextRuleIds: [0],
+      expiration: 1000,
+    };
+
+    const signed = await signAuthEntryWithSigners(
+      SDK17_TRANSFER_ENTRY_BASE64,
+      [signerA],
+      options
+    );
+
+    const decoded = stellarXdr.SorobanAuthorizationEntry.fromXDR(signed, "base64");
+    const original = stellarXdr.SorobanAuthorizationEntry.fromXDR(
+      SDK17_TRANSFER_ENTRY_BASE64,
+      "base64"
+    );
+    // The signature changes only the credentials, not the authorized call.
+    expect(decoded.rootInvocation().toXDR("base64")).toBe(
+      original.rootInvocation().toXDR("base64")
+    );
+    const credentials = getAddressCredentials(decoded.credentials());
+    expect(credentials.signatureExpirationLedger()).toBe(1000);
+    const payload = readAuthPayload(credentials.signature());
+    expect(payload.context_rule_ids).toEqual([0]);
+    const [sig] = Array.from(payload.signers.values());
+
+    const { authDigest } = computeEntryAuthDigest(
+      TESTNET,
+      SDK17_TRANSFER_ENTRY_BASE64,
+      1000,
+      [0],
+      "preimage-v1"
+    );
+    expect(keypairA.verify(authDigest, sig)).toBe(true);
+  });
+
+  it("accepts an XDR object from another SDK copy and returns a kit object", async () => {
+    const entry = makeAddressAuthEntry(makeContract(21));
+    const options = {
+      networkPassphrase: TESTNET,
+      authDigestScheme: "legacy-concat" as const,
+      contextRuleIds: [3],
+      expiration: 500,
+    };
+
+    const signed = await signAuthEntryWithSigners(
+      new ForeignXdrObject(entry.toXDR()) as unknown as stellarXdr.SorobanAuthorizationEntry,
+      [signerA],
+      options
+    );
+
+    expect(signed).toBeInstanceOf(stellarXdr.SorobanAuthorizationEntry);
+    expect(signed.toXDR("base64")).toBe(
+      (await signAuthEntryWithSigners(entry, [signerA], options)).toXDR("base64")
+    );
+  });
+
+  it("rejects malformed base64 with a ValidationError before signing", async () => {
+    const signAuthDigest = vi.fn(() => Buffer.alloc(64));
+    const options = {
+      networkPassphrase: TESTNET,
+      authDigestScheme: "legacy-concat" as const,
+      contextRuleIds: [3],
+      expiration: 500,
+    };
+
+    for (const bad of ["not base64!!", "AAAA", ""]) {
+      const result = signAuthEntryWithSigners(
+        bad,
+        [{ signer: signerA.signer, signAuthDigest }],
+        options
+      );
+      await expect(result).rejects.toBeInstanceOf(ValidationError);
+      await expect(result).rejects.toThrow(/^Invalid entry:/);
+    }
+    expect(() =>
+      computeEntryAuthDigest(TESTNET, "not base64!!", 500, [3], "legacy-concat")
+    ).toThrow(ValidationError);
+    expect(signAuthDigest).not.toHaveBeenCalled();
   });
 });
