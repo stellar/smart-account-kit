@@ -210,7 +210,7 @@ class MyStorage implements StorageAdapter {
 
 ## Using the kit from an app on Stellar SDK 17
 
-The kit uses its own copy of `@stellar/stellar-sdk` 16. Stellar SDK 17 rebuilt the XDR classes: unions use `.type`, and fields are properties, not methods. Thus the kit cannot read an SDK 17 XDR object. The XDR wire format did not change, so use base64 XDR strings at the boundary.
+The kit uses its own copy of `@stellar/stellar-sdk` 16. The package manager installs that copy with the kit, so your app does not install SDK 16. Keep SDK 17 as your app's own dependency. Stellar SDK 17 rebuilt the XDR classes: unions use `.type`, and fields are properties, not methods. Thus the kit cannot read an SDK 17 XDR object. The XDR wire format did not change, so use base64 XDR strings at the boundary.
 
 These functions accept a base64 `SorobanAuthorizationEntry` XDR string or an XDR object:
 
@@ -246,7 +246,7 @@ const passkeySignedXdr = await kit.signAuthEntry(entry.toXdr('base64'), {
 Rules:
 
 - A string input gives a string result. An XDR object input gives an XDR object from the kit's SDK 16.
-- A malformed string causes a `ValidationError` with the code `INVALID_INPUT`. The kit throws it before it asks for a passkey or calls a signer.
+- A malformed string causes a `ValidationError` with the code `INVALID_INPUT`. The kit throws it before it asks for a passkey or calls a signer. The kit accepts only standard, padded, canonical base64 (the form that `toXdr('base64')` gives).
 - The kit also decodes an SDK 17 object through its bytes at runtime. But TypeScript rejects the SDK 17 type, and the result is an SDK 16 object. Use strings.
 - `sign`, `signAndSubmit`, `signAdmin`, `signAndSubmitAdmin`, and `multiSigners.*` accept only an `AssembledTransaction` from the kit's SDK. The transactions that the kit builds (`kit.execute`, `kit.signers.*`, `kit.rules.*`, `kit.policies.*`, and the policy clients) meet this rule.
 - For a transaction that your app builds with SDK 17, sign each auth entry with `kit.signAuthEntry`. Then re-simulate and submit the transaction with SDK 17. A WebAuthn signature is larger than the simulation placeholder, so re-simulate before you submit.
