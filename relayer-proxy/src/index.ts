@@ -612,6 +612,19 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   if (!bytesEqual(hash(credentialId), salt)) {
     throw new RequestError("Deploy salt does not match the signer credential id", 403);
   }
+  // The constructor takes `policies: Map<Address, Val>` and installs each key
+  // as a policy contract. Refuse every other key, such as a CAP-84 muxed
+  // contract, which the constructor traps on after the sponsor pays. The
+  // policy values stay opaque.
+  for (const entry of args[1].map() ?? []) {
+    const key = entry.key();
+    if (
+      key.switch().name !== "scvAddress" ||
+      key.address().switch().name !== "scAddressTypeContract"
+    ) {
+      throw new RequestError("Deploy policy key must be a contract address", 403);
+    }
+  }
 }
 
 /**
@@ -771,9 +784,6 @@ async function validateFuncSubmission(
     );
   }
 
-  if (!env.STELLAR_RPC_URL) {
-    throw new RequestError("STELLAR_RPC_URL is required for fee validation", 500);
-  }
   const simulationTx = new TransactionBuilder(new Account(SIMULATION_SOURCE, "0"), {
     fee: "100",
     networkPassphrase: networkPassphrase(env),
@@ -781,8 +791,22 @@ async function validateFuncSubmission(
     .addOperation(Operation.invokeHostFunction({ func, auth }))
     .setTimeout(30)
     .build();
+  await simulateWithinFeeCeiling(env, simulationTx);
+}
+
+/**
+ * Simulate a submission before the API-key read. Refuse a failed or
+ * restore-needed result, and a resource fee above the configured ceiling.
+ */
+async function simulateWithinFeeCeiling(
+  env: Env,
+  transaction: Transaction
+): Promise<void> {
+  if (!env.STELLAR_RPC_URL) {
+    throw new RequestError("STELLAR_RPC_URL is required for fee validation", 500);
+  }
   const simulation = await new RpcServer(env.STELLAR_RPC_URL).simulateTransaction(
-    simulationTx
+    transaction
   );
   if (
     !RpcApi.isSimulationSuccess(simulation) ||
@@ -812,10 +836,39 @@ function validateSourceSignature(transaction: Transaction): void {
   }
 }
 
-function validateXdrSubmission(
+/**
+ * A dedicated-deployer envelope carries the one auth entry that simulation
+ * returns for a source-authorized deployment: source-account credentials, the
+ * operation's own createContractV2 as the root, and no sub-invocations.
+ */
+function validateXdrDeployAuth(operation: Operation.InvokeHostFunction): void {
+  const auth = operation.auth ?? [];
+  if (auth.length !== 1) {
+    throw new RequestError("Deploy must contain exactly one auth entry", 403);
+  }
+  const entry = auth[0];
+  if (entry.credentials().switch().name !== "sorobanCredentialsSourceAccount") {
+    throw new RequestError("Signed xdr deploy requires source-account credentials", 403);
+  }
+  const root = entry.rootInvocation();
+  const rootFunction = root.function();
+  if (
+    root.subInvocations().length !== 0 ||
+    rootFunction.switch().name !==
+      "sorobanAuthorizedFunctionTypeCreateContractV2HostFn" ||
+    !bytesEqual(
+      rootFunction.createContractV2HostFn().toXDR(),
+      operation.func.createContractV2().toXDR()
+    )
+  ) {
+    throw new RequestError("Deploy auth does not exactly match the operation", 403);
+  }
+}
+
+async function validateXdrSubmission(
   env: Env,
   body: Extract<SubmissionBody, { mode: "xdr" }>
-): void {
+): Promise<void> {
   let transaction: Transaction;
   try {
     const decoded = TransactionBuilder.fromXDR(body.xdr, networkPassphrase(env));
@@ -841,17 +894,15 @@ function validateXdrSubmission(
   if (operation.source && operation.source !== transaction.source) {
     throw new RequestError("Operation source must match transaction source", 403);
   }
-  const deployer = validateDeployFunction(
-    env,
-    (operation as Operation.InvokeHostFunction).func,
-    false
-  );
+  const invokeOperation = operation as Operation.InvokeHostFunction;
+  const deployer = validateDeployFunction(env, invokeOperation.func, false);
   if (deployer !== transaction.source) {
     throw new RequestError(
       "Deploy preimage address is not the allowlisted source",
       403
     );
   }
+  validateXdrDeployAuth(invokeOperation);
   let resourceFee: bigint;
   try {
     const envelope = transaction.toEnvelope();
@@ -865,10 +916,14 @@ function validateXdrSubmission(
   if (resourceFee > maxResourceFee(env)) {
     throw new RequestError("Resource fee exceeds configured maximum", 413);
   }
+  // The static checks cannot see whether the constructor runs. For example, a
+  // policy key with no contract behind it traps on chain after the sponsor
+  // pays. Simulate the signed envelope, as func mode does.
+  await simulateWithinFeeCeiling(env, transaction);
 }
 
 async function validateSubmission(env: Env, body: SubmissionBody): Promise<void> {
-  if (body.mode === "xdr") validateXdrSubmission(env, body);
+  if (body.mode === "xdr") await validateXdrSubmission(env, body);
   else await validateFuncSubmission(env, body);
 }
 

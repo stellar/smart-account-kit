@@ -62,7 +62,11 @@ The kit is a client for the OpenZeppelin [`stellar-contracts`](https://github.co
 pnpm add smart-account-kit @stellar/stellar-sdk@^16.4.1
 ```
 
-The current package supports Stellar SDK `16.4.1` or later within 16.x. Stellar SDK 17 changes the authorization API. Do not install version 17 with this release. If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit@2.5.0`.
+The kit carries its own `@stellar/stellar-sdk` 16 dependency. An app on SDK 16 should use `^16.4.1`, so that the app and the kit share one copy.
+
+An app on SDK 17 can also use the kit. Pass authorization entries to the kit as base64 strings, as [Using the kit from an app on Stellar SDK 17](#using-the-kit-from-an-app-on-stellar-sdk-17) shows. You cannot pass SDK 17 transaction objects to the kit.
+
+If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit@2.5.0`.
 
 ## Quick Start
 
