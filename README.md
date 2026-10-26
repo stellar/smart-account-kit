@@ -59,10 +59,10 @@ The kit is a client for the OpenZeppelin [`stellar-contracts`](https://github.co
 ## Installation
 
 ```bash
-pnpm add smart-account-kit @stellar/stellar-sdk@^16.3.0
+pnpm add smart-account-kit @stellar/stellar-sdk@^16.4.1
 ```
 
-The current package supports Stellar SDK `16.3.x`. Stellar SDK 17 changes the authorization API. Do not install version 17 with this release. If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit@2.5.0`.
+The current package supports Stellar SDK `16.4.1` or later within 16.x. Stellar SDK 17 changes the authorization API. Do not install version 17 with this release. If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit@2.5.0`.
 
 ## Quick Start
 
