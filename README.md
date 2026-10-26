@@ -64,6 +64,8 @@ pnpm add smart-account-kit @stellar/stellar-sdk@^16.4.1
 
 The kit carries its own `@stellar/stellar-sdk` 16 dependency. An app on SDK 16 should use `^16.4.1`, so that the app and the kit share one copy.
 
+An app that keeps an older 16.x gets a second SDK copy for the kit, and the package manager shows no warning. TypeScript then rejects SDK objects that the app passes to the kit, such as transactions and authorization entries. An `xdr.ScVal` from the app's copy does not match the kit's `xdr.ScVal` class, so the kit re-decodes custom policy `installParams` through their XDR bytes. Upgrade to `^16.4.1`, or pass base64 strings as [an SDK 17 app does](#using-the-kit-from-an-app-on-stellar-sdk-17). To check for two copies, run `npm ls @stellar/stellar-sdk` or `pnpm why @stellar/stellar-sdk`.
+
 An app on SDK 17 can also use the kit. Pass authorization entries to the kit as base64 strings, as [Using the kit from an app on Stellar SDK 17](#using-the-kit-from-an-app-on-stellar-sdk-17) shows. You cannot pass SDK 17 transaction objects to the kit.
 
 If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit@2.5.0`.
