@@ -2,6 +2,54 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
+## 0.10.0 — 2026-10-26
+
+This release keeps `smart-account-kit-bindings@0.5.0` unchanged. Redeploy the relayer proxy to get
+its changes; the proxy does not ship in the npm package. See #29 for the review and audit notes.
+
+### Breaking changes
+
+- The kit now needs `@stellar/stellar-sdk` `^16.4.1`. 16.4.0 adds the protocol 30 XDR, and 16.4.1
+  fixes an axios advisory.
+- `@stellar/stellar-sdk` is no longer a peer dependency. The kit installs its own 16.x copy. Before,
+  pnpm linked an app's SDK 17 into the kit, and every kit call failed. An app on SDK 16 should use
+  `^16.4.1`, so that the app and the kit share one copy. An app on an older 16.x gets a second copy
+  without a warning, and TypeScript then rejects SDK objects that the app passes to the kit. Check
+  with `npm ls @stellar/stellar-sdk` or `pnpm why @stellar/stellar-sdk`.
+- `ReturnType<typeof signAuthEntryWithSigners>` and `ReturnType<SmartAccountKit["signAuthEntry"]>`
+  now resolve to `string | xdr.SorobanAuthorizationEntry`. Calls with an object or an `any` value
+  keep the old return type.
+- The signing paths throw `ValidationError` (`INVALID_INPUT`) for an address type that the SDK
+  cannot convert, such as a CAP-84 muxed contract address (`W…`). Before, they threw a plain
+  `Error`.
+
+### Added
+
+- Apps on Stellar SDK 17 can use the kit. `signAuthEntry`, `signAuthEntryWithSigners`, and
+  `computeEntryAuthDigest` accept a base64 `SorobanAuthorizationEntry` XDR string. A string input
+  returns a string. The kit also re-decodes an auth entry object from another SDK copy. The string
+  must be canonical base64. See "Using the kit from an app on Stellar SDK 17" in the README.
+- Custom policy `installParams` can be an `xdr.ScVal` from another `@stellar/stellar-sdk` copy. The
+  kit re-decodes it through its bytes.
+- The new `AuthEntryInput` type.
+
+### Security
+
+- The relayer proxy simulates signed `xdr` deployments before it reads the API key. It refuses a
+  failed or restore-needed simulation (400) and a fee above the ceiling (413). It also compares
+  the declared Soroban data with the simulation: the footprint must cover every simulated key, and
+  the declared resource fee must be at most `2 * minResourceFee + 10000` stroops. The proxy does
+  not compare instruction or byte counts, because they change between simulations.
+  `MAX_TOTAL_FEE_STROOPS` and the rate limits still bound the loss from an envelope that declares
+  too little.
+- The relayer proxy refuses a deployment whose verifier or policy keys are not contract addresses
+  (403). An `xdr` deployment must have exactly one source-account auth entry that matches the
+  operation. With SDK 16.4.1, these inputs could carry CAP-84 muxed contract addresses that the
+  constructor rejects on chain after the sponsor pays.
+- The relayer proxy returns 403, not 500, for an unsupported address type. A sponsored token
+  transfer must come from a contract (403). Before, a `G…` source got a 503 that clients could
+  retry forever.
+
 ## 0.9.1 — 2026-10-25
 
 This release keeps `smart-account-kit-bindings@0.5.0` unchanged.
