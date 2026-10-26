@@ -575,6 +575,11 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   ) {
     throw new RequestError("Deploy initial signer must be External", 403);
   }
+  // The verifier is a contract. Refuse every other address arm, such as a
+  // CAP-84 muxed contract, which the constructor traps on after the sponsor pays.
+  if (signer[1].address().switch().name !== "scAddressTypeContract") {
+    throw new RequestError("Deploy initial signer verifier must be a contract", 403);
+  }
   const keyData = signer[2].bytes();
   if (keyData.length <= 65 || keyData[0] !== 0x04) {
     throw new RequestError("Deploy initial signer has invalid WebAuthn key data", 403);

@@ -66,6 +66,13 @@ const WALLET = Address.contract(new Uint8Array(32).fill(1)).toString();
 const OTHER_WALLET = Address.contract(new Uint8Array(32).fill(2)).toString();
 const TOKEN = Address.contract(new Uint8Array(32).fill(5)).toString();
 const WASM_HASH = "84".repeat(32);
+// A CAP-84 muxed contract address (`W...`) over the WALLET contract id.
+const MUXED_WALLET = xdr.ScAddress.scAddressTypeMuxedContract(
+  new xdr.MuxedContract({
+    id: xdr.Uint64.fromString("42"),
+    contractId: Address.fromString(WALLET).toScAddress().contractId(),
+  })
+);
 const MISSING_CHANNEL = Keypair.fromRawEd25519Seed(
   new Uint8Array(32).fill(9)
 ).publicKey();
@@ -198,7 +205,10 @@ const DEPLOY_CREDENTIAL_ID = Uint8Array.from(
   (character) => character.charCodeAt(0),
 );
 
-function deployConstructorArgs(extraSigner = false): xdr.ScVal[] {
+function deployConstructorArgs(
+  extraSigner = false,
+  verifier: xdr.ScAddress = Address.fromString(WALLET).toScAddress()
+): xdr.ScVal[] {
   const publicKey = new Uint8Array(65).fill(7);
   publicKey[0] = 0x04;
   const keyData = new Uint8Array(publicKey.length + DEPLOY_CREDENTIAL_ID.length);
@@ -206,7 +216,7 @@ function deployConstructorArgs(extraSigner = false): xdr.ScVal[] {
   keyData.set(DEPLOY_CREDENTIAL_ID, publicKey.length);
   const signer = xdr.ScVal.scvVec([
     xdr.ScVal.scvSymbol("External"),
-    Address.fromString(WALLET).toScVal(),
+    xdr.ScVal.scvAddress(verifier),
     xdr.ScVal.scvBytes(keyData),
   ]);
   return [
@@ -417,7 +427,8 @@ function deployXdr(
   resourceFee = 5_000n,
   wasmHash = WASM_HASH,
   sign = true,
-  totalFee = "100"
+  totalFee = "100",
+  constructorArgs = deployConstructorArgs()
 ) {
   const transaction = new TransactionBuilder(new Account(keypair.publicKey(), "0"), {
     fee: totalFee,
@@ -428,7 +439,7 @@ function deployXdr(
         address: Address.fromString(keypair.publicKey()),
         wasmHash: hexBytes(wasmHash),
         salt: hash(DEPLOY_CREDENTIAL_ID),
-        constructorArgs: deployConstructorArgs(),
+        constructorArgs,
       })
     )
     .setSorobanData(
@@ -1017,6 +1028,31 @@ describe("signed xdr validation", () => {
     expect(res.status).toBe(413);
     expect(kv.get).not.toHaveBeenCalled();
     expect(submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a deployment whose verifier is a muxed contract address", async () => {
+    const kv = seededKV();
+    const res = await post(
+      {
+        xdr: deployXdr(
+          DEPLOYER_KEYPAIR,
+          5_000n,
+          WASM_HASH,
+          true,
+          "100",
+          deployConstructorArgs(false, MUXED_WALLET)
+        ),
+      },
+      makeEnv({ allowedDeployers: SHARED_DEPLOYER, kv })
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({
+      success: false,
+      error: "Deploy initial signer verifier must be a contract",
+    });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(submitSorobanTransaction).not.toHaveBeenCalled();
   });
 
   it("enforces the embedded xdr total-fee ceiling", async () => {
