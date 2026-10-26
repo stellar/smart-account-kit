@@ -218,6 +218,62 @@ describe("buildConstructorPolicies", () => {
     );
   });
 
+  it.each([
+    [
+      "a toXDR getter that throws",
+      () =>
+        Object.defineProperty({}, "toXDR", {
+          get() {
+            throw new Error("getter boom");
+          },
+        }),
+    ],
+    [
+      "a toXDR() that throws a null-prototype object",
+      () => ({
+        toXDR() {
+          throw Object.create(null);
+        },
+      }),
+    ],
+  ])("refuses a hostile foreign object with %s as a ValidationError", (_label, make) => {
+    for (const build of [
+      () => buildConstructorPolicies([{ address: POLICY_A, type: "custom", installParams: make() }]),
+      () =>
+        buildPoliciesScVal(
+          makeClient(),
+          new Map<string, unknown>([[POLICY_A, make()]]),
+          new Map([[POLICY_A, "custom" as const]])
+        ),
+    ]) {
+      let caught: unknown;
+      try {
+        build();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ValidationError);
+      expect((caught as ValidationError).code).toBe(SmartAccountErrorCode.INVALID_INPUT);
+    }
+  });
+
+  it("calls a foreign encoder once, with its own receiver", () => {
+    const original = xdr.ScVal.scvU32(9);
+    let calls = 0;
+    const foreign = {
+      bytes: original.toXDR(),
+      toXDR(this: { bytes: Uint8Array }) {
+        calls += 1;
+        return this.bytes;
+      },
+    };
+    const map = buildConstructorPolicies([
+      { address: POLICY_A, type: "custom", installParams: foreign },
+    ]);
+    expect(calls).toBe(1);
+    expect(map.get(POLICY_A)!.toXDR("base64")).toBe(original.toXDR("base64"));
+  });
+
   it("returns an empty map for no policies", () => {
     expect(buildConstructorPolicies([]).size).toBe(0);
   });

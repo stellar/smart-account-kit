@@ -13,13 +13,23 @@ import { buildI128ScVal } from "./tx-ops.js";
 const I128_MAX = (1n << 127n) - 1n;
 const I128_MIN = -(1n << 127n);
 
-type XdrEncodable = { toXDR: (format?: "raw") => Uint8Array };
+/** Message of an untrusted thrown value, or undefined. Never throws. */
+function safeCauseMessage(error: unknown): string | undefined {
+  try {
+    return error instanceof Error ? String(error.message) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
-function isXdrEncodable(value: unknown): value is XdrEncodable {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { toXDR?: unknown }).toXDR === "function"
+function foreignScValError(address: string, error?: unknown): ValidationError {
+  const cause = safeCauseMessage(error);
+  return new ValidationError(
+    `Policy ${address}: custom policy installParams has toXDR() but does not encode an ` +
+      `xdr.ScVal. It may come from a different @stellar/stellar-sdk copy; pass an ` +
+      `xdr.ScVal whose toXDR() returns valid ScVal bytes.`,
+    SmartAccountErrorCode.INVALID_INPUT,
+    { address, ...(cause === undefined ? {} : { cause }) }
   );
 }
 
@@ -38,23 +48,27 @@ function toKitScVal(value: unknown, address: string): xdr.ScVal | undefined {
   if (value instanceof xdr.ScVal) {
     return value;
   }
-  if (!isXdrEncodable(value)) {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  // Read the encoder once, inside the guard: a hostile getter can throw.
+  let encode: unknown;
+  try {
+    encode = (value as { toXDR?: unknown }).toXDR;
+  } catch (error) {
+    throw foreignScValError(address, error);
+  }
+  if (typeof encode !== "function") {
     return undefined;
   }
   try {
-    const bytes = value.toXDR();
+    const bytes: unknown = encode.call(value);
     if (!(bytes instanceof Uint8Array)) {
       throw new TypeError("toXDR() did not return bytes");
     }
     return xdr.ScVal.fromXDR(Buffer.from(bytes));
   } catch (error) {
-    throw new ValidationError(
-      `Policy ${address}: custom policy installParams has toXDR() but does not encode an ` +
-        `xdr.ScVal. It may come from a different @stellar/stellar-sdk copy; pass an ` +
-        `xdr.ScVal whose toXDR() returns valid ScVal bytes.`,
-      SmartAccountErrorCode.INVALID_INPUT,
-      { address, cause: error instanceof Error ? error.message : String(error) }
-    );
+    throw foreignScValError(address, error);
   }
 }
 
