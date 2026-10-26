@@ -446,6 +446,50 @@ describe("SmartAccountKit top-level surface", () => {
     });
   });
 
+  it("signAuthEntry accepts base64 XDR and returns base64 XDR", async () => {
+    const entry = makeAuthEntry();
+    // Stand-in for the WebAuthn path: mark the entry as signed.
+    const signAuthEntryInternal = vi.fn(async (input: xdr.SorobanAuthorizationEntry) => {
+      const signed = xdr.SorobanAuthorizationEntry.fromXDR(input.toXDR());
+      signed.credentials().address().signatureExpirationLedger(777);
+      return signed;
+    });
+    const kit = { signAuthEntryInternal } as unknown as SmartAccountKit;
+    const options = { credentialId: "cred-1", expiration: 777, contextRuleIds: [4] };
+
+    const fromString = await SmartAccountKit.prototype.signAuthEntry.call(
+      kit,
+      entry.toXDR("base64"),
+      options
+    );
+    const fromObject = await SmartAccountKit.prototype.signAuthEntry.call(kit, entry, options);
+
+    expect(typeof fromString).toBe("string");
+    expect(fromObject).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
+    expect(fromString).toBe(fromObject.toXDR("base64"));
+    // The decoded string reaches the signer as the kit's own XDR type.
+    const [decodedInput, decodedOptions] = signAuthEntryInternal.mock.calls[0];
+    expect(decodedInput).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
+    expect(decodedInput.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(decodedOptions).toEqual(options);
+  });
+
+  it("signAuthEntry rejects malformed base64 before it asks for a passkey", async () => {
+    const signAuthEntryInternal = vi.fn(async (entry) => entry);
+
+    const result = SmartAccountKit.prototype.signAuthEntry.call(
+      { signAuthEntryInternal } as unknown as SmartAccountKit,
+      "not base64!!",
+      { contextRuleIds: [4] }
+    );
+
+    await expect(result).rejects.toBeInstanceOf(ValidationError);
+    await expect(result).rejects.toMatchObject({
+      code: SmartAccountErrorCode.INVALID_INPUT,
+    });
+    expect(signAuthEntryInternal).not.toHaveBeenCalled();
+  });
+
   it("discovery methods pass through to the configured indexer", async () => {
     const discoverContractsByCredential = vi.fn(async () => ({ contracts: [{ contract_id: "C1" }] }));
     const discoverContractsByAddress = vi.fn(async () => ({ contracts: [{ contract_id: "C2" }] }));

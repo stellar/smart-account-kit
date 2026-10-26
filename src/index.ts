@@ -206,6 +206,7 @@ export {
   KNOWN_AUTH_DIGEST_SCHEMES,
 } from "./kit/auth-digest-scheme.js";
 export type { AuthDigestScheme } from "./kit/auth-digest-scheme.js";
+export type { AuthEntryInput } from "./kit/auth-entry-input.js";
 
 // Advanced flows: auth-payload signer encoding + transaction helpers
 export { signerToScVal, parseSignerScVal } from "./kit/auth-payload.js";

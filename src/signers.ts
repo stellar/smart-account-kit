@@ -46,6 +46,7 @@ import {
   isAuthDigestScheme,
   type AuthDigestScheme,
 } from "./kit/auth-digest-scheme.js";
+import { toAuthEntry, type AuthEntryInput } from "./kit/auth-entry-input.js";
 import { SmartAccountErrorCode, ValidationError } from "./errors.js";
 import { ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE } from "./constants.js";
 
@@ -64,23 +65,28 @@ export interface EntryAuthDigest {
  *
  * Single source of truth for the auth-digest formula shared by every signer
  * type. Note: like {@link buildSignaturePayload}, this normalizes and writes the
- * entry's `signatureExpirationLedger` to `expiration` as a side effect.
+ * entry's `signatureExpirationLedger` to `expiration` as a side effect. The
+ * side effect applies only to an `xdr.SorobanAuthorizationEntry` from the kit's
+ * SDK; a base64 string input is decoded into a new object first.
  *
  * @param networkPassphrase - Network passphrase
- * @param entry - The Soroban auth entry being signed
+ * @param entry - The Soroban auth entry being signed, as base64 XDR or an XDR
+ *   object. Apps on Stellar SDK 17 can pass `entry.toXdr("base64")`.
  * @param expiration - Signature expiration ledger
  * @param contextRuleIds - Context rule ids bound into the digest
  * @param scheme - The digest scheme of the code the smart account runs
- * @throws {ValidationError} If `scheme` is not a known scheme
+ * @throws {ValidationError} If `scheme` is not a known scheme or `entry` is
+ *   not a valid authorization entry
  */
 export function computeEntryAuthDigest(
   networkPassphrase: string,
-  entry: xdr.SorobanAuthorizationEntry,
+  entry: AuthEntryInput,
   expiration: number,
   contextRuleIds: number[],
   scheme: AuthDigestScheme
 ): EntryAuthDigest {
-  const signaturePayload = buildSignaturePayload(networkPassphrase, entry, expiration);
+  const authEntry = toAuthEntry(entry);
+  const signaturePayload = buildSignaturePayload(networkPassphrase, authEntry, expiration);
 
   switch (scheme) {
     case "legacy-concat": {
@@ -93,7 +99,7 @@ export function computeEntryAuthDigest(
     }
     case "preimage-v1": {
       const preimage = buildAuthDigestPreimage(
-        getAuthEntryAddress(entry),
+        getAuthEntryAddress(authEntry),
         signaturePayload,
         contextRuleIds
       );
@@ -249,14 +255,21 @@ export interface SignAuthEntryWithSignersOptions {
  *   the same signer is replaced, not duplicated. A changed expiration or rule
  *   selection would invalidate them, so either one throws.
  *
- * @param entry - The `SorobanAuthorizationEntry` from simulation
+ * The entry can be a base64-encoded `SorobanAuthorizationEntry` XDR string or
+ * an `xdr.SorobanAuthorizationEntry`. A string input returns a base64 string,
+ * so an app on another Stellar SDK major (for example SDK 17) can pass
+ * `entry.toXdr("base64")` and decode the result with its own SDK.
+ *
+ * @param entry - The `SorobanAuthorizationEntry` from simulation, as base64 XDR
+ *   or an XDR object
  * @param signers - Local signers (e.g. {@link Ed25519Signer}) that sign the digest
  * @param options - Network passphrase, digest scheme, context rule ids, and
  *   expiration
- * @returns A signed copy of the entry; the input is not modified
- * @throws {ValidationError} On empty signers, an unknown digest scheme,
- *   unsupported credentials, a wallet mutation, a missing or changed
- *   expiration, or missing/mismatched rule ids
+ * @returns A signed copy of the entry, in the same form as `entry`; the input
+ *   is not modified
+ * @throws {ValidationError} On an invalid entry, empty signers, an unknown
+ *   digest scheme, unsupported credentials, a wallet mutation, a missing or
+ *   changed expiration, or missing/mismatched rule ids
  *
  * @example
  * ```ts
@@ -270,11 +283,26 @@ export interface SignAuthEntryWithSignersOptions {
  * facilitator.settle(signed.toXDR("base64"));
  * ```
  */
-export async function signAuthEntryWithSigners(
+export function signAuthEntryWithSigners(
+  entry: string,
+  signers: readonly AuthDigestSigner[],
+  options: SignAuthEntryWithSignersOptions
+): Promise<string>;
+export function signAuthEntryWithSigners(
   entry: xdr.SorobanAuthorizationEntry,
   signers: readonly AuthDigestSigner[],
   options: SignAuthEntryWithSignersOptions
-): Promise<xdr.SorobanAuthorizationEntry> {
+): Promise<xdr.SorobanAuthorizationEntry>;
+export function signAuthEntryWithSigners(
+  entry: AuthEntryInput,
+  signers: readonly AuthDigestSigner[],
+  options: SignAuthEntryWithSignersOptions
+): Promise<string | xdr.SorobanAuthorizationEntry>;
+export async function signAuthEntryWithSigners(
+  entry: AuthEntryInput,
+  signers: readonly AuthDigestSigner[],
+  options: SignAuthEntryWithSignersOptions
+): Promise<string | xdr.SorobanAuthorizationEntry> {
   if (signers.length === 0) {
     throw new ValidationError(
       "At least one signer is required",
@@ -289,7 +317,13 @@ export async function signAuthEntryWithSigners(
     );
   }
 
-  const signed = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+  // Never modify the caller's object: copy a kit XDR object. A string or a
+  // foreign-SDK object is already decoded into a new object.
+  const decoded = toAuthEntry(entry);
+  const signed =
+    decoded === entry
+      ? xdr.SorobanAuthorizationEntry.fromXDR(decoded.toXDR())
+      : decoded;
   const credentialType = signed.credentials().switch().name as string;
   if (credentialType === "sorobanCredentialsAddressWithDelegates") {
     throw new ValidationError(
@@ -364,5 +398,5 @@ export async function signAuthEntryWithSigners(
 
   authPayload.context_rule_ids = [...contextRuleIds];
   credentials.signature(writeAuthPayload(authPayload));
-  return signed;
+  return typeof entry === "string" ? signed.toXDR("base64") : signed;
 }
