@@ -26,17 +26,17 @@ export type AuthEntryInput = string | xdr.SorobanAuthorizationEntry;
 const BASE64_PATTERN =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
-type XdrEncodable = { toXDR: (format?: "raw") => Uint8Array };
-
-function isXdrEncodable(value: unknown): value is XdrEncodable {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { toXDR?: unknown }).toXDR === "function"
-  );
+/** Message of an untrusted thrown value, or undefined. Never throws. */
+function safeCauseMessage(error: unknown): string | undefined {
+  try {
+    return error instanceof Error ? String(error.message) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function invalidEntry(fieldName: string, detail: string, cause?: unknown): ValidationError {
+  const causeMessage = safeCauseMessage(cause);
   return new ValidationError(
     `Invalid ${fieldName}: ${detail}. Pass a base64-encoded SorobanAuthorizationEntry ` +
       `XDR string (for example entry.toXdr("base64") on Stellar SDK 17) or an ` +
@@ -44,7 +44,7 @@ function invalidEntry(fieldName: string, detail: string, cause?: unknown): Valid
     SmartAccountErrorCode.INVALID_INPUT,
     {
       field: fieldName,
-      ...(cause instanceof Error ? { cause: cause.message } : {}),
+      ...(causeMessage === undefined ? {} : { cause: causeMessage }),
     }
   );
 }
@@ -96,11 +96,20 @@ export function toAuthEntry(
   }
 
   // An XDR object from another copy of the SDK. The wire format is the same,
-  // so re-decode its bytes with the kit's SDK.
-  if (isXdrEncodable(value)) {
-    let bytes: Uint8Array;
+  // so re-decode its bytes with the kit's SDK. Read the encoder once, inside
+  // a guard, because a hostile getter can throw.
+  let encode: unknown;
+  if (typeof value === "object" && value !== null) {
     try {
-      bytes = value.toXDR();
+      encode = (value as { toXDR?: unknown }).toXDR;
+    } catch (error) {
+      throw invalidEntry(fieldName, "the object could not be encoded as XDR", error);
+    }
+  }
+  if (typeof encode === "function") {
+    let bytes: unknown;
+    try {
+      bytes = encode.call(value);
     } catch (error) {
       throw invalidEntry(fieldName, "the object could not be encoded as XDR", error);
     }

@@ -166,6 +166,63 @@ describe("toAuthEntry", () => {
     }
   });
 
+  it("rejects a toXDR getter that throws with a ValidationError", () => {
+    const hostile = Object.defineProperty({}, "toXDR", {
+      get() {
+        throw new Error("getter boom");
+      },
+    });
+    expectInvalidEntry(
+      () => toAuthEntry(hostile as unknown as string),
+      /could not be encoded as XDR/
+    );
+  });
+
+  it("rejects a toXDR() that throws a null-prototype object with a ValidationError", () => {
+    const hostile = {
+      toXDR() {
+        throw Object.create(null);
+      },
+    };
+    expectInvalidEntry(
+      () => toAuthEntry(hostile as unknown as string),
+      /could not be encoded as XDR/
+    );
+  });
+
+  it("rejects a thrown Error whose message getter throws with a ValidationError", () => {
+    const thrown = new Error("x");
+    Object.defineProperty(thrown, "message", {
+      get() {
+        throw new Error("message boom");
+      },
+    });
+    const hostile = {
+      toXDR() {
+        throw thrown;
+      },
+    };
+    expectInvalidEntry(
+      () => toAuthEntry(hostile as unknown as string),
+      /could not be encoded as XDR/
+    );
+  });
+
+  it("calls a foreign encoder once, with its own receiver", () => {
+    const entry = makeAddressAuthEntry(makeContract(1));
+    let calls = 0;
+    const foreign = {
+      bytes: entry.toXDR(),
+      toXDR(this: { bytes: Uint8Array }) {
+        calls += 1;
+        return this.bytes;
+      },
+    };
+    const decoded = toAuthEntry(foreign as unknown as string);
+    expect(calls).toBe(1);
+    expect(decoded.toXDR("base64")).toBe(entry.toXDR("base64"));
+  });
+
   it("names the field in the error", () => {
     expectInvalidEntry(() => toAuthEntry("!", "authEntry"), /^Invalid authEntry:/);
   });
