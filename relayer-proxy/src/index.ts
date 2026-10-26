@@ -39,6 +39,7 @@ import {
   TESTNET_RETRY_DURATION_MS,
   UNKNOWN_IP,
 } from "./constants";
+import { declaredSorobanDataProblem } from "./soroban-data";
 
 interface StoredApiKey {
   apiKey: string;
@@ -806,7 +807,7 @@ async function validateFuncSubmission(
 async function simulateWithinFeeCeiling(
   env: Env,
   transaction: Transaction
-): Promise<void> {
+): Promise<RpcApi.SimulateTransactionSuccessResponse> {
   if (!env.STELLAR_RPC_URL) {
     throw new RequestError("STELLAR_RPC_URL is required for fee validation", 500);
   }
@@ -822,6 +823,7 @@ async function simulateWithinFeeCeiling(
   if (BigInt(simulation.minResourceFee) > maxResourceFee(env)) {
     throw new RequestError("Resource fee exceeds configured maximum", 413);
   }
+  return simulation;
 }
 
 function validateSourceSignature(transaction: Transaction): void {
@@ -908,23 +910,38 @@ async function validateXdrSubmission(
     );
   }
   validateXdrDeployAuth(invokeOperation);
-  let resourceFee: bigint;
+  let declared: xdr.SorobanTransactionData;
   try {
     const envelope = transaction.toEnvelope();
     if (envelope.switch().name !== "envelopeTypeTx") throw new Error("not v1");
     const ext = envelope.v1().tx().ext();
     if (ext.switch() !== 1) throw new Error("missing Soroban data");
-    resourceFee = ext.sorobanData().resourceFee().toBigInt();
+    declared = ext.sorobanData();
   } catch {
     throw new RequestError("Deploy transaction is missing Soroban resource data");
   }
-  if (resourceFee > maxResourceFee(env)) {
+  if (declared.resourceFee().toBigInt() > maxResourceFee(env)) {
     throw new RequestError("Resource fee exceeds configured maximum", 413);
   }
   // The static checks cannot see whether the constructor runs. For example, a
   // policy key with no contract behind it traps on chain after the sponsor
   // pays. Simulate the signed envelope, as func mode does.
-  await simulateWithinFeeCeiling(env, transaction);
+  const simulation = await simulateWithinFeeCeiling(env, transaction);
+  // Simulation ignores the declared footprint and resources, so compare them
+  // with the simulated data. Func mode needs no such check, because Channels
+  // builds that transaction from its own simulation.
+  let simulated: xdr.SorobanTransactionData;
+  try {
+    simulated = simulation.transactionData.build();
+  } catch {
+    throw new RequestError("Submission simulation returned no resource data");
+  }
+  const problem = declaredSorobanDataProblem(
+    declared,
+    simulated,
+    BigInt(simulation.minResourceFee)
+  );
+  if (problem) throw new RequestError(problem);
 }
 
 async function validateSubmission(env: Env, body: SubmissionBody): Promise<void> {

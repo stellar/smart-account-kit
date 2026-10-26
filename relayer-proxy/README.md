@@ -49,6 +49,12 @@ The operation must contain exactly one authorization entry with source-account c
 Its root must match the operation's `createContractV2` and contain no sub-invocations.
 The proxy simulates the signed envelope before any API key access, as it does for `func` submissions.
 It rejects a failed simulation, a simulation that needs a restore, and a resource fee above the maximum.
+Simulation ignores the footprint and resources that the envelope declares, so the proxy compares them with the simulated data.
+The declared footprint must contain every simulated key. A key that the envelope declares as read-write also satisfies a simulated read-only key.
+The declared resource fee must be at most `2 * minResourceFee + 10000` stroops. This margin covers fee drift between the client's simulation and the proxy's simulation.
+The proxy does not compare instruction or byte counts, because they drift between two simulations.
+An envelope that declares too few resources can still fail on chain after the sponsor pays.
+`MAX_TOTAL_FEE_STROOPS`, the fee margin, and the rate limits bound that loss for each request.
 
 These checks constrain relayer spending. They do not prove wallet ownership. The SDK performs wallet-birth, code, signer, and passkey verification before connection.
 

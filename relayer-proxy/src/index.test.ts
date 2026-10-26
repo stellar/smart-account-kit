@@ -447,6 +447,56 @@ function sourceDeployAuth(
   });
 }
 
+function contractInstanceKey(contract: string): xdr.LedgerKey {
+  return xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: Address.fromString(contract).toScAddress(),
+      key: xdr.ScVal.scvLedgerKeyContractInstance(),
+      durability: xdr.ContractDataDurability.persistent(),
+    })
+  );
+}
+
+// A deployment reads the account WASM and the verifier, and writes the new
+// account's instance. WALLET stands in for the new account address.
+const DEPLOY_READ_ONLY = [
+  xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({
+      hash: hexBytes(WASM_HASH) as ConstructorParameters<
+        typeof xdr.LedgerKeyContractCode
+      >[0]["hash"],
+    })
+  ),
+  contractInstanceKey(OTHER_WALLET),
+];
+const DEPLOY_READ_WRITE = [contractInstanceKey(WALLET)];
+
+/** Soroban data as simulation returns it for the deployment fixtures. */
+function deploySorobanData(
+  resourceFee = 5_000n,
+  footprint: { readOnly?: xdr.LedgerKey[]; readWrite?: xdr.LedgerKey[] } = {}
+): xdr.SorobanTransactionData {
+  return new SorobanDataBuilder()
+    .setReadOnly(footprint.readOnly ?? DEPLOY_READ_ONLY)
+    .setReadWrite(footprint.readWrite ?? DEPLOY_READ_WRITE)
+    .setResources(5_000_000, 10_000, 2_000)
+    .setResourceFee(resourceFee)
+    .build();
+}
+
+/** A successful simulation result in the shape that RpcServer returns. */
+function deploySimulation(
+  minResourceFee = 5_000n,
+  data = deploySorobanData(minResourceFee)
+) {
+  return {
+    transactionData: new SorobanDataBuilder(data),
+    minResourceFee: minResourceFee.toString(),
+    result: { auth: [], retval: xdr.ScVal.scvVoid() },
+    latestLedger: 100,
+  } as any;
+}
+
 function deployXdr(
   keypair = DEPLOYER_KEYPAIR,
   resourceFee = 5_000n,
@@ -456,7 +506,8 @@ function deployXdr(
   constructorArgs = deployConstructorArgs(),
   authFor: (func: xdr.HostFunction) => xdr.SorobanAuthorizationEntry[] = (func) => [
     sourceDeployAuth(func),
-  ]
+  ],
+  sorobanData = deploySorobanData(resourceFee)
 ) {
   const func = Operation.createCustomContract({
     address: Address.fromString(keypair.publicKey()),
@@ -472,9 +523,7 @@ function deployXdr(
     networkPassphrase: Networks.TESTNET,
   })
     .addOperation(Operation.invokeHostFunction({ func, auth: authFor(func) }))
-    .setSorobanData(
-      new SorobanDataBuilder().setResourceFee(resourceFee).build()
-    )
+    .setSorobanData(sorobanData)
     .setTimeout(30)
     .build();
   if (sign) transaction.sign(keypair);
@@ -514,10 +563,9 @@ beforeEach(() => {
   vi.spyOn(RpcServer.prototype, "getLedgerEntries").mockResolvedValue(
     contractInstance(TOKEN, xdr.ContractExecutable.contractExecutableStellarAsset())
   );
-  vi.spyOn(RpcServer.prototype, "simulateTransaction").mockResolvedValue({
-    transactionData: {},
-    minResourceFee: "5000",
-  } as any);
+  vi.spyOn(RpcServer.prototype, "simulateTransaction").mockResolvedValue(
+    deploySimulation()
+  );
   submitSorobanTransaction.mockResolvedValue({
     transactionId: "tx1",
     hash: "hash1",
@@ -1425,7 +1473,7 @@ describe("signed xdr validation", () => {
     vi.mocked(RpcServer.prototype.simulateTransaction).mockImplementationOnce(
       async () => {
         order.push("simulated");
-        return { transactionData: {}, minResourceFee: "5000" } as any;
+        return deploySimulation();
       }
     );
     const kv = seededKV(() => order.push("key"));
@@ -1478,6 +1526,106 @@ describe("signed xdr validation", () => {
       "Resource fee exceeds configured maximum",
       413,
       { simulated: true, env: { maxFee: "1000" } }
+    );
+  });
+
+  function deployXdrDeclaring(sorobanData: xdr.SorobanTransactionData) {
+    return deployXdr(
+      DEPLOYER_KEYPAIR,
+      sorobanData.resourceFee().toBigInt(),
+      WASM_HASH,
+      true,
+      "100",
+      undefined,
+      undefined,
+      sorobanData
+    );
+  }
+
+  it("rejects an empty footprint with a fee at the ceiling (inflated trap)", async () => {
+    // Simulation needs a footprint and 5,000,000 instructions. The envelope
+    // declares no footprint, no resources, and the full resource-fee ceiling.
+    await expectXdrRejected(
+      deployXdrDeclaring(new SorobanDataBuilder().setResourceFee(1_000_000n).build()),
+      "Declared resource fee is too far above the simulated minimum",
+      400,
+      { simulated: true }
+    );
+  });
+
+  it("rejects an empty footprint even with a fee within the margin", async () => {
+    await expectXdrRejected(
+      deployXdrDeclaring(new SorobanDataBuilder().setResourceFee(5_000n).build()),
+      "Declared footprint is missing a simulated read-write key",
+      400,
+      { simulated: true }
+    );
+  });
+
+  it.each([
+    [
+      "read-only",
+      { readOnly: DEPLOY_READ_ONLY.slice(1) },
+      "Declared footprint is missing a simulated read-only key",
+    ],
+    [
+      "read-write",
+      { readWrite: [], readOnly: [...DEPLOY_READ_ONLY, ...DEPLOY_READ_WRITE] },
+      "Declared footprint is missing a simulated read-write key",
+    ],
+  ])("rejects a footprint that lacks one simulated %s key", async (_label, footprint, error) => {
+    await expectXdrRejected(
+      deployXdrDeclaring(deploySorobanData(5_000n, footprint)),
+      error,
+      400,
+      { simulated: true }
+    );
+  });
+
+  it("accepts a simulated read-only key that the envelope lists as read-write", async () => {
+    const xdrValue = deployXdrDeclaring(
+      deploySorobanData(5_000n, {
+        readOnly: [],
+        readWrite: [...DEPLOY_READ_ONLY, ...DEPLOY_READ_WRITE],
+      })
+    );
+    const res = await post({ xdr: xdrValue });
+    expect(res.status).toBe(200);
+    expect(submitTransaction).toHaveBeenCalledWith({ xdr: xdrValue });
+  });
+
+  it("bounds the declared resource fee at 2 * minResourceFee + 10,000", async () => {
+    // A declared fee a little below the new minimum is normal drift.
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce(
+      deploySimulation(5_002n)
+    );
+    const below = await post({ xdr: deployXdr(DEPLOYER_KEYPAIR, 5_000n) });
+    expect(below.status).toBe(200);
+
+    const atBound = await post({ xdr: deployXdr(DEPLOYER_KEYPAIR, 20_000n) });
+    expect(atBound.status).toBe(200);
+    expect(submitTransaction).toHaveBeenCalledTimes(2);
+    submitTransaction.mockClear();
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockClear();
+
+    await expectXdrRejected(
+      deployXdr(DEPLOYER_KEYPAIR, 20_001n),
+      "Declared resource fee is too far above the simulated minimum",
+      400,
+      { simulated: true }
+    );
+  });
+
+  it("rejects a simulation without resource data", async () => {
+    vi.mocked(RpcServer.prototype.simulateTransaction).mockResolvedValueOnce({
+      transactionData: {},
+      minResourceFee: "5000",
+    } as any);
+    await expectXdrRejected(
+      deployXdr(),
+      "Submission simulation returned no resource data",
+      400,
+      { simulated: true }
     );
   });
 
