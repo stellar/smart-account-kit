@@ -68,8 +68,26 @@ describe("LocalStorageAdapter", () => {
     const store = new LocalStorageAdapter();
     await store.saveSession({ contractId: "C1", credentialId: "a", connectedAt: 1, expiresAt: 2 });
     expect((await store.getSession())?.contractId).toBe("C1");
+    expect(fake.getItem("smart-account-kit:session")).not.toBeNull();
     await store.clearSession();
     expect(await store.getSession()).toBeNull();
+  });
+
+  it("scopes custom sessions and clears only the matching adapter's data", async () => {
+    const appA = new LocalStorageAdapter("app-a");
+    const appB = new LocalStorageAdapter("app-b");
+
+    await appA.saveSession({ contractId: "wallet-a", credentialId: "credential-a", connectedAt: 1 });
+    await appB.saveSession({ contractId: "wallet-b", credentialId: "credential-b", connectedAt: 2 });
+
+    expect((await appA.getSession())?.contractId).toBe("wallet-a");
+    expect((await appB.getSession())?.contractId).toBe("wallet-b");
+
+    await appA.clear();
+
+    expect(await appA.getSession()).toBeNull();
+    expect((await appB.getSession())?.contractId).toBe("wallet-b");
+    expect(fake.getItem("app-b:session")).not.toBeNull();
   });
 
   it("warns loudly and returns empty on corrupt credential data (no silent reset)", async () => {
