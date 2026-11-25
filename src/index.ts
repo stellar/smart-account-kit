@@ -259,6 +259,14 @@ export type {
   IndexerStatsResponse,
 } from "./indexer.js";
 
+// Wallet birth verification, for a custom `walletProvenance.verifyBirth`
+export type {
+  VerifiedWalletBirth,
+  WalletBirthFailure,
+  WalletBirthResult,
+  WalletBirthVerificationDeps,
+} from "./kit/wallet-provenance.js";
+
 // Relayer client for fee-sponsored transactions via proxy
 export { RelayerClient, RelayerErrorCodes } from "./relayer.js";
 export type {

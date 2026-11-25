@@ -155,6 +155,7 @@ const kit = new SmartAccountKit({
 | `rpName` | `string` | No | WebAuthn relying party name (default: `"Smart Account"`) |
 | `webAuthn` | `object` | No | Custom WebAuthn implementation, primarily for testing |
 | `sessionExpiryMs` | `number` | No | Stored-session lifetime (default: 7 days) |
+| `walletProvenance` | `{ lookupWalletCandidates?, verifyBirth? }` | No | Custom birth lookup and verification, for wallets a factory contract deployed |
 | `externalWallet` | `ExternalWalletAdapter` | No | Wallet adapter for delegated/multi-signer flows |
 | `indexerUrl` | `string \| false` | No | Custom indexer base URL, or `false` to disable indexing |
 | `indexerAuthToken` | `string` | No | Provider token sent as `Authorization: Bearer <token>` (not needed for Mercury's public reads) |

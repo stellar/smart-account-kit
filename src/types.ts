@@ -16,6 +16,11 @@ import type { xdr } from "@stellar/stellar-sdk";
 import type { SmartAccountError } from "./errors.js";
 import type { WalletStorage } from "./external-signers.js";
 import type { AuthDigestScheme } from "./kit/auth-digest-scheme.js";
+import type { WalletCandidate, WalletCandidateLookup } from "./indexer.js";
+import type {
+  WalletBirthResult,
+  WalletBirthVerificationDeps,
+} from "./kit/wallet-provenance.js";
 
 // ============================================================================
 // Credential Storage Types
@@ -255,6 +260,38 @@ export interface SmartAccountConfig {
 
   /** Session expiration time in milliseconds (default: 7 days) */
   sessionExpiryMs?: number;
+
+  /**
+   * Optional custom birth lookup and verification.
+   * Use this for wallets that a factory contract deployed.
+   * The built-in ones apply to each hook left out.
+   *
+   * @example
+   * ```typescript
+   * const kit = new SmartAccountKit({
+   *   // ... other config
+   *   walletProvenance: {
+   *     // `readFactoryBirth` is the app's own proof, such as the address
+   *     // the factory derives from the wallet's signers.
+   *     verifyBirth: async (deps, candidate) => {
+   *       const birth = await readFactoryBirth(deps.rpc, candidate);
+   *       return birth
+   *         ? { ok: true, birth }
+   *         : { ok: false, reason: 'contract_not_created', detail: 'not a factory wallet' };
+   *     },
+   *   },
+   * });
+   * ```
+   */
+  walletProvenance?: {
+    lookupWalletCandidates?: (
+      credentialId: string
+    ) => Promise<WalletCandidateLookup | null>;
+    verifyBirth?: (
+      deps: WalletBirthVerificationDeps,
+      candidate: WalletCandidate
+    ) => Promise<WalletBirthResult>;
+  };
 
   /**
    * Optional external wallet adapter for multi-signer support.
