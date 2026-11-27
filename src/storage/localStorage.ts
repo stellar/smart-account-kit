@@ -44,9 +44,27 @@ function deserializeCredential(data: SerializedCredential): StoredCredential {
 
 export class LocalStorageAdapter implements StorageAdapter {
   private storageKey: string;
+  private sessionStorageKey: string;
 
   constructor(storageKey: string = STORAGE_KEY) {
+    if (!storageKey) {
+      throw new Error("storageKey must be a non-empty string");
+    }
+    if (
+      storageKey === SESSION_KEY ||
+      storageKey.startsWith(`${SESSION_KEY}:`)
+    ) {
+      throw new Error(
+        `storageKey "${storageKey}" is reserved for session storage`
+      );
+    }
     this.storageKey = storageKey;
+    // Keep the legacy key for the default adapter so existing sessions remain
+    // available after upgrading. Custom adapters namespace sessions under
+    // `${SESSION_KEY}:${storageKey}` so they cannot collide with the default
+    // session key or with another adapter's credential key.
+    this.sessionStorageKey =
+      storageKey === STORAGE_KEY ? SESSION_KEY : `${SESSION_KEY}:${storageKey}`;
   }
 
   private getStorage(): Map<string, StoredCredential> {
@@ -133,22 +151,25 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async clear(): Promise<void> {
+    if (typeof localStorage === "undefined") {
+      return;
+    }
     localStorage.removeItem(this.storageKey);
-    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(this.sessionStorageKey);
   }
 
   async saveSession(session: StoredSession): Promise<void> {
     if (typeof localStorage === "undefined") {
       throw new Error("localStorage is not available in this environment");
     }
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    localStorage.setItem(this.sessionStorageKey, JSON.stringify(session));
   }
 
   async getSession(): Promise<StoredSession | null> {
     if (typeof localStorage === "undefined") {
       return null;
     }
-    const data = localStorage.getItem(SESSION_KEY);
+    const data = localStorage.getItem(this.sessionStorageKey);
     if (!data) {
       return null;
     }
@@ -156,7 +177,7 @@ export class LocalStorageAdapter implements StorageAdapter {
       return JSON.parse(data);
     } catch (error) {
       console.error(
-        `[SmartAccountKit] Failed to parse stored session at "${SESSION_KEY}"; ` +
+        `[SmartAccountKit] Failed to parse stored session at "${this.sessionStorageKey}"; ` +
           `ignoring the saved session.`,
         error
       );
@@ -166,7 +187,7 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async clearSession(): Promise<void> {
     if (typeof localStorage !== "undefined") {
-      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(this.sessionStorageKey);
     }
   }
 }
