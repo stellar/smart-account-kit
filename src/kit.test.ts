@@ -8,6 +8,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { SmartAccountKit } from "./kit";
+import { MemoryStorage } from "./storage/memory";
 import { SmartAccountErrorCode, ValidationError } from "./errors";
 import { buildAuthDigestSchemeTable } from "./kit/auth-digest-scheme";
 import {
@@ -195,6 +196,68 @@ describe("SmartAccountKit top-level surface", () => {
 
     expect(startAuthentication).toHaveBeenCalledTimes(1);
     expect(result.credentialId).toBe("cred-456");
+  });
+
+  it("connects through the three walletProvenance hooks", async () => {
+    const located = Address.contract(hash(Buffer.from("located"))).toString();
+    const locateWallet = vi.fn().mockResolvedValue(located);
+    const lookupWalletCandidates = vi.fn().mockResolvedValue({
+      schema: 2,
+      complete: true,
+      indexedThroughLedger: 100,
+      candidates: [
+        {
+          contractId: located,
+          birthWasmHash: LEGACY_HASH,
+          creationTransactionHash: "12".repeat(32),
+          creationLedger: 90,
+          currentWasmHash: LEGACY_HASH,
+          derivedAddress: false,
+          collision: false,
+        },
+      ],
+    });
+    const verifyBirth = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "contract_not_created",
+      detail: "not a factory wallet",
+    });
+    const kit = new SmartAccountKit({
+      rpcUrl: "https://rpc.example",
+      networkPassphrase: Networks.TESTNET,
+      accountWasmHash: LEGACY_HASH,
+      webauthnVerifierAddress: Address.contract(
+        hash(Buffer.from("verifier"))
+      ).toString(),
+      storage: new MemoryStorage(),
+      walletProvenance: { locateWallet, lookupWalletCandidates, verifyBirth },
+    });
+    vi.spyOn(kit.rpc, "getContractData").mockResolvedValue({
+      val: {
+        contractData: () => ({
+          val: () => ({
+            instance: () => ({
+              executable: () => ({
+                switch: () => ({ name: "contractExecutableWasm" }),
+                wasmHash: () => Buffer.from(LEGACY_HASH, "hex"),
+              }),
+            }),
+          }),
+        }),
+      },
+    } as never);
+    vi.spyOn(kit.rpc, "getLatestLedger").mockResolvedValue({
+      sequence: 100,
+    } as never);
+
+    // The app's birth check has the last word, here a refusal.
+    await expect(kit.connectWallet({ credentialId: "cred-1" })).rejects.toThrow(
+      /not a factory wallet/i
+    );
+
+    expect(locateWallet).toHaveBeenCalledWith("cred-1", undefined);
+    expect(lookupWalletCandidates).toHaveBeenCalledWith("cred-1");
+    expect(verifyBirth.mock.calls[0]![1]).toMatchObject({ contractId: located });
   });
 
   it("connectWallet routes explicit credentials through connectWithCredentials", async () => {

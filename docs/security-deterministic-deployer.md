@@ -40,6 +40,7 @@ It checks the successful `CreateContractV2` transaction against RPC or Horizon.
 It checks the deployer, salt, birth WASM, constructor signer count, signer type, and policies.
 It then checks current code and the exact live WebAuthn signer.
 An untrusted candidate also requires a fresh WebAuthn assertion.
+With a `walletProvenance.verifyBirth` hook, the app's own check replaces the birth verification; the current-code, live-signer and fresh-assertion checks still run.
 
 `acceptedBirthWasmHashes` controls code accepted at wallet birth.
 Keep this list narrower than `acceptedWasmHashes`.

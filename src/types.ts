@@ -16,6 +16,11 @@ import type { xdr } from "@stellar/stellar-sdk";
 import type { SmartAccountError } from "./errors.js";
 import type { WalletStorage } from "./external-signers.js";
 import type { AuthDigestScheme } from "./kit/auth-digest-scheme.js";
+import type { WalletCandidate, WalletCandidateLookup } from "./indexer.js";
+import type {
+  WalletBirthResult,
+  WalletBirthVerificationDeps,
+} from "./kit/wallet-provenance.js";
 
 // ============================================================================
 // Credential Storage Types
@@ -255,6 +260,56 @@ export interface SmartAccountConfig {
 
   /** Session expiration time in milliseconds (default: 7 days) */
   sessionExpiryMs?: number;
+
+  /**
+   * Optional hooks for wallets a factory contract deployed. The built-in
+   * behaviour applies to each hook left out. A factory wallet needs
+   * `locateWallet` and `verifyBirth`, and `lookupWalletCandidates` unless the
+   * indexer reports its birth.
+   *
+   * - `locateWallet` returns the address of a credential's wallet, in place of
+   *   the address derived from the kit's deployer. It is asked when no address
+   *   is stored for the credential or passed to `connectWallet`, and the
+   *   connection fails when it returns none. On a prompted or `fresh` login it
+   *   receives the login assertion (the passkey's signature and the data it
+   *   signed), not yet verified.
+   * - `lookupWalletCandidates` replaces the indexer's birth lookup. Return
+   *   `schema: 2`, `complete: true` and an `indexedThroughLedger` at or above
+   *   the RPC's latest ledger, or the connection is refused. Its candidate is
+   *   passed to `verifyBirth`.
+   * - `verifyBirth` replaces the built-in birth verification
+   *   (`verifyWalletBirth`). The kit does not re-check its result: the signer
+   *   it returns is the key a first login is verified against. It must prove
+   *   the wallet was created with exactly that one signer, a WebAuthn signer
+   *   for `deps.webauthnVerifierAddress`, and enforce
+   *   `deps.acceptedBirthWasmHashes` and `deps.expectedConstructorArgsHash`
+   *   when set, otherwise `deps.expectedPolicies`.
+   *
+   * @example
+   * ```typescript
+   * const kit = new SmartAccountKit({
+   *   // ... other config
+   *   walletProvenance: {
+   *     locateWallet: (credentialId) => factory.walletOf(credentialId),
+   *     lookupWalletCandidates: (credentialId) => factory.birthOf(credentialId),
+   *     verifyBirth: (deps, candidate) => verifyFactoryBirth(deps, candidate),
+   *   },
+   * });
+   * ```
+   */
+  walletProvenance?: {
+    locateWallet?: (
+      credentialId: string,
+      assertion?: AuthenticationResponseJSON
+    ) => Promise<string | undefined>;
+    lookupWalletCandidates?: (
+      credentialId: string
+    ) => Promise<WalletCandidateLookup | null>;
+    verifyBirth?: (
+      deps: WalletBirthVerificationDeps,
+      candidate: WalletCandidate
+    ) => Promise<WalletBirthResult>;
+  };
 
   /**
    * Optional external wallet adapter for multi-signer support.
