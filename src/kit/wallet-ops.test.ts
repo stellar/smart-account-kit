@@ -806,6 +806,75 @@ describe("wallet-ops", () => {
       );
     });
 
+    it("does not grant local approval when stored credential belongs to a different contract", async () => {
+      const storage = new MemoryStorage();
+      const publicKey = new Uint8Array(65).fill(9);
+      publicKey[0] = 0x04;
+      const credentialId = "cred";
+      const signer = {
+        tag: "External" as const,
+        values: [
+          "CVERIFIER",
+          Buffer.concat([
+            Buffer.from(publicKey),
+            Buffer.from(credentialId, "base64url"),
+          ]),
+        ] as [string, Buffer],
+      };
+      await storage.save({
+        credentialId,
+        publicKey,
+        contractId: "Cstoredcontract",
+        createdAt: 1,
+        isPrimary: true,
+        birthConstructorArgsHash: "34".repeat(32),
+      });
+      const candidate = {
+        contractId: "Cothercontract",
+        birthWasmHash: ACCEPTED_WASM_HASH,
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 90,
+        currentWasmHash: ACCEPTED_WASM_HASH,
+        derivedAddress: false,
+        collision: false,
+      };
+      const verifyBirth = vi.fn().mockResolvedValue({
+        ok: true,
+        birth: {
+          ...candidate,
+          constructorArgsHash: "34".repeat(32),
+          birthSigner: signer,
+        },
+      });
+      const deps = {
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 100 }),
+          },
+          storage
+        ),
+        lookupWalletCandidates: vi.fn().mockResolvedValue({
+          schema: 2,
+          complete: true,
+          indexedThroughLedger: 100,
+          candidates: [candidate],
+        }),
+        verifyBirth,
+        readContextRule: vi.fn().mockResolvedValue({ signers: [signer] }),
+      };
+
+      await expect(
+        connectWithCredentials(deps, credentialId, "Cothercontract", undefined, false)
+      ).rejects.toThrow(/fresh webauthn assertion/i);
+
+      expect(verifyBirth.mock.calls[0]![0].expectedConstructorArgsHash).toBeUndefined();
+      expect(verifyBirth.mock.calls[0]![0].expectedDeployer).toBeDefined();
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+    });
+
     it("connects when valid_until equals the current ledger", async () => {
       const storage = new MemoryStorage();
       const credentialId = "cred";

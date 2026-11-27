@@ -230,6 +230,27 @@ describe("verifyWalletBirth", () => {
       )
     ).resolves.toMatchObject({ ok: false, reason: "salt_mismatch" });
   });
+
+  it("returns invalid_candidate instead of throwing when envelope XDR is malformed", async () => {
+    const creation = buildCreation();
+    const result = await verifyWalletBirth(
+      {
+        rpc: rpcFor("not-valid-base64-xdr" as unknown as xdr.TransactionEnvelope),
+        networkPassphrase: NETWORK,
+        acceptedBirthWasmHashes: [WASM_HASH],
+        webauthnVerifierAddress: VERIFIER,
+        expectedDeployer: DEPLOYER.publicKey(),
+        expectedSalt: SALT,
+        expectedPolicies: [],
+      },
+      candidate(creation.contractId, creation.txHash)
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "invalid_candidate",
+    });
+  });
 });
 
 function derFromCompact(compact: Uint8Array): Buffer {

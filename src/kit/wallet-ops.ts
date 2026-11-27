@@ -442,10 +442,12 @@ export async function connectWithCredentials(
 
   const localPrimary =
     credential !== null &&
+    credential.contractId === contractId &&
     credential.isPrimary !== false &&
     credential.birthConstructorArgsHash !== undefined;
   const localSecondary =
     credential !== null &&
+    credential.contractId === contractId &&
     credential.isPrimary === false &&
     credential.associationVerified === true &&
     credential.birthConstructorArgsHash !== undefined;

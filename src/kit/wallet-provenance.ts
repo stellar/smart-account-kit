@@ -246,7 +246,15 @@ export async function verifyWalletBirth(
     );
   }
 
-  const parsed = TransactionBuilder.fromXDR(envelopeXdr, deps.networkPassphrase);
+  let parsed: ReturnType<typeof TransactionBuilder.fromXDR>;
+  try {
+    parsed = TransactionBuilder.fromXDR(envelopeXdr, deps.networkPassphrase);
+  } catch {
+    return fail(
+      "invalid_candidate",
+      "the creation transaction envelope could not be decoded"
+    );
+  }
   if (parsed.hash().toString("hex") !== txHash) {
     return fail(
       "transaction_hash_mismatch",
@@ -265,7 +273,13 @@ export async function verifyWalletBirth(
       continue;
     }
     const create = operation.func.createContractV2();
-    if (contractIdFromCreateV2(deps.networkPassphrase, create) === candidate.contractId) {
+    let createdId: string | undefined;
+    try {
+      createdId = contractIdFromCreateV2(deps.networkPassphrase, create);
+    } catch {
+      continue;
+    }
+    if (createdId === candidate.contractId) {
       matches.push(create);
     }
   }
@@ -288,9 +302,17 @@ export async function verifyWalletBirth(
     return fail("contract_not_created", "the wallet did not use an address preimage");
   }
   if (deps.expectedDeployer) {
-    const actualDeployer = Address.fromScAddress(
-      preimage.fromAddress().address()
-    ).toString();
+    let actualDeployer: string;
+    try {
+      actualDeployer = Address.fromScAddress(
+        preimage.fromAddress().address()
+      ).toString();
+    } catch {
+      return fail(
+        "deployer_mismatch",
+        "the wallet deployer address could not be decoded"
+      );
+    }
     if (actualDeployer !== deps.expectedDeployer) {
       return fail("deployer_mismatch", "the wallet used an unexpected deployer");
     }

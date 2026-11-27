@@ -2,6 +2,18 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
+## Unreleased
+
+### Fixed
+
+- `LocalStorageAdapter` now namespaces saved sessions by `storageKey` (`smart-account-kit:session:<storageKey>`) instead of sharing a global key across custom adapters (#36, #38). The default adapter keeps the legacy `smart-account-kit:session` key; apps already using a custom `storageKey` will perform a one-time reconnect on upgrade. `clear()` now guards undefined `localStorage` in SSR environments, and reserved session key prefixes are rejected in the constructor.
+- `verifyWalletBirth` now converts unexpected XDR envelope and deployer-address decode failures into typed `WalletBirthResult` failures (`invalid_candidate` / `deployer_mismatch`) so malformed history responses fail closed instead of escaping silent session restore.
+- `connectWithCredentials` now requires `credential.contractId === contractId` before treating a stored credential as locally approved.
+
+### Chore
+
+- Removed the unused `deploy:production` script from `relayer-proxy/package.json` to match the testnet-only relayer proxy policy.
+
 ## 0.10.0 — 2026-10-26
 
 This release keeps `smart-account-kit-bindings@0.5.0` unchanged. Redeploy the relayer proxy to get
