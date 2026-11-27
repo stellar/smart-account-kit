@@ -66,11 +66,15 @@ const WALLET = Address.contract(new Uint8Array(32).fill(1)).toString();
 const OTHER_WALLET = Address.contract(new Uint8Array(32).fill(2)).toString();
 const TOKEN = Address.contract(new Uint8Array(32).fill(5)).toString();
 const WASM_HASH = "84".repeat(32);
+const WALLET_SC_ADDRESS = Address.fromString(WALLET).toScAddress();
+if (WALLET_SC_ADDRESS.type !== "scAddressTypeContract") {
+  throw new Error("Expected contract ScAddress for WALLET");
+}
 // A CAP-84 muxed contract address (`W...`) over the WALLET contract id.
 const MUXED_WALLET = xdr.ScAddress.scAddressTypeMuxedContract(
   new xdr.MuxedContract({
     id: xdr.Uint64.fromString("42"),
-    contractId: Address.fromString(WALLET).toScAddress().contractId(),
+    contractId: WALLET_SC_ADDRESS.contractId,
   })
 );
 const MISSING_CHANNEL = Keypair.fromRawEd25519Seed(
@@ -225,6 +229,20 @@ function deployConstructorArgs(
   ];
 }
 
+function createCustomContractHostFn(
+  opts: Parameters<typeof Operation.createCustomContract>[0]
+): xdr.HostFunctionCreateContractV2 {
+  const body = Operation.createCustomContract(opts).body;
+  if (body.type !== "invokeHostFunction") {
+    throw new Error(`Unexpected operation body: ${body.type}`);
+  }
+  const func = body.invokeHostFunctionOp.hostFunction;
+  if (func.type !== "hostFunctionTypeCreateContractV2") {
+    throw new Error(`Unexpected host function: ${func.type}`);
+  }
+  return func;
+}
+
 function deploySubmission(
   opts: {
     deployer?: string;
@@ -242,7 +260,7 @@ function deploySubmission(
 ) {
   const deployer = opts.deployer ?? DEPLOYER;
   const makeFunc = (wasmHash: string) =>
-    Operation.createCustomContract({
+    createCustomContractHostFn({
       address: Address.fromString(deployer),
       wasmHash: hexBytes(wasmHash),
       salt: opts.invalidConstructor
@@ -251,10 +269,7 @@ function deploySubmission(
       constructorArgs: opts.invalidConstructor
         ? [xdr.ScVal.scvVoid()]
         : deployConstructorArgs(opts.extraSigner),
-    })
-      .body()
-      .invokeHostFunctionOp()
-      .hostFunction();
+    });
   const func = opts.assetPreimage || opts.sacExecutable
     ? xdr.HostFunction.hostFunctionTypeCreateContractV2(
         new xdr.CreateContractArgsV2({
@@ -262,7 +277,7 @@ function deploySubmission(
             ? xdr.ContractIdPreimage.contractIdPreimageFromAsset(
                 xdr.Asset.assetTypeNative()
               )
-            : makeFunc(WASM_HASH).createContractV2().contractIdPreimage(),
+            : makeFunc(WASM_HASH).createContractV2.contractIdPreimage,
           executable: opts.sacExecutable
             ? xdr.ContractExecutable.contractExecutableStellarAsset()
             : xdr.ContractExecutable.contractExecutableWasm(
@@ -287,7 +302,7 @@ function deploySubmission(
         new xdr.SorobanAuthorizedInvocation({
           function:
             xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-              contractInvocation().invokeContract()
+              contractInvocation().invokeContract
             ),
           subInvocations: [],
         }),
@@ -298,13 +313,13 @@ function deploySubmission(
     rootInvocation: new xdr.SorobanAuthorizedInvocation({
       function:
         xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
-          authorizedFunc.createContractV2()
+          authorizedFunc.createContractV2
         ),
       subInvocations,
     }),
-  }).toXDR("base64");
+  }).toXdr("base64");
   return {
-    func: func.toXDR("base64"),
+    func: func.toXdr("base64"),
     auth: opts.extraAuth ? [auth, auth] : [auth],
   };
 }
@@ -368,8 +383,8 @@ function walletSubmission(
     }),
   });
   return {
-    func: xdr.HostFunction.hostFunctionTypeInvokeContract(invoke).toXDR("base64"),
-    auth: [auth.toXDR("base64")],
+    func: xdr.HostFunction.hostFunctionTypeInvokeContract(invoke).toXdr("base64"),
+    auth: [auth.toXdr("base64")],
   };
 }
 
@@ -399,10 +414,10 @@ function contractInstance(contract: string, executable: xdr.ContractExecutable) 
         lastModifiedLedgerSeq: 100,
         val: xdr.LedgerEntryData.contractData(
           new xdr.ContractDataEntry({
-            ext: new xdr.ExtensionPoint(0),
+            ext: xdr.ExtensionPoint.v0(),
             contract: Address.fromString(contract).toScAddress(),
             key: xdr.ScVal.scvLedgerKeyContractInstance(),
-            durability: xdr.ContractDataDurability.persistent(),
+            durability: xdr.ContractDataDurability.persistent,
             val: xdr.ScVal.scvContractInstance(
               new xdr.ScContractInstance({ executable, storage: null })
             ),
@@ -418,7 +433,7 @@ function unsupportedSubmission() {
     ...walletSubmission(),
     func: xdr.HostFunction.hostFunctionTypeUploadContractWasm(
       hexBytes(WASM_HASH)
-    ).toXDR("base64"),
+    ).toXdr("base64"),
   };
 }
 
@@ -434,13 +449,16 @@ function sourceDeployAuth(
     subInvocations?: xdr.SorobanAuthorizedInvocation[];
   } = {}
 ): xdr.SorobanAuthorizationEntry {
+  if (func.type !== "hostFunctionTypeCreateContractV2") {
+    throw new Error(`Expected createContractV2 host function, got ${func.type}`);
+  }
   return new xdr.SorobanAuthorizationEntry({
     credentials:
       opts.credentials ?? xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
     rootInvocation: new xdr.SorobanAuthorizedInvocation({
       function:
         xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
-          func.createContractV2()
+          func.createContractV2
         ),
       subInvocations: opts.subInvocations ?? [],
     }),
@@ -452,7 +470,7 @@ function contractInstanceKey(contract: string): xdr.LedgerKey {
     new xdr.LedgerKeyContractData({
       contract: Address.fromString(contract).toScAddress(),
       key: xdr.ScVal.scvLedgerKeyContractInstance(),
-      durability: xdr.ContractDataDurability.persistent(),
+      durability: xdr.ContractDataDurability.persistent,
     })
   );
 }
@@ -509,15 +527,12 @@ function deployXdr(
   ],
   sorobanData = deploySorobanData(resourceFee)
 ) {
-  const func = Operation.createCustomContract({
+  const func = createCustomContractHostFn({
     address: Address.fromString(keypair.publicKey()),
     wasmHash: hexBytes(wasmHash),
     salt: hash(DEPLOY_CREDENTIAL_ID),
     constructorArgs,
-  })
-    .body()
-    .invokeHostFunctionOp()
-    .hostFunction();
+  });
   const transaction = new TransactionBuilder(new Account(keypair.publicKey(), "0"), {
     fee: totalFee,
     networkPassphrase: Networks.TESTNET,
@@ -527,7 +542,7 @@ function deployXdr(
     .setTimeout(30)
     .build();
   if (sign) transaction.sign(keypair);
-  return transaction.toXDR();
+  return transaction.toXdr();
 }
 
 function nonDeployXdr() {
@@ -539,7 +554,7 @@ function nonDeployXdr() {
     .setTimeout(30)
     .build();
   transaction.sign(DEPLOYER_KEYPAIR);
-  return transaction.toXDR();
+  return transaction.toXdr();
 }
 
 function stubFetch(handlers: { gen?: () => Response; friendbot?: () => Response }) {
@@ -889,13 +904,13 @@ describe("wallet invocation validation", () => {
 
   it("rejects source-account credentials for wallet invocations", async () => {
     const body = walletSubmission();
-    const entry = xdr.SorobanAuthorizationEntry.fromXDR(body.auth[0], "base64");
+    const entry = xdr.SorobanAuthorizationEntry.fromXdr(body.auth[0], "base64");
     const sourceEntry = new xdr.SorobanAuthorizationEntry({
       credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
-      rootInvocation: entry.rootInvocation(),
+      rootInvocation: entry.rootInvocation,
     });
     await expectRejected(
-      { ...body, auth: [sourceEntry.toXDR("base64")] },
+      { ...body, auth: [sourceEntry.toXdr("base64")] },
       "Only address credentials are allowed for wallet auth"
     );
   });
@@ -942,11 +957,15 @@ describe("wallet invocation validation", () => {
 
   it("rejects an arbitrary target even when the wallet WASM is allowlisted", async () => {
     vi.mocked(RpcServer.prototype.getLedgerEntries).mockImplementation(
-      async (key) =>
-        contractInstance(
-          Address.fromScAddress(key.contractData().contract()).toString(),
+      async (key) => {
+        if (key.type !== "contractData") {
+          throw new Error(`Expected contractData ledger key, got ${key.type}`);
+        }
+        return contractInstance(
+          Address.fromScAddress(key.contractData.contract).toString(),
           xdr.ContractExecutable.contractExecutableWasm(hexBytes(WASM_HASH))
-        )
+        );
+      }
     );
     await expectRejected(
       transferSubmission(),
@@ -1025,22 +1044,59 @@ describe("wallet invocation validation", () => {
     "rejects a transfer with a mismatched %s authorization",
     async (change) => {
       const body = transferSubmission();
-      const entry = xdr.SorobanAuthorizationEntry.fromXDR(body.auth[0], "base64");
+      const entry = xdr.SorobanAuthorizationEntry.fromXdr(body.auth[0], "base64");
+      let updated: xdr.SorobanAuthorizationEntry;
       if (change === "credential") {
-        entry.credentials().addressV2().address(
-          Address.fromString(OTHER_WALLET).toScAddress()
-        );
+        if (entry.credentials.type !== "sorobanCredentialsAddressV2") {
+          throw new Error(`Unexpected credentials: ${entry.credentials.type}`);
+        }
+        const cred = entry.credentials.addressV2;
+        updated = new xdr.SorobanAuthorizationEntry({
+          credentials: xdr.SorobanCredentials.sorobanCredentialsAddressV2(
+            new xdr.SorobanAddressCredentials({
+              address: Address.fromString(OTHER_WALLET).toScAddress(),
+              nonce: cred.nonce,
+              signatureExpirationLedger: cred.signatureExpirationLedger,
+              signature: cred.signature,
+            })
+          ),
+          rootInvocation: entry.rootInvocation,
+        });
       } else if (change === "root") {
-        entry.rootInvocation().function().contractFn().functionName("approve");
+        const rootFn = entry.rootInvocation.function;
+        if (rootFn.type !== "sorobanAuthorizedFunctionTypeContractFn") {
+          throw new Error(`Unexpected root function: ${rootFn.type}`);
+        }
+        const contractFn = rootFn.contractFn;
+        updated = new xdr.SorobanAuthorizationEntry({
+          credentials: entry.credentials,
+          rootInvocation: new xdr.SorobanAuthorizedInvocation({
+            function:
+              xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+                new xdr.InvokeContractArgs({
+                  contractAddress: contractFn.contractAddress,
+                  functionName: "approve",
+                  args: contractFn.args,
+                })
+              ),
+            subInvocations: entry.rootInvocation.subInvocations,
+          }),
+        });
       } else {
-        entry.rootInvocation().subInvocations([
-          xdr.SorobanAuthorizationEntry.fromXDR(
-            body.auth[0],
-            "base64"
-          ).rootInvocation(),
-        ]);
+        updated = new xdr.SorobanAuthorizationEntry({
+          credentials: entry.credentials,
+          rootInvocation: new xdr.SorobanAuthorizedInvocation({
+            function: entry.rootInvocation.function,
+            subInvocations: [
+              xdr.SorobanAuthorizationEntry.fromXdr(
+                body.auth[0],
+                "base64"
+              ).rootInvocation,
+            ],
+          }),
+        });
       }
-      body.auth = [entry.toXDR("base64")];
+      body.auth = [updated.toXdr("base64")];
       await expectRejected(
         body,
         "Transfer auth does not exactly match func and wallet"
@@ -1065,20 +1121,134 @@ describe("wallet invocation validation", () => {
 describe("CAP-84 muxed contract addresses", () => {
   function withFunc(
     body: { func: string; auth: string[] },
-    change: (func: xdr.HostFunction) => void
+    change: (func: xdr.HostFunction) => xdr.HostFunction
   ) {
-    const func = xdr.HostFunction.fromXDR(body.func, "base64");
-    change(func);
-    return { ...body, func: func.toXDR("base64") };
+    const func = xdr.HostFunction.fromXdr(body.func, "base64");
+    return { ...body, func: change(func).toXdr("base64") };
   }
 
   function withAuth(
     body: { func: string; auth: string[] },
-    change: (entry: xdr.SorobanAuthorizationEntry) => void
+    change: (entry: xdr.SorobanAuthorizationEntry) => xdr.SorobanAuthorizationEntry
   ) {
-    const entry = xdr.SorobanAuthorizationEntry.fromXDR(body.auth[0], "base64");
-    change(entry);
-    return { ...body, auth: [entry.toXDR("base64")] };
+    const entry = xdr.SorobanAuthorizationEntry.fromXdr(body.auth[0], "base64");
+    return { ...body, auth: [change(entry).toXdr("base64")] };
+  }
+
+  function withPreimageAddress(
+    func: xdr.HostFunction,
+    address: xdr.ScAddress
+  ): xdr.HostFunction {
+    if (func.type !== "hostFunctionTypeCreateContractV2") {
+      throw new Error(`Unexpected host function: ${func.type}`);
+    }
+    const deploy = func.createContractV2;
+    if (deploy.contractIdPreimage.type !== "contractIdPreimageFromAddress") {
+      throw new Error(`Unexpected preimage: ${deploy.contractIdPreimage.type}`);
+    }
+    return xdr.HostFunction.hostFunctionTypeCreateContractV2(
+      new xdr.CreateContractArgsV2({
+        contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+          new xdr.ContractIdPreimageFromAddress({
+            address,
+            salt: deploy.contractIdPreimage.fromAddress.salt,
+          })
+        ),
+        executable: deploy.executable,
+        constructorArgs: deploy.constructorArgs,
+      })
+    );
+  }
+
+  function withCredentialAddress(
+    entry: xdr.SorobanAuthorizationEntry,
+    address: xdr.ScAddress
+  ): xdr.SorobanAuthorizationEntry {
+    const credentials = entry.credentials;
+    if (credentials.type === "sorobanCredentialsAddress") {
+      const cred = credentials.address;
+      return new xdr.SorobanAuthorizationEntry({
+        credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+          new xdr.SorobanAddressCredentials({
+            address,
+            nonce: cred.nonce,
+            signatureExpirationLedger: cred.signatureExpirationLedger,
+            signature: cred.signature,
+          })
+        ),
+        rootInvocation: entry.rootInvocation,
+      });
+    }
+    if (credentials.type === "sorobanCredentialsAddressV2") {
+      const cred = credentials.addressV2;
+      return new xdr.SorobanAuthorizationEntry({
+        credentials: xdr.SorobanCredentials.sorobanCredentialsAddressV2(
+          new xdr.SorobanAddressCredentials({
+            address,
+            nonce: cred.nonce,
+            signatureExpirationLedger: cred.signatureExpirationLedger,
+            signature: cred.signature,
+          })
+        ),
+        rootInvocation: entry.rootInvocation,
+      });
+    }
+    throw new Error(`Unexpected credentials: ${credentials.type}`);
+  }
+
+  function mapInvokeArgs(
+    func: xdr.HostFunction,
+    update: (invoke: xdr.InvokeContractArgs) => xdr.InvokeContractArgs
+  ): xdr.HostFunction {
+    if (func.type !== "hostFunctionTypeInvokeContract") {
+      throw new Error(`Unexpected host function: ${func.type}`);
+    }
+    return xdr.HostFunction.hostFunctionTypeInvokeContract(update(func.invokeContract));
+  }
+
+  function mapRootContractFn(
+    entry: xdr.SorobanAuthorizationEntry,
+    update: (invoke: xdr.InvokeContractArgs) => xdr.InvokeContractArgs
+  ): xdr.SorobanAuthorizationEntry {
+    const fn = entry.rootInvocation.function;
+    if (fn.type !== "sorobanAuthorizedFunctionTypeContractFn") {
+      throw new Error(`Unexpected root function: ${fn.type}`);
+    }
+    return new xdr.SorobanAuthorizationEntry({
+      credentials: entry.credentials,
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function:
+          xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+            update(fn.contractFn)
+          ),
+        subInvocations: entry.rootInvocation.subInvocations,
+      }),
+    });
+  }
+
+  function replaceInvokeContractAddress(
+    invoke: xdr.InvokeContractArgs,
+    contractAddress: xdr.ScAddress
+  ): xdr.InvokeContractArgs {
+    return new xdr.InvokeContractArgs({
+      contractAddress,
+      functionName: invoke.functionName,
+      args: invoke.args,
+    });
+  }
+
+  function replaceInvokeArg(
+    invoke: xdr.InvokeContractArgs,
+    index: number,
+    value: xdr.ScVal
+  ): xdr.InvokeContractArgs {
+    const args = [...invoke.args];
+    args[index] = value;
+    return new xdr.InvokeContractArgs({
+      contractAddress: invoke.contractAddress,
+      functionName: invoke.functionName,
+      args,
+    });
   }
 
   const muxedArg = xdr.ScVal.scvAddress(MUXED_WALLET);
@@ -1088,18 +1258,25 @@ describe("CAP-84 muxed contract addresses", () => {
       "sub-invocation target",
       () =>
         withAuth(walletSubmission(), (entry) =>
-          entry.rootInvocation().subInvocations([
-            new xdr.SorobanAuthorizedInvocation({
-              function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-                new xdr.InvokeContractArgs({
-                  contractAddress: MUXED_WALLET,
-                  functionName: "execute",
-                  args: [],
-                })
-              ),
-              subInvocations: [],
+          new xdr.SorobanAuthorizationEntry({
+            credentials: entry.credentials,
+            rootInvocation: new xdr.SorobanAuthorizedInvocation({
+              function: entry.rootInvocation.function,
+              subInvocations: [
+                new xdr.SorobanAuthorizedInvocation({
+                  function:
+                    xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+                      new xdr.InvokeContractArgs({
+                        contractAddress: MUXED_WALLET,
+                        functionName: "execute",
+                        args: [],
+                      })
+                    ),
+                  subInvocations: [],
+                }),
+              ],
             }),
-          ])
+          })
         ),
       "Auth entry target must be a contract",
     ],
@@ -1107,7 +1284,7 @@ describe("CAP-84 muxed contract addresses", () => {
       "deploy preimage address",
       () =>
         withFunc(deploySubmission(), (func) =>
-          func.createContractV2().contractIdPreimage().fromAddress().address(MUXED_WALLET)
+          withPreimageAddress(func, MUXED_WALLET)
         ),
       "Deploy preimage address must be an account or contract",
     ],
@@ -1115,7 +1292,7 @@ describe("CAP-84 muxed contract addresses", () => {
       "deploy credential address",
       () =>
         withAuth(deploySubmission(), (entry) =>
-          entry.credentials().address().address(MUXED_WALLET)
+          withCredentialAddress(entry, MUXED_WALLET)
         ),
       "Deploy credential address must be an account or contract",
     ],
@@ -1123,7 +1300,7 @@ describe("CAP-84 muxed contract addresses", () => {
       "V1 wallet credential address",
       () =>
         withAuth(walletSubmission({ v1Credentials: true }), (entry) =>
-          entry.credentials().address().address(MUXED_WALLET)
+          withCredentialAddress(entry, MUXED_WALLET)
         ),
       "Auth credential address must be an account or contract",
     ],
@@ -1131,7 +1308,7 @@ describe("CAP-84 muxed contract addresses", () => {
       "V2 wallet credential address",
       () =>
         withAuth(walletSubmission(), (entry) =>
-          entry.credentials().addressV2().address(MUXED_WALLET)
+          withCredentialAddress(entry, MUXED_WALLET)
         ),
       "Auth credential address must be an account or contract",
     ],
@@ -1139,16 +1316,18 @@ describe("CAP-84 muxed contract addresses", () => {
       "invoked wallet contract",
       () =>
         withFunc(walletSubmission(), (func) =>
-          func.invokeContract().contractAddress(MUXED_WALLET)
+          mapInvokeArgs(func, (invoke) =>
+            replaceInvokeContractAddress(invoke, MUXED_WALLET)
+          )
         ),
       "Wallet invocation target must be a contract",
     ],
     [
       "transfer source",
       () =>
-        withFunc(transferSubmission(), (func) => {
-          func.invokeContract().args()[0] = muxedArg;
-        }),
+        withFunc(transferSubmission(), (func) =>
+          mapInvokeArgs(func, (invoke) => replaceInvokeArg(invoke, 0, muxedArg))
+        ),
       "Token transfer source must be a contract",
     ],
     [
@@ -1156,9 +1335,14 @@ describe("CAP-84 muxed contract addresses", () => {
       () =>
         withAuth(
           withFunc(transferSubmission(), (func) =>
-            func.invokeContract().contractAddress(MUXED_WALLET)
+            mapInvokeArgs(func, (invoke) =>
+              replaceInvokeContractAddress(invoke, MUXED_WALLET)
+            )
           ),
-          (entry) => entry.rootInvocation().function().contractFn().contractAddress(MUXED_WALLET)
+          (entry) =>
+            mapRootContractFn(entry, (invoke) =>
+              replaceInvokeContractAddress(invoke, MUXED_WALLET)
+            )
         ),
       "Token transfer target must be a contract",
     ],
@@ -1176,16 +1360,15 @@ describe("CAP-84 muxed contract addresses", () => {
   });
 
   it("refuses a muxed preimage address in a signed xdr deploy with a 403", async () => {
-    const func = Operation.createCustomContract({
-      address: Address.fromString(DEPLOYER),
-      wasmHash: hexBytes(WASM_HASH),
-      salt: hash(DEPLOY_CREDENTIAL_ID),
-      constructorArgs: deployConstructorArgs(),
-    })
-      .body()
-      .invokeHostFunctionOp()
-      .hostFunction();
-    func.createContractV2().contractIdPreimage().fromAddress().address(MUXED_WALLET);
+    const func = withPreimageAddress(
+      createCustomContractHostFn({
+        address: Address.fromString(DEPLOYER),
+        wasmHash: hexBytes(WASM_HASH),
+        salt: hash(DEPLOY_CREDENTIAL_ID),
+        constructorArgs: deployConstructorArgs(),
+      }),
+      MUXED_WALLET
+    );
     const transaction = new TransactionBuilder(new Account(DEPLOYER, "0"), {
       fee: "100",
       networkPassphrase: Networks.TESTNET,
@@ -1196,7 +1379,7 @@ describe("CAP-84 muxed contract addresses", () => {
       .build();
     transaction.sign(DEPLOYER_KEYPAIR);
     const kv = seededKV();
-    const res = await post({ xdr: transaction.toXDR() }, makeEnv({ kv }));
+    const res = await post({ xdr: transaction.toXdr() }, makeEnv({ kv }));
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual({
       success: false,
@@ -1210,12 +1393,11 @@ describe("CAP-84 muxed contract addresses", () => {
   it("still accepts a transfer whose opaque `to` argument is a muxed contract", async () => {
     const body = transferSubmission();
     const toMuxed = withAuth(
-      withFunc(body, (func) => {
-        func.invokeContract().args()[1] = muxedArg;
-      }),
-      (entry) => {
-        entry.rootInvocation().function().contractFn().args()[1] = muxedArg;
-      }
+      withFunc(body, (func) =>
+        mapInvokeArgs(func, (invoke) => replaceInvokeArg(invoke, 1, muxedArg))
+      ),
+      (entry) =>
+        mapRootContractFn(entry, (invoke) => replaceInvokeArg(invoke, 1, muxedArg))
     );
     const res = await post(toMuxed);
     expect(res.status).toBe(200);
@@ -1361,12 +1543,20 @@ describe("signed xdr validation", () => {
 
   it("refuses a muxed policy key in func mode too", async () => {
     const body = deploySubmission();
-    const func = xdr.HostFunction.fromXDR(body.func, "base64");
-    func.createContractV2().constructorArgs(
-      policyArgs(xdr.ScVal.scvAddress(MUXED_WALLET))
+    const parsed = xdr.HostFunction.fromXdr(body.func, "base64");
+    if (parsed.type !== "hostFunctionTypeCreateContractV2") {
+      throw new Error(`Unexpected host function: ${parsed.type}`);
+    }
+    const deploy = parsed.createContractV2;
+    const func = xdr.HostFunction.hostFunctionTypeCreateContractV2(
+      new xdr.CreateContractArgsV2({
+        contractIdPreimage: deploy.contractIdPreimage,
+        executable: deploy.executable,
+        constructorArgs: policyArgs(xdr.ScVal.scvAddress(MUXED_WALLET)),
+      })
     );
     const kv = seededKV();
-    const res = await post({ ...body, func: func.toXDR("base64") }, makeEnv({ kv }));
+    const res = await post({ ...body, func: func.toXdr("base64") }, makeEnv({ kv }));
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual({
       success: false,
@@ -1448,7 +1638,7 @@ describe("signed xdr validation", () => {
               new xdr.SorobanAuthorizedInvocation({
                 function:
                   xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-                    contractInvocation().invokeContract()
+                    contractInvocation().invokeContract
                   ),
                 subInvocations: [],
               }),
@@ -1458,7 +1648,7 @@ describe("signed xdr validation", () => {
       }),
       "Deploy auth does not exactly match the operation"
     );
-    const otherFunc = xdr.HostFunction.fromXDR(
+    const otherFunc = xdr.HostFunction.fromXdr(
       deploySubmission({ wasmHash: "99".repeat(32) }).func,
       "base64"
     );
@@ -1482,8 +1672,8 @@ describe("signed xdr validation", () => {
     expect(res.status).toBe(200);
     expect(order).toEqual(["simulated", "key"]);
     const simulated = vi.mocked(RpcServer.prototype.simulateTransaction).mock
-      .calls[0][0] as { toXDR(): string };
-    expect(simulated.toXDR()).toBe(xdrValue);
+      .calls[0][0] as { toXdr(): string };
+    expect(simulated.toXdr()).toBe(xdrValue);
   });
 
   it("rejects a deployment whose policy contract does not exist (failed simulation)", async () => {
@@ -1532,7 +1722,7 @@ describe("signed xdr validation", () => {
   function deployXdrDeclaring(sorobanData: xdr.SorobanTransactionData) {
     return deployXdr(
       DEPLOYER_KEYPAIR,
-      sorobanData.resourceFee().toBigInt(),
+      sorobanData.resourceFee,
       WASM_HASH,
       true,
       "100",

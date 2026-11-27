@@ -34,8 +34,8 @@ import {
   buildAddressSignatureScVal,
   buildSignaturePreimage,
   createAddressCredentials,
-  getAddressCredentials,
   randomAuthEntryNonce,
+  withUpdatedAddressCredentials,
 } from "./auth-payload.js";
 import {
   buildTokenTransferHostFunction,
@@ -123,7 +123,7 @@ export async function fundWallet(
     // the account is missing, which propagates to the outer catch — no
     // fabricated fallback balance.
     const accountEntry = await deps.rpc.getAccountEntry(tempKeypair.publicKey());
-    const balanceStroops = BigInt(accountEntry.balance().toString());
+    const balanceStroops = BigInt(accountEntry.balance);
     const balanceXlm = stroopsToXlm(balanceStroops);
 
     const transferAmount = balanceXlm - RESERVE_XLM;
@@ -165,7 +165,7 @@ export async function fundWallet(
     const expirationLedger = currentLedger + LEDGERS_PER_HOUR; // ~1 hour
 
     for (const entry of authEntries) {
-      const credType = entry.credentials().switch().name as string;
+      const credType = entry.credentials.type;
 
       // For source_account credentials, convert to Address credentials
       // so the Relayer can use its own channel accounts
@@ -174,7 +174,7 @@ export async function fundWallet(
         const nonce = randomAuthEntryNonce();
 
         // Create new Address credentials entry to replace source_account
-        const addressEntry = new xdr.SorobanAuthorizationEntry({
+        const unsignedEntry = new xdr.SorobanAuthorizationEntry({
           credentials: createAddressCredentials(
             new xdr.SorobanAddressCredentials({
               address: Address.fromString(tempKeypair.publicKey()).toScAddress(),
@@ -183,23 +183,23 @@ export async function fundWallet(
               signature: xdr.ScVal.scvVoid(),
             })
           ),
-          rootInvocation: entry.rootInvocation(),
+          rootInvocation: entry.rootInvocation,
         });
         const preimage = buildSignaturePreimage(
           deps.networkPassphrase,
-          addressEntry,
+          unsignedEntry,
           expirationLedger
         );
-        const payload = hash(preimage.toXDR());
+        const payload = hash(preimage.toXdr());
         const signature = tempKeypair.sign(payload);
-        getAddressCredentials(addressEntry.credentials()).signature(
-          buildAddressSignatureScVal(
+        const signedEntry = withUpdatedAddressCredentials(unsignedEntry, {
+          signature: buildAddressSignatureScVal(
             tempKeypair.rawPublicKey(),
             signature
-          )
-        );
+          ),
+        });
 
-        signedAuthEntries.push(addressEntry);
+        signedAuthEntries.push(signedEntry);
         continue;
       }
 
@@ -216,16 +216,16 @@ export async function fundWallet(
         credType === "sorobanCredentialsAddress" ||
         credType === "sorobanCredentialsAddressV2"
       ) {
-        const credentials = getAddressCredentials(entry.credentials());
-        credentials.signatureExpirationLedger(expirationLedger);
-
         const preimage = buildSignaturePreimage(deps.networkPassphrase, entry, expirationLedger);
-        const payload = hash(preimage.toXDR());
+        const payload = hash(preimage.toXdr());
         const signature = tempKeypair.sign(payload);
 
-        credentials.signature(buildAddressSignatureScVal(tempKeypair.rawPublicKey(), signature));
-
-        signedAuthEntries.push(entry);
+        signedAuthEntries.push(
+          withUpdatedAddressCredentials(entry, {
+            signatureExpirationLedger: expirationLedger,
+            signature: buildAddressSignatureScVal(tempKeypair.rawPublicKey(), signature),
+          })
+        );
         continue;
       }
 

@@ -7,7 +7,12 @@ import {
   createPasskey,
   signAuthEntry,
 } from "./webauthn-ops";
-import { readAuthPayload, writeAuthPayload, getAddressCredentials } from "./auth-payload";
+import {
+  getAddressCredentials,
+  readAuthPayload,
+  withUpdatedAddressCredentials,
+  writeAuthPayload,
+} from "./auth-payload";
 import { AUTH_DIGEST_SCHEMES, buildAuthDigestSchemeTable } from "./auth-digest-scheme";
 import { makeAddressAuthEntry } from "../managers/test-utils";
 import { buildTokenTransferHostFunction } from "./tx-ops";
@@ -136,15 +141,19 @@ describe("signAuthEntry", () => {
     ["ab".repeat(32), undefined],
   ])("checks raw upgrade target %s before WebAuthn signing", async (target, error) => {
     const { deps, startAuthentication } = makeSigningDeps();
-    const entry = makeAddressAuthEntry(CONTRACT);
+    const baseEntry = makeAddressAuthEntry(CONTRACT);
     const args = new xdr.InvokeContractArgs({
       contractAddress: Address.fromString(CONTRACT).toScAddress(),
       functionName: "upgrade",
       args: [xdr.ScVal.scvBytes(Buffer.from(target, "hex")), Address.fromString(CONTRACT).toScVal()],
     });
-    entry.rootInvocation().function(
-      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(args)
-    );
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: baseEntry.credentials,
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(args),
+        subInvocations: [],
+      }),
+    });
     const result = signAuthEntry(deps, entry, {
       credentialId,
       contextRuleIds: [0],
@@ -156,7 +165,7 @@ describe("signAuthEntry", () => {
       expect(startAuthentication).not.toHaveBeenCalled();
     } else {
       const signed = await result;
-      expect(readAuthPayload(getAddressCredentials(signed.credentials()).signature()).signers.size).toBe(1);
+      expect(readAuthPayload(getAddressCredentials(signed.credentials).signature).signers.size).toBe(1);
       expect(startAuthentication).toHaveBeenCalledOnce();
     }
   });
@@ -172,10 +181,10 @@ describe("signAuthEntry", () => {
     });
 
     // The auth entry now carries an AuthPayload with our signer's signature bytes.
-    const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
+    const payload = readAuthPayload(getAddressCredentials(signed.credentials).signature);
     expect(payload.context_rule_ids).toEqual([0]);
     expect(payload.signers.size).toBe(1);
-    expect(getAddressCredentials(signed.credentials()).signatureExpirationLedger()).toBe(1);
+    expect(getAddressCredentials(signed.credentials).signatureExpirationLedger).toBe(1);
     expect(calculateExpiration).not.toHaveBeenCalled();
     expect(startAuthentication).toHaveBeenCalledWith({
       optionsJSON: expect.objectContaining({ userVerification: "required" }),
@@ -250,16 +259,28 @@ describe("signAuthEntry", () => {
 
   it.each([undefined, [2]])("rejects supplied Default rule IDs before the passkey prompt (pin: %j)", async (contextRuleIds) => {
     const { deps, startAuthentication } = makeSigningDeps();
-    const entry = makeAddressAuthEntry(CONTRACT);
-    entry.rootInvocation().function(
-      xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-        buildTokenTransferHostFunction(OTHER_CONTRACT, CONTRACT, VERIFIER, 100_000_000n).invokeContract()
-      )
+    const baseEntry = makeAddressAuthEntry(CONTRACT);
+    const transferFn = xdr.expectUnionVariant(
+      buildTokenTransferHostFunction(OTHER_CONTRACT, CONTRACT, VERIFIER, 100_000_000n),
+      "hostFunctionTypeInvokeContract"
+    ).invokeContract;
+    const entry = withUpdatedAddressCredentials(
+      new xdr.SorobanAuthorizationEntry({
+        credentials: baseEntry.credentials,
+        rootInvocation: new xdr.SorobanAuthorizedInvocation({
+          function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+            transferFn
+          ),
+          subInvocations: [],
+        }),
+      }),
+      {
+        signature: writeAuthPayload({
+          context_rule_ids: [0],
+          signers: new Map(),
+        }),
+      }
     );
-    getAddressCredentials(entry.credentials()).signature(writeAuthPayload({
-      context_rule_ids: [0],
-      signers: new Map(),
-    }));
 
     await expect(signAuthEntry(deps, entry, {
       credentialId,

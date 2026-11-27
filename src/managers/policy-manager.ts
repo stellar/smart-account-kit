@@ -23,7 +23,7 @@ export interface PolicyManagerDeps {
       remove_policy: (args: {
         context_rule_id: number;
         policy_id: number;
-      }) => Promise<AssembledTransaction<null>>;
+      }) => Promise<AssembledTransaction<void | null>>;
     };
   };
 }

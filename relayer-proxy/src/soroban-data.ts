@@ -33,7 +33,7 @@ export function maxDeclaredResourceFee(minResourceFee: bigint): bigint {
 }
 
 function keySet(keys: xdr.LedgerKey[]): Set<string> {
-  return new Set(keys.map((key) => key.toXDR("base64")));
+  return new Set(keys.map((key) => key.toXdr("base64")));
 }
 
 /**
@@ -55,22 +55,22 @@ export function declaredSorobanDataProblem(
   simulated: xdr.SorobanTransactionData,
   minResourceFee: bigint
 ): string | null {
-  const declaredFee = declared.resourceFee().toBigInt();
+  const declaredFee = declared.resourceFee;
   if (declaredFee > maxDeclaredResourceFee(minResourceFee)) {
     return "Declared resource fee is too far above the simulated minimum";
   }
 
-  const declaredFootprint = declared.resources().footprint();
-  const declaredReadWrite = keySet(declaredFootprint.readWrite());
-  const declaredReadOnly = keySet(declaredFootprint.readOnly());
-  const simulatedFootprint = simulated.resources().footprint();
-  for (const key of simulatedFootprint.readWrite()) {
-    if (!declaredReadWrite.has(key.toXDR("base64"))) {
+  const declaredFootprint = declared.resources.footprint;
+  const declaredReadWrite = keySet(declaredFootprint.readWrite);
+  const declaredReadOnly = keySet(declaredFootprint.readOnly);
+  const simulatedFootprint = simulated.resources.footprint;
+  for (const key of simulatedFootprint.readWrite) {
+    if (!declaredReadWrite.has(key.toXdr("base64"))) {
       return "Declared footprint is missing a simulated read-write key";
     }
   }
-  for (const key of simulatedFootprint.readOnly()) {
-    const encoded = key.toXDR("base64");
+  for (const key of simulatedFootprint.readOnly) {
+    const encoded = key.toXdr("base64");
     if (!declaredReadOnly.has(encoded) && !declaredReadWrite.has(encoded)) {
       return "Declared footprint is missing a simulated read-only key";
     }

@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { Keypair, hash, xdr } from "@stellar/stellar-sdk";
-import { Address, xdr as stellarXdr } from "@stellar/stellar-sdk";
+import { Address, StrKey, xdr as stellarXdr } from "@stellar/stellar-sdk";
 import {
   buildAuthDigestPreimage,
   buildLegacyAuthDigest,
   buildPreimageAuthDigest,
   getAddressCredentials,
   readAuthPayload,
+  withUpdatedAddressCredentials,
   writeAuthPayload,
 } from "./kit/auth-payload";
 import { AUTH_DIGEST_SCHEMES, type AuthDigestScheme } from "./kit/auth-digest-scheme";
@@ -32,8 +33,8 @@ const SCHEMES = AUTH_DIGEST_SCHEMES;
 function referenceLegacyAuthDigest(signaturePayload: Buffer, contextRuleIds: number[]): Buffer {
   const idsXdr = xdr.ScVal
     .scvVec(contextRuleIds.map((id) => xdr.ScVal.scvU32(id)))
-    .toXDR();
-  return hash(Buffer.concat([signaturePayload, idsXdr]));
+    .toXdr();
+  return Buffer.from(hash(Buffer.concat([signaturePayload, idsXdr])));
 }
 
 describe("buildLegacyAuthDigest", () => {
@@ -103,7 +104,7 @@ describe("buildAuthDigestPreimage", () => {
   for (const vector of vectors) {
     it(`matches the contract encoding and digest for ${vector.name}`, () => {
       const preimage = buildAuthDigestPreimage(account, vector.payload, vector.ids);
-      expect(preimage.toXDR("hex")).toBe(vector.xdr);
+      expect(preimage.toXdr("hex")).toBe(vector.xdr);
       expect(buildPreimageAuthDigest(preimage).toString("hex")).toBe(vector.digest);
     });
   }
@@ -147,8 +148,8 @@ describe("computeEntryAuthDigest", () => {
     expect(authDigest).toHaveLength(32);
     expect(signaturePayload).toHaveLength(32);
     expect(authDigest).toEqual(buildLegacyAuthDigest(signaturePayload, ids));
-    expect(delegatedAuthArgs.map((arg) => arg.toXDR("hex"))).toEqual([
-      xdr.ScVal.scvBytes(authDigest).toXDR("hex"),
+    expect(delegatedAuthArgs.map((arg) => arg.toXdr("hex"))).toEqual([
+      xdr.ScVal.scvBytes(authDigest).toXdr("hex"),
     ]);
   });
 
@@ -166,10 +167,10 @@ describe("computeEntryAuthDigest", () => {
     );
 
     const preimage = buildAuthDigestPreimage(contractId, signaturePayload, ids);
-    expect(authDigest).toEqual(hash(preimage.toXDR()));
+    expect(authDigest).toEqual(Buffer.from(hash(preimage.toXdr())));
     // Delegated signers authorize the struct itself, not its digest.
-    expect(delegatedAuthArgs.map((arg) => arg.toXDR("hex"))).toEqual([
-      preimage.toXDR("hex"),
+    expect(delegatedAuthArgs.map((arg) => arg.toXdr("hex"))).toEqual([
+      preimage.toXdr("hex"),
     ]);
   });
 
@@ -198,10 +199,16 @@ describe("computeEntryAuthDigest", () => {
   });
 
   for (const scheme of SCHEMES) {
-    it(`writes the expiration onto the entry as a side effect (${scheme})`, () => {
+    it(`commits the requested expiration without mutating the entry (${scheme})`, () => {
       const entry = makeAddressAuthEntry(makeContract(2));
-      computeEntryAuthDigest(TESTNET, entry, 12345, [1], scheme);
-      expect(entry.credentials().address().signatureExpirationLedger()).toBe(12345);
+      const updated = withUpdatedAddressCredentials(entry, {
+        signatureExpirationLedger: 12345,
+      });
+      const result = computeEntryAuthDigest(TESTNET, entry, 12345, [1], scheme);
+      expect(getAddressCredentials(entry.credentials).signatureExpirationLedger).toBe(1);
+      expect(result.authDigest).toEqual(
+        computeEntryAuthDigest(TESTNET, updated, 12345, [1], scheme).authDigest
+      );
     });
 
     it(`changes the digest when expiration changes (${scheme})`, () => {
@@ -264,7 +271,7 @@ describe("signAuthEntryWithSigners", () => {
 
   function makeMutationEntry(functionName: string): stellarXdr.SorobanAuthorizationEntry {
     return new stellarXdr.SorobanAuthorizationEntry({
-      credentials: makeAddressAuthEntry(contractId).credentials(),
+      credentials: makeAddressAuthEntry(contractId).credentials,
       rootInvocation: new stellarXdr.SorobanAuthorizedInvocation({
         function: stellarXdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
           new stellarXdr.InvokeContractArgs({
@@ -280,7 +287,7 @@ describe("signAuthEntryWithSigners", () => {
 
   it("returns a signed copy carrying the rule ids and a verifiable signature", async () => {
     const entry = makeAddressAuthEntry(contractId);
-    const before = entry.toXDR("base64");
+    const before = entry.toXdr("base64");
 
     const signed = await signAuthEntryWithSigners(entry, [signerA], {
       networkPassphrase: TESTNET,
@@ -290,13 +297,13 @@ describe("signAuthEntryWithSigners", () => {
     });
 
     // Input untouched; output is a distinct signed entry.
-    expect(entry.toXDR("base64")).toBe(before);
-    expect(signed.toXDR("base64")).not.toBe(before);
+    expect(entry.toXdr("base64")).toBe(before);
+    expect(signed.toXdr("base64")).not.toBe(before);
 
-    const credentials = getAddressCredentials(signed.credentials());
-    expect(credentials.signatureExpirationLedger()).toBe(500);
+    const credentials = getAddressCredentials(signed.credentials);
+    expect(credentials.signatureExpirationLedger).toBe(500);
 
-    const payload = readAuthPayload(credentials.signature());
+    const payload = readAuthPayload(credentials.signature);
     expect(payload.context_rule_ids).toEqual([3]);
     expect(payload.signers.size).toBe(1);
     const [[signer, sig]] = Array.from(payload.signers.entries());
@@ -305,7 +312,7 @@ describe("signAuthEntryWithSigners", () => {
     // The signature is over the P27 auth digest bound to [3] and expiration 500.
     const { authDigest } = computeEntryAuthDigest(
       TESTNET,
-      stellarXdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR()),
+      stellarXdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr()),
       500,
       [3],
       "legacy-concat"
@@ -315,7 +322,7 @@ describe("signAuthEntryWithSigners", () => {
       keypairA.verify(
         computeEntryAuthDigest(
           TESTNET,
-          stellarXdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR()),
+          stellarXdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr()),
           500,
           [4],
       "legacy-concat"
@@ -340,7 +347,7 @@ describe("signAuthEntryWithSigners", () => {
       contextRuleIds: [3],
     });
 
-    const payload = readAuthPayload(getAddressCredentials(second.credentials()).signature());
+    const payload = readAuthPayload(getAddressCredentials(second.credentials).signature);
     expect(payload.context_rule_ids).toEqual([3]);
     expect(payload.signers.size).toBe(2);
   });
@@ -353,7 +360,7 @@ describe("signAuthEntryWithSigners", () => {
       contextRuleIds: [3],
       expiration: 500,
     });
-    const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
+    const payload = readAuthPayload(getAddressCredentials(signed.credentials).signature);
     expect(payload.signers.size).toBe(1);
   });
 
@@ -387,11 +394,12 @@ describe("signAuthEntryWithSigners", () => {
   });
 
   it("rejects supplied rule IDs without an explicit caller choice", async () => {
-    const entry = makeAddressAuthEntry(contractId);
-    getAddressCredentials(entry.credentials()).signature(writeAuthPayload({
-      context_rule_ids: [0],
-      signers: new Map(),
-    }));
+    const entry = withUpdatedAddressCredentials(makeAddressAuthEntry(contractId), {
+      signature: writeAuthPayload({
+        context_rule_ids: [0],
+        signers: new Map(),
+      }),
+    });
     const signAuthDigest = vi.fn(async () => Buffer.alloc(64));
 
     await expect(signAuthEntryWithSigners(entry, [{ signer: signerA.signer, signAuthDigest }], {
@@ -402,8 +410,9 @@ describe("signAuthEntryWithSigners", () => {
   });
 
   it("requires rule ids, an expiration, and at least one signer", async () => {
-    const entry = makeAddressAuthEntry(contractId);
-    getAddressCredentials(entry.credentials()).signatureExpirationLedger(0);
+    const entry = withUpdatedAddressCredentials(makeAddressAuthEntry(contractId), {
+      signatureExpirationLedger: 0,
+    });
 
     await expect(
       signAuthEntryWithSigners(entry, [signerA], { networkPassphrase: TESTNET,
@@ -426,7 +435,7 @@ describe("signAuthEntryWithSigners", () => {
   it("rejects source-account and delegated credential types", async () => {
     const sourceEntry = new stellarXdr.SorobanAuthorizationEntry({
       credentials: stellarXdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
-      rootInvocation: makeAddressAuthEntry(contractId).rootInvocation(),
+      rootInvocation: makeAddressAuthEntry(contractId).rootInvocation,
     });
     await expect(
       signAuthEntryWithSigners(sourceEntry, [signerA], {
@@ -455,7 +464,7 @@ describe("signAuthEntryWithSigners", () => {
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toHaveLength(32);
-    const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
+    const payload = readAuthPayload(getAddressCredentials(signed.credentials).signature);
     expect(Array.from(payload.signers.values())[0]).toEqual(Buffer.alloc(64, 9));
   });
   it("signs the preimage-v1 digest for a v0.8.0 wallet", async () => {
@@ -466,12 +475,12 @@ describe("signAuthEntryWithSigners", () => {
       contextRuleIds: [3],
       expiration: 500,
     });
-    const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
+    const payload = readAuthPayload(getAddressCredentials(signed.credentials).signature);
     const [sig] = Array.from(payload.signers.values());
     const digest = (scheme: AuthDigestScheme) =>
       computeEntryAuthDigest(
         TESTNET,
-        stellarXdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR()),
+        stellarXdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr()),
         500,
         [3],
         scheme
@@ -524,10 +533,14 @@ describe("CAP-84 muxed contract addresses on the sign-only path", () => {
   const token = makeContract(32);
   const keypair = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 14));
   const signer = new Ed25519Signer(keypair, verifier);
+  const muxedTargetAddress = Address.fromString(makeContract(33)).toScAddress();
+  if (muxedTargetAddress.type !== "scAddressTypeContract") {
+    throw new Error("Expected contract ScAddress");
+  }
   const muxed = stellarXdr.ScAddress.scAddressTypeMuxedContract(
     new stellarXdr.MuxedContract({
       id: stellarXdr.Uint64.fromString("42"),
-      contractId: Address.fromString(makeContract(33)).toScAddress().contractId(),
+      contractId: muxedTargetAddress.contractId,
     })
   );
   const options = {
@@ -555,7 +568,7 @@ describe("CAP-84 muxed contract addresses on the sign-only path", () => {
     root: stellarXdr.SorobanAuthorizedInvocation
   ): stellarXdr.SorobanAuthorizationEntry {
     return new stellarXdr.SorobanAuthorizationEntry({
-      credentials: makeAddressAuthEntry(wallet).credentials(),
+      credentials: makeAddressAuthEntry(wallet).credentials,
       rootInvocation: root,
     });
   }
@@ -578,11 +591,11 @@ describe("CAP-84 muxed contract addresses on the sign-only path", () => {
       { tag: "CallContract", values: [token] },
     ]);
     const signed = await signAuthEntryWithSigners(entry, [signer], options);
-    const payload = readAuthPayload(getAddressCredentials(signed.credentials()).signature());
+    const payload = readAuthPayload(getAddressCredentials(signed.credentials).signature);
     const [[, sig]] = Array.from(payload.signers.entries());
     const { authDigest } = computeEntryAuthDigest(
       TESTNET,
-      stellarXdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR()),
+      stellarXdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr()),
       500,
       [0],
       "preimage-v1"
@@ -591,8 +604,19 @@ describe("CAP-84 muxed contract addresses on the sign-only path", () => {
   });
 
   it("refuses a muxed credential address with a ValidationError", async () => {
-    const entry = makeAddressAuthEntry(wallet);
-    getAddressCredentials(entry.credentials()).address(muxed);
+    const baseEntry = makeAddressAuthEntry(wallet);
+    const baseCreds = getAddressCredentials(baseEntry.credentials);
+    const entry = new stellarXdr.SorobanAuthorizationEntry({
+      credentials: stellarXdr.SorobanCredentials.sorobanCredentialsAddress(
+        new stellarXdr.SorobanAddressCredentials({
+          address: muxed,
+          nonce: baseCreds.nonce,
+          signatureExpirationLedger: baseCreds.signatureExpirationLedger,
+          signature: baseCreds.signature,
+        })
+      ),
+      rootInvocation: baseEntry.rootInvocation,
+    });
     await expect(signAuthEntryWithSigners(entry, [signer], options)).rejects.toMatchObject({
       name: "ValidationError",
       code: SmartAccountErrorCode.INVALID_INPUT,
@@ -628,7 +652,7 @@ describe("base64 XDR input (cross-SDK boundary)", () => {
       const entry = makeAddressAuthEntry(makeContract(21));
       const fromString = computeEntryAuthDigest(
         TESTNET,
-        entry.toXDR("base64"),
+        entry.toXdr("base64"),
         500,
         [3],
         scheme
@@ -637,8 +661,8 @@ describe("base64 XDR input (cross-SDK boundary)", () => {
 
       expect(fromString.signaturePayload).toEqual(fromObject.signaturePayload);
       expect(fromString.authDigest).toEqual(fromObject.authDigest);
-      expect(fromString.delegatedAuthArgs.map((arg) => arg.toXDR("base64"))).toEqual(
-        fromObject.delegatedAuthArgs.map((arg) => arg.toXDR("base64"))
+      expect(fromString.delegatedAuthArgs.map((arg) => arg.toXdr("base64"))).toEqual(
+        fromObject.delegatedAuthArgs.map((arg) => arg.toXdr("base64"))
       );
     });
 
@@ -652,14 +676,14 @@ describe("base64 XDR input (cross-SDK boundary)", () => {
       };
 
       const fromString = await signAuthEntryWithSigners(
-        entry.toXDR("base64"),
+        entry.toXdr("base64"),
         [signerA],
         options
       );
       const fromObject = await signAuthEntryWithSigners(entry, [signerA], options);
 
       expect(typeof fromString).toBe("string");
-      expect(fromString).toBe(fromObject.toXDR("base64"));
+      expect(fromString).toBe(fromObject.toXdr("base64"));
     });
   }
 
@@ -671,14 +695,14 @@ describe("base64 XDR input (cross-SDK boundary)", () => {
       expiration: 500,
     };
     const first = await signAuthEntryWithSigners(
-      makeAddressAuthEntry(makeContract(21)).toXDR("base64"),
+      makeAddressAuthEntry(makeContract(21)).toXdr("base64"),
       [signerA],
       options
     );
     const second = await signAuthEntryWithSigners(first, [signerB], options);
 
-    const decoded = stellarXdr.SorobanAuthorizationEntry.fromXDR(second, "base64");
-    const payload = readAuthPayload(getAddressCredentials(decoded.credentials()).signature());
+    const decoded = stellarXdr.SorobanAuthorizationEntry.fromXdr(second, "base64");
+    const payload = readAuthPayload(getAddressCredentials(decoded.credentials).signature);
     expect(payload.signers.size).toBe(2);
   });
 
@@ -696,18 +720,18 @@ describe("base64 XDR input (cross-SDK boundary)", () => {
       options
     );
 
-    const decoded = stellarXdr.SorobanAuthorizationEntry.fromXDR(signed, "base64");
-    const original = stellarXdr.SorobanAuthorizationEntry.fromXDR(
+    const decoded = stellarXdr.SorobanAuthorizationEntry.fromXdr(signed, "base64");
+    const original = stellarXdr.SorobanAuthorizationEntry.fromXdr(
       SDK17_TRANSFER_ENTRY_BASE64,
       "base64"
     );
     // The signature changes only the credentials, not the authorized call.
-    expect(decoded.rootInvocation().toXDR("base64")).toBe(
-      original.rootInvocation().toXDR("base64")
+    expect(decoded.rootInvocation.toXdr("base64")).toBe(
+      original.rootInvocation.toXdr("base64")
     );
-    const credentials = getAddressCredentials(decoded.credentials());
-    expect(credentials.signatureExpirationLedger()).toBe(1000);
-    const payload = readAuthPayload(credentials.signature());
+    const credentials = getAddressCredentials(decoded.credentials);
+    expect(credentials.signatureExpirationLedger).toBe(1000);
+    const payload = readAuthPayload(credentials.signature);
     expect(payload.context_rule_ids).toEqual([0]);
     const [sig] = Array.from(payload.signers.values());
 
@@ -731,14 +755,14 @@ describe("base64 XDR input (cross-SDK boundary)", () => {
     };
 
     const signed = await signAuthEntryWithSigners(
-      new ForeignXdrObject(entry.toXDR()) as unknown as stellarXdr.SorobanAuthorizationEntry,
+      new ForeignXdrObject(entry.toXdr()) as unknown as stellarXdr.SorobanAuthorizationEntry,
       [signerA],
       options
     );
 
     expect(signed).toBeInstanceOf(stellarXdr.SorobanAuthorizationEntry);
-    expect(signed.toXDR("base64")).toBe(
-      (await signAuthEntryWithSigners(entry, [signerA], options)).toXDR("base64")
+    expect(signed.toXdr("base64")).toBe(
+      (await signAuthEntryWithSigners(entry, [signerA], options)).toXdr("base64")
     );
   });
 
@@ -764,5 +788,30 @@ describe("base64 XDR input (cross-SDK boundary)", () => {
       computeEntryAuthDigest(TESTNET, "not base64!!", 500, [3], "legacy-concat")
     ).toThrow(ValidationError);
     expect(signAuthDigest).not.toHaveBeenCalled();
+  });
+
+  it("rejects CAP-84 muxed contract credential addresses in both digest schemes", () => {
+    const baseEntry = makeAddressAuthEntry(makeContract(21));
+    const baseCreds = getAddressCredentials(baseEntry.credentials);
+    const muxedAddress = StrKey.encodeMuxedContract(
+      Buffer.concat([Buffer.from(StrKey.decodeContract(makeContract(21))), Buffer.alloc(8, 7)])
+    );
+    const muxedEntry = new stellarXdr.SorobanAuthorizationEntry({
+      credentials: stellarXdr.SorobanCredentials.sorobanCredentialsAddress(
+        new stellarXdr.SorobanAddressCredentials({
+          address: Address.fromString(muxedAddress).toScAddress(),
+          nonce: baseCreds.nonce,
+          signatureExpirationLedger: baseCreds.signatureExpirationLedger,
+          signature: baseCreds.signature,
+        })
+      ),
+      rootInvocation: baseEntry.rootInvocation,
+    });
+
+    for (const scheme of ["legacy-concat", "preimage-v1"] as const) {
+      expect(() =>
+        computeEntryAuthDigest(TESTNET, muxedEntry, 500, [0], scheme)
+      ).toThrow(ValidationError);
+    }
   });
 });

@@ -9,6 +9,7 @@
  * 5. Let the user choose one candidate to inspect
  */
 
+import "./polyfill";
 import { rpc, xdr, Address } from "@stellar/stellar-sdk";
 import {
   MemoryStorage,
@@ -391,7 +392,7 @@ async function enrichWithContractCheck(account: SmartAccountInfo): Promise<Smart
       new xdr.LedgerKeyContractData({
         contract: new Address(account.contractId).toScAddress(),
         key: xdr.ScVal.scvLedgerKeyContractInstance(),
-        durability: xdr.ContractDataDurability.persistent(),
+        durability: xdr.ContractDataDurability.persistent,
       })
     );
 

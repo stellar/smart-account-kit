@@ -174,7 +174,7 @@ describe("ContextRuleManager", () => {
     });
     expect(deps.wallet.update_context_rule_valid_until).toHaveBeenLastCalledWith({
       context_rule_id: 4,
-      valid_until: undefined,
+      valid_until: null,
     });
   });
 });

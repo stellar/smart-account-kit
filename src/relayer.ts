@@ -308,7 +308,7 @@ export class RelayerClient {
     // Convert to XDR string
     const xdr = typeof transaction === "string"
       ? transaction
-      : transaction.toXDR();
+      : transaction.toXdr();
 
     return this.submit(JSON.stringify({ xdr }), options);
   }

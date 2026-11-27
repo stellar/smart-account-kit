@@ -75,17 +75,17 @@ function buildCreation(options: {
   const operation = transaction.operations[0];
   if (
     operation?.type !== "invokeHostFunction" ||
-    operation.func.switch().name !== "hostFunctionTypeCreateContractV2"
+    operation.func.type !== "hostFunctionTypeCreateContractV2"
   ) {
     throw new Error("test did not build CreateContractV2");
   }
-  const create = operation.func.createContractV2();
+  const create = operation.func.createContractV2;
   const contractId = contractIdFromCreateV2(NETWORK, create);
   if (!contractId) throw new Error("test could not derive contract id");
   return {
     transaction,
     contractId,
-    txHash: transaction.hash().toString("hex"),
+    txHash: xdr.encodeBytes(transaction.hash(), "hex"),
     constructorArgs,
     signer: signers[0]!,
   };

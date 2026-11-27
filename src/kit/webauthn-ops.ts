@@ -26,6 +26,7 @@ import {
   normalizeSignatureExpirationLedger,
   readAuthPayload,
   upsertAuthPayloadSigner,
+  withUpdatedAddressCredentials,
   writeAuthPayload,
 } from "./auth-payload.js";
 import { computeEntryAuthDigest } from "../signers.js";
@@ -138,15 +139,15 @@ export async function signAuthEntry(
   entry: xdr.SorobanAuthorizationEntry,
   options?: SignAuthEntryOptions
 ): Promise<xdr.SorobanAuthorizationEntry> {
-  const normalizedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
-  const credentialType = normalizedEntry.credentials().switch().name as string;
+  let normalizedEntry = xdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr());
+  const credentialType = normalizedEntry.credentials.type;
   if (credentialType === "sorobanCredentialsAddressWithDelegates") {
     throw new Error(
       "ADDRESS_WITH_DELEGATES auth entries are not supported by WebAuthn signing yet"
     );
   }
 
-  const credentials = getAddressCredentials(normalizedEntry.credentials());
+  const credentials = getAddressCredentials(normalizedEntry.credentials);
   const { wallet, contractId } = deps.requireWallet();
   if (getAuthEntryAddress(normalizedEntry) !== contractId) {
     throw new ValidationError(
@@ -163,14 +164,16 @@ export async function signAuthEntry(
   );
   let requestedExpiration = options?.expiration;
   if (requestedExpiration == null) {
-    requestedExpiration = credentials.signatureExpirationLedger();
+    requestedExpiration = credentials.signatureExpirationLedger;
     if (!requestedExpiration) {
       requestedExpiration = await deps.calculateExpiration();
     }
   }
   const expiration = normalizeSignatureExpirationLedger(requestedExpiration);
-  credentials.signatureExpirationLedger(expiration);
-  const authPayload = readAuthPayload(credentials.signature());
+  normalizedEntry = withUpdatedAddressCredentials(normalizedEntry, {
+    signatureExpirationLedger: expiration,
+  });
+  const authPayload = readAuthPayload(credentials.signature);
 
   const credentialId = options?.credentialId ?? deps.getCredentialId();
   if (!credentialId) {
@@ -209,7 +212,7 @@ export async function signAuthEntry(
   const { authDigest } = computeEntryAuthDigest(
     deps.networkPassphrase,
     normalizedEntry,
-    credentials.signatureExpirationLedger(),
+    expiration,
     contextRuleIds,
     authDigestScheme
   );
@@ -235,7 +238,10 @@ export async function signAuthEntry(
 
   authPayload.context_rule_ids = contextRuleIds;
   upsertAuthPayloadSigner(authPayload, signer, buildWebAuthnSignatureBytes(webAuthnSigData));
-  credentials.signature(writeAuthPayload(authPayload));
+  normalizedEntry = withUpdatedAddressCredentials(normalizedEntry, {
+    signatureExpirationLedger: expiration,
+    signature: writeAuthPayload(authPayload),
+  });
 
   await deps.storage.update(credentialId, { lastUsedAt: Date.now() });
   return normalizedEntry;

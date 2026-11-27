@@ -20,6 +20,7 @@ import { FRIENDBOT_RESERVE_XLM } from "../constants";
 import {
   buildDirectTokenTransfer,
   buildI128ScVal,
+  buildTokenTransferHostFunction,
   getSubmissionMethod,
   hasSourceAccountAuth,
   readTokenDecimals,
@@ -33,7 +34,7 @@ import {
   tokenAmountToRawUnits,
 } from "./tx-ops";
 import { fundWallet } from "./fund-ops";
-import { SubmissionError } from "../errors";
+import { SubmissionError, ValidationError } from "../errors";
 
 function makeAccount(seedByte: number): Keypair {
   return Keypair.fromRawEd25519Seed(Buffer.alloc(32, seedByte));
@@ -204,6 +205,7 @@ describe("tx-ops", () => {
       status: "ERROR",
       hash: "rpc-hash",
       errorResult: {
+        toXdr: () => "error-xdr",
         toXDR: () => "error-xdr",
       },
     });
@@ -399,7 +401,7 @@ describe("tx-ops", () => {
           // Real native balance read: 10,000 XLM = 100,000,000,000 stroops.
           getAccountEntry: vi
             .fn()
-            .mockResolvedValue({ balance: () => ({ toString: () => "100000000000" }) }),
+            .mockResolvedValue({ balance: 100000000000n }),
           simulateTransaction,
         } as never,
         networkPassphrase: "Test SDF Network ; September 2015",
@@ -440,7 +442,7 @@ describe("tx-ops", () => {
           getAccount: vi.fn().mockResolvedValue(account),
           getAccountEntry: vi
             .fn()
-            .mockResolvedValue({ balance: () => ({ toString: () => "100000000000" }) }),
+            .mockResolvedValue({ balance: 100000000000n }),
           simulateTransaction,
         } as never,
         networkPassphrase: "Test SDF Network ; September 2015",
@@ -672,14 +674,17 @@ describe("buildDirectTokenTransfer", () => {
 
     // The operation invokes the token contract's transfer directly; the smart
     // account's execute entry point is not involved.
-    const invokeOp = operation.body().invokeHostFunctionOp();
-    const contractFn = invokeOp.hostFunction().invokeContract();
-    expect(Address.fromScAddress(contractFn.contractAddress()).toString()).toBe(token);
-    expect(contractFn.functionName().toString()).toBe("transfer");
-    const args = contractFn.args();
+    const invokeOp = xdr.expectUnionVariant(operation.body, "invokeHostFunction").invokeHostFunctionOp;
+    const contractFn = xdr.expectUnionVariant(
+      invokeOp.hostFunction,
+      "hostFunctionTypeInvokeContract"
+    ).invokeContract;
+    expect(Address.fromScAddress(contractFn.contractAddress).toString()).toBe(token);
+    expect(contractFn.functionName.toString()).toBe("transfer");
+    const args = contractFn.args;
     expect(args).toHaveLength(3);
-    expect(Address.fromScAddress(args[0].address()).toString()).toBe(account);
-    expect(Address.fromScAddress(args[1].address()).toString()).toBe(recipient);
+    expect(Address.fromScAddress(xdr.expectUnionVariant(args[0]!, "scvAddress").address).toString()).toBe(account);
+    expect(Address.fromScAddress(xdr.expectUnionVariant(args[1]!, "scvAddress").address).toString()).toBe(recipient);
     expect(scValToNative(args[2])).toBe(15_000_000n);
 
     expect(options).toMatchObject({
@@ -690,6 +695,43 @@ describe("buildDirectTokenTransfer", () => {
     });
     // The kit's rpc server is reused instead of constructing a throwaway one.
     expect((options as { server?: rpc.Server }).server).toBe(server);
+  });
+
+  it("builds a direct token.transfer to a CAP-84 muxed contract (W...) recipient", async () => {
+    const { contract } = await import("@stellar/stellar-sdk");
+    const buildWithOp = vi
+      .spyOn(contract.AssembledTransaction, "buildWithOp")
+      .mockResolvedValue({ built: {} } as never);
+
+    const server = new rpc.Server("https://rpc.example");
+    const token = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const account = StrKey.encodeContract(Buffer.alloc(32, 8));
+    const muxedBytes = new Uint8Array(40);
+    muxedBytes.fill(9, 0, 32);
+    muxedBytes[39] = 42;
+    const recipient = StrKey.encodeMuxedContract(muxedBytes);
+
+    await buildDirectTokenTransfer(
+      {
+        rpc: server,
+        networkPassphrase: "Test SDF Network ; September 2015",
+        timeoutInSeconds: 30,
+      },
+      token,
+      account,
+      recipient,
+      15_000_000n
+    );
+
+    const [operation] = buildWithOp.mock.calls[0];
+    const invokeOp = xdr.expectUnionVariant(operation.body, "invokeHostFunction").invokeHostFunctionOp;
+    const contractFn = xdr.expectUnionVariant(
+      invokeOp.hostFunction,
+      "hostFunctionTypeInvokeContract"
+    ).invokeContract;
+    const recipientAddr = xdr.expectUnionVariant(contractFn.args[1]!, "scvAddress").address;
+    expect(recipientAddr.type).toBe("scAddressTypeMuxedContract");
+    expect(Address.fromScAddress(recipientAddr).toString()).toBe(recipient);
   });
 
   it("surfaces a failed build-time simulation as a decoded contract error", async () => {
@@ -791,5 +833,41 @@ describe("sign (context rule resolution for signed entries)", () => {
 
     expect(resolveContextRuleIds).not.toHaveBeenCalled();
     expect(signAuthEntry.mock.calls[0][1]).toMatchObject({ contextRuleIds: undefined });
+  });
+});
+
+describe("token host function address validation", () => {
+  const token = StrKey.encodeContract(Buffer.alloc(32, 7));
+  const sender = StrKey.encodeContract(Buffer.alloc(32, 8));
+  const recipient = StrKey.encodeContract(Buffer.alloc(32, 9));
+  const muxed = StrKey.encodeMuxedContract(
+    Buffer.concat([Buffer.alloc(32, 9), Buffer.alloc(8, 3)])
+  );
+  const account = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 10)).publicKey();
+
+  it("rejects W... and G... addresses as tokenContract and W... as fromAddress", async () => {
+    expect(() =>
+      buildTokenTransferHostFunction(muxed, sender, recipient, 1n)
+    ).toThrow(ValidationError);
+    expect(() =>
+      buildTokenTransferHostFunction(account, sender, recipient, 1n)
+    ).toThrow(ValidationError);
+    expect(() =>
+      buildTokenTransferHostFunction(token, muxed, recipient, 1n)
+    ).toThrow(ValidationError);
+    expect(() =>
+      buildTokenTransferHostFunction(token, sender, muxed, 1n)
+    ).not.toThrow();
+
+    await expect(
+      readTokenDecimals(
+        {
+          rpc: { simulateTransaction: vi.fn() } as never,
+          networkPassphrase: "Test SDF Network ; September 2015",
+          timeoutInSeconds: 30,
+        },
+        muxed
+      )
+    ).rejects.toBeInstanceOf(ValidationError);
   });
 });

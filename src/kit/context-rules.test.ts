@@ -36,7 +36,7 @@ function makeRule(
     signer_ids: signers.map((_signer, index) => index),
     policies,
     policy_ids: policies.map((_policy, index) => index),
-    valid_until: undefined,
+    valid_until: null,
   };
 }
 
@@ -405,7 +405,7 @@ describe("context-rules", () => {
     // Golden XDR captured from the deployed contract's get_context_rule, which
     // omits signer_ids/policy_ids. The RPC read path injects empty id vectors so
     // the generated spec can decode the remaining (nested) fields.
-    const retval = xdr.ScVal.fromXDR(
+    const retval = xdr.ScVal.fromXdr(
       "AAAAEQAAAAEAAAAGAAAADwAAAAxjb250ZXh0X3R5cGUAAAAQAAAAAQAAAAEAAAAPAAAAB0RlZmF1bHQAAAAADwAAAAJpZAAAAAAAAwAAAAAAAAAPAAAABG5hbWUAAAAOAAAACG11bHRpc2lnAAAADwAAAAhwb2xpY2llcwAAABAAAAABAAAAAAAAAA8AAAAHc2lnbmVycwAAAAAQAAAAAQAAAAEAAAAQAAAAAQAAAAMAAAAPAAAACEV4dGVybmFsAAAAEgAAAAFkevvWN+lfFhWkw++/Y80InSk9v5KoH6wsQAK0qaATWwAAAA0AAABVBGpkWd9ATmaxASDAotqYT29IUVJTQQZAHUSdBt4RcvRvfInCDIUr0yJMoNJshArXwXmy01MrFLXLzsb6BQhcTEcy3/P5n6TiIqVBkIn8/K2hsVx+oQAAAAAAAA8AAAALdmFsaWRfdW50aWwAAAAAAQ==",
       "base64"
     );
@@ -436,7 +436,7 @@ describe("context-rules", () => {
       policies: [],
       policy_ids: [],
       signer_ids: [],
-      valid_until: undefined,
+      valid_until: null,
     });
     expect(rule.signers).toHaveLength(1);
     expect(rule.signers[0].tag).toBe("External");
@@ -526,9 +526,13 @@ describe("direct token transfer entries", () => {
   // authorized by the smart account's address credentials. Built from the real
   // host-function builder so encoder drift shows up here.
   function makeDirectTransferEntry(): xdr.SorobanAuthorizationEntry {
+    const hostFn = buildTokenTransferHostFunction(token, account, recipient, 15_000_000n);
+    if (hostFn.type !== "hostFunctionTypeInvokeContract") {
+      throw new Error("Expected invokeContract host function");
+    }
     const invocation = new xdr.SorobanAuthorizedInvocation({
       function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-        buildTokenTransferHostFunction(token, account, recipient, 15_000_000n).invokeContract()
+        hostFn.invokeContract
       ),
       subInvocations: [],
     });
@@ -731,10 +735,14 @@ describe("CAP-85 external executable references", () => {
 
 describe("CAP-84 muxed contract addresses in context types", () => {
   const wallet = "CDANWYENKH6PTTY6GDTMDAMYRHMU4SBRPX5NUDYDMTYVOIF32ASZFU4Y";
+  const walletScAddress = Address.fromString(wallet).toScAddress();
+  if (walletScAddress.type !== "scAddressTypeContract") {
+    throw new Error("Expected contract ScAddress");
+  }
   const muxed = xdr.ScAddress.scAddressTypeMuxedContract(
     new xdr.MuxedContract({
       id: xdr.Uint64.fromString("42"),
-      contractId: Address.fromString(wallet).toScAddress().contractId(),
+      contractId: walletScAddress.contractId,
     })
   );
 

@@ -36,13 +36,14 @@ vi.mock("../kit/tx-ops", async (importOriginal) => {
   };
 });
 
-import { Account, Address, Keypair, Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { Account, Address, Keypair, Operation, StrKey, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { Signer as ContractSigner } from "smart-account-kit-bindings";
 import { MultiSignerManager } from "./multi-signer-manager";
 import { resolveContextRuleIdsForEntry } from "../kit/context-rules";
 import {
   getAddressCredentials,
   readAuthPayload,
+  withUpdatedAddressCredentials,
   writeAuthPayload,
 } from "../kit/auth-payload";
 import {
@@ -136,7 +137,7 @@ function makeWalletMutation(
   return {
     hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(invokeArgs),
     authEntry: new xdr.SorobanAuthorizationEntry({
-      credentials: makeAddressAuthEntry(contractId).credentials(),
+      credentials: makeAddressAuthEntry(contractId).credentials,
       rootInvocation: new xdr.SorobanAuthorizedInvocation({
         function:
           xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
@@ -678,17 +679,14 @@ describe("MultiSignerManager", () => {
     });
     deps.sendAndPoll.mockResolvedValue({ success: true, hash: "tx-4" });
     deps.signAuthEntry.mockImplementation(async (entry, options) => {
-      const clonedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
-      const credentials = getAddressCredentials(clonedEntry.credentials());
       const signer = options?.signer;
       expect(signer).toBeDefined();
-      credentials.signature(
-        writeAuthPayload({
+      return withUpdatedAddressCredentials(entry, {
+        signature: writeAuthPayload({
           context_rule_ids: options?.contextRuleIds ?? [],
           signers: new Map([[signer!, Buffer.from("aa", "hex")]]),
-        })
-      );
-      return clonedEntry;
+        }),
+      });
     });
     assembleTransactionMock.mockReturnValue({
       build: () => preparedTx,
@@ -731,7 +729,7 @@ describe("MultiSignerManager", () => {
     const resimTx = deps.rpc.simulateTransaction.mock.calls[0][0] as any;
     const submittedAuthEntry = resimTx.operations[0].auth[0] as xdr.SorobanAuthorizationEntry;
     const authPayload = readAuthPayload(
-      getAddressCredentials(submittedAuthEntry.credentials()).signature()
+      getAddressCredentials(submittedAuthEntry.credentials).signature
     );
 
     const passkeySignature = Array.from(authPayload.signers.entries())
@@ -811,23 +809,34 @@ describe("MultiSignerManager authorization digest schemes", () => {
         .map((arg) => arg.toXDR("hex"));
 
       // The wallet signed a preimage whose root invocation carries those arguments.
-      const signedPreimage = xdr.HashIdPreimage.fromXDR(
+      const signedPreimage = xdr.HashIdPreimage.fromXdr(
         deps.externalSigners.signAuthEntry.mock.calls[0][0],
         "base64"
       );
-      const signedFn = signedPreimage.sorobanAuthorization().invocation().function().contractFn();
-      expect(signedFn.functionName().toString()).toBe("__check_auth");
-      expect(Address.fromScAddress(signedFn.contractAddress()).toString()).toBe(contractId);
-      expect(signedFn.args().map((arg) => arg.toXDR("hex"))).toEqual(expectedArgs);
+      const sorobanAuth = xdr.expectUnionVariant(
+        signedPreimage,
+        "envelopeTypeSorobanAuthorization"
+      ).sorobanAuthorization;
+      const signedFn = xdr.expectUnionVariant(
+        sorobanAuth.invocation.function,
+        "sorobanAuthorizedFunctionTypeContractFn"
+      ).contractFn;
+      expect(signedFn.functionName.toString()).toBe("__check_auth");
+      expect(Address.fromScAddress(signedFn.contractAddress).toString()).toBe(contractId);
+      expect(signedFn.args.map((arg) => arg.toXdr("hex"))).toEqual(expectedArgs);
 
       // The submitted nested entry matches what the wallet signed.
       const resimTx = deps.rpc.simulateTransaction.mock.calls[0][0] as any;
       const delegatedEntry = resimTx.operations[0].auth[1] as xdr.SorobanAuthorizationEntry;
-      expect(getAddressCredentials(delegatedEntry.credentials()).address().toXDR("hex")).toBe(
-        Address.fromString(walletAddress).toScAddress().toXDR("hex")
+      expect(getAddressCredentials(delegatedEntry.credentials).address.toXdr("hex")).toBe(
+        Address.fromString(walletAddress).toScAddress().toXdr("hex")
       );
+      const delegatedFn = xdr.expectUnionVariant(
+        delegatedEntry.rootInvocation.function,
+        "sorobanAuthorizedFunctionTypeContractFn"
+      ).contractFn;
       expect(
-        delegatedEntry.rootInvocation().function().contractFn().args().map((arg) => arg.toXDR("hex"))
+        delegatedFn.args.map((arg) => arg.toXdr("hex"))
       ).toEqual(expectedArgs);
     });
 
@@ -865,11 +874,15 @@ describe("MultiSignerManager authorization digest schemes", () => {
     const signer: ContractSigner = { tag: "External", values: [makeContract(70), ed25519Key] };
     deps.externalSigners.canSignEd25519.mockReturnValue(true);
     deps.externalSigners.signEd25519Digest.mockReturnValue(Buffer.alloc(64, 1));
-    const entry = makeAddressAuthEntry(deps.getContractId());
-    getAddressCredentials(entry.credentials()).signature(writeAuthPayload({
-      context_rule_ids: [0],
-      signers: new Map(),
-    }));
+    const entry = withUpdatedAddressCredentials(
+      makeAddressAuthEntry(deps.getContractId()),
+      {
+        signature: writeAuthPayload({
+          context_rule_ids: [0],
+          signers: new Map(),
+        }),
+      }
+    );
     const manager = new MultiSignerManager(deps);
 
     const result = await manager.operation(
@@ -942,5 +955,66 @@ describe("MultiSignerManager authorization digest schemes", () => {
     expect(deps.signAuthEntry).not.toHaveBeenCalled();
     expect(deps.externalSigners.signAuthEntry).not.toHaveBeenCalled();
     expect(deps.sendAndPoll).not.toHaveBeenCalled();
+  });
+
+  it("rejects self-transfer when recipient is a CAP-84 muxed address wrapping the wallet", async () => {
+    const deps = makeDeps();
+    const contractId = deps.getContractId();
+    const contractBytes = StrKey.decodeContract(contractId);
+    const selfMuxed = StrKey.encodeMuxedContract(
+      Buffer.concat([Buffer.from(contractBytes), Buffer.alloc(8, 5)])
+    );
+    const tokenContract = makeContract(99);
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.transfer(tokenContract, selfMuxed, 10, []);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBeInstanceOf(ValidationError);
+      expect(result.error.message).toMatch(/Cannot transfer to self/);
+    }
+    expect(deps.rpc.simulateTransaction).not.toHaveBeenCalled();
+  });
+
+  it("snapshots caller auth entry before validation so async rootInvocation mutation cannot leak", async () => {
+    const deps = makeDeps();
+    const contractId = deps.getContractId();
+    prepareSubmission(deps, "preimage-v1");
+    deps.signAuthEntry.mockImplementation(async (entry) => entry);
+    const entry = makeAddressAuthEntry(contractId);
+    const manager = new MultiSignerManager(deps);
+
+    const result = await manager.operation(
+      pingOperation([entry]),
+      [{
+        signer: makeExternalSigner(3, 4, 5),
+        type: "passkey",
+        credentialId: Buffer.alloc(20, 5).toString("base64url"),
+      }],
+      {
+        resolveContextRuleIds: async () => {
+          // Mutate the caller-held entry after validation has already started.
+          entry.rootInvocation.subInvocations.push(
+            new xdr.SorobanAuthorizedInvocation({
+              function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+                new xdr.InvokeContractArgs({
+                  contractAddress: Address.fromString(contractId).toScAddress(),
+                  functionName: "upgrade",
+                  args: [],
+                })
+              ),
+              subInvocations: [],
+            })
+          );
+          return [12];
+        },
+      }
+    );
+
+    expect(result).toEqual({ success: true, hash: "tx-scheme" });
+    const resimTx = deps.rpc.simulateTransaction.mock.calls[0][0] as any;
+    const submittedAuthEntry = resimTx.operations[0].auth[0] as xdr.SorobanAuthorizationEntry;
+    expect(submittedAuthEntry.rootInvocation.subInvocations).toHaveLength(0);
   });
 });

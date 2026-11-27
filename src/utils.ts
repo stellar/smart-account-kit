@@ -27,7 +27,7 @@ import {
  * {@link DEFAULT_DEPLOYER_SEED}).
  */
 export const DEFAULT_DEPLOYER_PUBLIC_KEY = Keypair.fromRawEd25519Seed(
-  hash(Buffer.from(DEFAULT_DEPLOYER_SEED))
+  hash(new TextEncoder().encode(DEFAULT_DEPLOYER_SEED))
 ).publicKey();
 
 /**
@@ -45,15 +45,21 @@ export function isDefaultDeployer(publicKey: string): boolean {
 // ============================================================================
 
 /**
- * Validate that a string is a valid Stellar address (G... or C...).
+ * Validate that a string is a valid Stellar address (`G...`, `C...`, or
+ * optionally a CAP-84 muxed contract `W...` address).
  *
  * Uses stellar-sdk's StrKey methods for proper checksum validation.
  *
  * @param address - The address to validate
  * @param fieldName - Name of the field for error messages
+ * @param options - Optional validation flags (`allowMuxed` accepts `W...` muxed contract addresses)
  * @throws {ValidationError} If the address is invalid
  */
-export function validateAddress(address: string, fieldName: string = "address"): void {
+export function validateAddress(
+  address: string,
+  fieldName: string = "address",
+  options?: { allowMuxed?: boolean }
+): void {
   if (!address || typeof address !== "string") {
     throw new ValidationError(
       `${fieldName} is required`,
@@ -64,10 +70,14 @@ export function validateAddress(address: string, fieldName: string = "address"):
 
   const isValidAccount = StrKey.isValidEd25519PublicKey(address);
   const isValidContract = StrKey.isValidContract(address);
+  const isValidMuxedContract =
+    options?.allowMuxed === true && StrKey.isValidMuxedContract(address);
 
-  if (!isValidAccount && !isValidContract) {
+  if (!isValidAccount && !isValidContract && !isValidMuxedContract) {
     throw new ValidationError(
-      `Invalid ${fieldName}: must be a valid Stellar account (G...) or contract (C...) address`,
+      options?.allowMuxed
+        ? `Invalid ${fieldName}: must be a valid Stellar account (G...), contract (C...), or muxed contract (W...) address`
+        : `Invalid ${fieldName}: must be a valid Stellar account (G...) or contract (C...) address`,
       SmartAccountErrorCode.INVALID_ADDRESS,
       { field: fieldName, value: address.slice(0, 10) + "..." }
     );
@@ -89,9 +99,16 @@ export function normalizeHashHex(value: string): string | undefined {
 export function readInstanceWasmHash(
   instance: Awaited<ReturnType<rpc.Server["getContractData"]>>
 ): string | undefined {
-  const executable = instance.val.contractData().val().instance().executable();
-  return executable.switch().name === "contractExecutableWasm"
-    ? Buffer.from(executable.wasmHash()).toString("hex")
+  if (instance.val.type !== "contractData") {
+    return undefined;
+  }
+  const val = instance.val.contractData.val;
+  if (val.type !== "scvContractInstance") {
+    return undefined;
+  }
+  const executable = val.instance.executable;
+  return executable.type === "contractExecutableWasm"
+    ? xdr.encodeBytes(executable.wasmHash.toBytes(), "hex")
     : undefined;
 }
 
@@ -201,7 +218,7 @@ export function deriveContractAddress(
     })
   );
 
-  return StrKey.encodeContract(hash(preimage.toXDR()));
+  return StrKey.encodeContract(hash(preimage.toXdr()));
 }
 
 /**

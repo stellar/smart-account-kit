@@ -59,16 +59,14 @@ The kit is a client for the OpenZeppelin [`stellar-contracts`](https://github.co
 ## Installation
 
 ```bash
-pnpm add smart-account-kit @stellar/stellar-sdk@^16.4.1
+pnpm add smart-account-kit @stellar/stellar-sdk@^17.4.0
 ```
 
-The kit carries its own `@stellar/stellar-sdk` 16 dependency. An app on SDK 16 should use `^16.4.1`, so that the app and the kit share one copy.
+Requires Node.js `>=22.12.0`. The kit depends on `@stellar/stellar-sdk@^17.4.0` directly (not as a peer dependency) so an app on `@stellar/stellar-sdk@^17.4.0` shares one SDK copy cleanly without risking major-version mismatches in pnpm. To verify a single SDK copy is installed, run `npm ls @stellar/stellar-sdk` or `pnpm why @stellar/stellar-sdk`.
 
-An app that keeps an older 16.x gets a second SDK copy for the kit, and the package manager shows no warning. TypeScript then rejects SDK objects that the app passes to the kit, such as transactions and authorization entries. An `xdr.ScVal` from the app's copy does not match the kit's `xdr.ScVal` class, so the kit re-decodes custom policy `installParams` through their XDR bytes. Upgrade to `^16.4.1`, or pass base64 strings as [an SDK 17 app does](#using-the-kit-from-an-app-on-stellar-sdk-17). To check for two copies, run `npm ls @stellar/stellar-sdk` or `pnpm why @stellar/stellar-sdk`.
+An app on another SDK copy (such as `@stellar/stellar-sdk` 16) can still pass authorization entries as base64 XDR strings; see [Cross-SDK and base64 XDR auth entries](#cross-sdk-and-base64-xdr-auth-entries).
 
-An app on SDK 17 can also use the kit. Pass authorization entries to the kit as base64 strings, as [Using the kit from an app on Stellar SDK 17](#using-the-kit-from-an-app-on-stellar-sdk-17) shows. You cannot pass SDK 17 transaction objects to the kit.
-
-If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit@2.5.0`.
+If you use `StellarWalletsKitAdapter`, install `@creit-tech/stellar-wallets-kit` (`>=2.6.0 <3.0.0`, which also uses `@stellar/stellar-sdk@^17.0.0`).
 
 ## Quick Start
 
@@ -214,25 +212,22 @@ class MyStorage implements StorageAdapter {
 }
 ```
 
-## Using the kit from an app on Stellar SDK 17
+## Cross-SDK and base64 XDR auth entries
 
-The kit uses its own copy of `@stellar/stellar-sdk` 16. The package manager installs that copy with the kit, so your app does not install SDK 16. Keep SDK 17 as your app's own dependency. Stellar SDK 17 rebuilt the XDR classes: unions use `.type`, and fields are properties, not methods. Thus the kit cannot read an SDK 17 XDR object. The XDR wire format did not change, so use base64 XDR strings at the boundary.
+The kit runs natively on `@stellar/stellar-sdk` 17 (class-based `@stellar/js-xdr` v5 with `.type`, property accessors, and `Uint8Array` byte returns). Apps on `@stellar/stellar-sdk@^17.4.0` can pass SDK 17 `xdr.SorobanAuthorizationEntry` and transaction objects directly.
 
-These functions accept a base64 `SorobanAuthorizationEntry` XDR string or an XDR object:
+For callers crossing process boundaries or another copy/major of `@stellar/stellar-sdk` (for example SDK 16), these functions continue to accept a base64 `SorobanAuthorizationEntry` XDR string or an XDR object:
 
 | Function | Result for a string input |
 |----------|---------------------------|
 | `kit.signAuthEntry(entry, options)` | A base64 XDR string |
 | `signAuthEntryWithSigners(entry, signers, options)` | A base64 XDR string |
-| `computeEntryAuthDigest(networkPassphrase, entry, expiration, contextRuleIds, scheme)` | An `EntryAuthDigest` (Buffers, same as for an object) |
+| `computeEntryAuthDigest(networkPassphrase, entry, expiration, contextRuleIds, scheme)` | An `EntryAuthDigest` (same as for an object) |
 
 ```typescript
-// Your app uses @stellar/stellar-sdk 17.
 import { Networks, xdr } from '@stellar/stellar-sdk';
 import { KNOWN_AUTH_DIGEST_SCHEMES, signAuthEntryWithSigners } from 'smart-account-kit';
 
-// `entry` is an SDK 17 xdr.SorobanAuthorizationEntry from your simulation.
-// Give it to the kit as base64. SDK 17 spells the method `toXdr`.
 const signedXdr = await signAuthEntryWithSigners(entry.toXdr('base64'), [signer], {
   networkPassphrase: Networks.TESTNET,
   authDigestScheme: KNOWN_AUTH_DIGEST_SCHEMES[walletWasmHash],
@@ -240,7 +235,6 @@ const signedXdr = await signAuthEntryWithSigners(entry.toXdr('base64'), [signer]
   expiration: latestLedger + 100,
 });
 
-// The result is base64. Decode it with SDK 17. SDK 17 spells the method `fromXdr`.
 const signed = xdr.SorobanAuthorizationEntry.fromXdr(signedXdr, 'base64');
 
 // The passkey path works the same way.
@@ -251,12 +245,11 @@ const passkeySignedXdr = await kit.signAuthEntry(entry.toXdr('base64'), {
 
 Rules:
 
-- A string input gives a string result. An XDR object input gives an XDR object from the kit's SDK 16.
+- A string input gives a string result. An XDR object input gives an XDR object from the kit's SDK 17.
 - A malformed string causes a `ValidationError` with the code `INVALID_INPUT`. The kit throws it before it asks for a passkey or calls a signer. The kit accepts only standard, padded, canonical base64 (the form that `toXdr('base64')` gives).
-- The kit also decodes an SDK 17 object through its bytes at runtime. But TypeScript rejects the SDK 17 type, and the result is an SDK 16 object. Use strings.
-- `sign`, `signAndSubmit`, `signAdmin`, `signAndSubmitAdmin`, and `multiSigners.*` accept only an `AssembledTransaction` from the kit's SDK. The transactions that the kit builds (`kit.execute`, `kit.signers.*`, `kit.rules.*`, `kit.policies.*`, and the policy clients) meet this rule.
-- For a transaction that your app builds with SDK 17, sign each auth entry with `kit.signAuthEntry`. Then re-simulate and submit the transaction with SDK 17. A WebAuthn signature is larger than the simulation placeholder, so re-simulate before you submit.
-- `RelayerClient.send(func, auth)` and `RelayerClient.sendXdr(xdr)` already accept base64 strings.
+- Foreign-SDK XDR objects carrying `toXdr()` or `toXDR()` bytes are also re-decoded through their XDR bytes at runtime (including custom policy `installParams`).
+- `sign`, `signAndSubmit`, `signAdmin`, `signAndSubmitAdmin`, and `multiSigners.*` accept an `AssembledTransaction` from the kit's SDK 17.
+- `RelayerClient.send(func, auth)` and `RelayerClient.sendXdr(xdr)` accept base64 strings directly.
 
 ## API Reference
 
@@ -283,7 +276,7 @@ import { SmartAccountKit } from 'smart-account-kit';
 | `signAndSubmit(transaction, options?)` | Sign, re-simulate, and submit a non-administrative transaction |
 | `signAdmin(transaction, options?)` | Sign one administrative smart-account transaction |
 | `signAndSubmitAdmin(transaction, options?)` | Sign, re-simulate, and submit one administrative transaction |
-| `signAuthEntry(authEntry, { contextRuleIds, ... })` | Sign a single auth entry (low-level). The caller selects the rule IDs; the SDK does not read them from the entry. Accepts a base64 XDR string and then returns one ([SDK 17 apps](#using-the-kit-from-an-app-on-stellar-sdk-17)) |
+| `signAuthEntry(authEntry, { contextRuleIds, ... })` | Sign a single auth entry (low-level). The caller selects the rule IDs; the SDK does not read them from the entry. Accepts either an SDK 17 XDR object or a base64 XDR string ([cross-SDK base64 boundary](#cross-sdk-and-base64-xdr-auth-entries)) |
 | `execute(target, targetFn, targetArgs)` | Build a smart-account-mediated contract call |
 | `executeAndSubmit(target, targetFn, targetArgs, options?)` | Build + sign + submit a smart-account-mediated call |
 | `upgrade(newWasmHash)` | Build an upgrade transaction (32-byte hex string or `Buffer`) |
@@ -674,7 +667,7 @@ const signed = await signAuthEntryWithSigners(entry, [signer], {
 });
 
 // Hand the signed entry back to whoever submits.
-await facilitator.settle(signed.toXDR('base64'));
+await facilitator.settle(signed.toXdr('base64'));
 ```
 
 Rules the helper enforces:
@@ -684,7 +677,7 @@ Rules the helper enforces:
 - It refuses an unknown `authDigestScheme`. A wrong but known scheme gives a signature that fails `__check_auth`; it does not weaken the account.
 - It requires an explicit `expiration` unless the entry already has one.
 - It accepts any `AuthDigestSigner`, so a KMS or HSM signer works the same way.
-- It accepts the entry as a base64 XDR string and then returns a base64 string. An app on Stellar SDK 17 can use this path. See [Using the kit from an app on Stellar SDK 17](#using-the-kit-from-an-app-on-stellar-sdk-17).
+- It accepts the entry as a base64 XDR string and returns a base64 string for cross-SDK or serialized boundaries. See [Cross-SDK and base64 XDR auth entries](#cross-sdk-and-base64-xdr-auth-entries).
 
 ---
 

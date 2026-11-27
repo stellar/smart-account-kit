@@ -4,6 +4,18 @@ All reviews in this changelog are internal engineering reviews unless a linked r
 
 ## Unreleased
 
+### Breaking changes
+
+- Migrated `smart-account-kit`, `smart-account-kit-bindings`, `relayer-proxy`, `demo`, and `indexer/demo` to `@stellar/stellar-sdk` `^17.4.0` (#34). All XDR values now use `@stellar/js-xdr` v5 discriminated unions (`.type`, readonly property accessors, `toXdr`/`fromXdr`) and `Uint8Array` byte returns. Kept `@stellar/stellar-sdk` in `dependencies` (not `peerDependencies`) so SDK 17 apps share a single copy cleanly while preserving the base64 XDR auth-entry boundary from #31.
+- Raised `engines.node` to `>=22.12.0` to match `@stellar/stellar-sdk` 17.
+- Regenerated `smart-account-kit-bindings` (`0.6.0`) with `@stellar/stellar-sdk`'s `stellar-contract-bindings-typescript` generator (native `Uint8Array` types, `peerDependencies: { "@stellar/stellar-sdk": "^17.4.0" }`, `Option<u32>` as `number | null`, void methods returning `AssembledTransaction<void>`). Publish `smart-account-kit-bindings@0.6.0` before publishing the next `smart-account-kit` release.
+- `computeEntryAuthDigest` and `buildSignaturePayload` no longer mutate the caller's `xdr.SorobanAuthorizationEntry` in place (XDR v5 credentials are immutable).
+- Updated `@openzeppelin/relayer-plugin-channels` to `^0.21.1` in `relayer-proxy` and tightened `@creit-tech/stellar-wallets-kit` optional peer range to `>=2.6.0 <3.0.0` (using `2.6.0` in dev/demo).
+
+### Added
+
+- CAP-84 muxed contract address (`W…`) support for transfer recipients in `kit.transfer()`, `kit.multiSigners.transfer()`, `validateAddress(..., { allowMuxed: true })`, and `demo` (#34). Non-muxed contexts (`tokenContract`, verifiers, policy keys, delegated signers) continue to reject `W…` addresses.
+
 ### Fixed
 
 - `LocalStorageAdapter` now namespaces saved sessions by `storageKey` (`smart-account-kit:session:<storageKey>`) instead of sharing a global key across custom adapters (#36, #38). The default adapter keeps the legacy `smart-account-kit:session` key; apps already using a custom `storageKey` will perform a one-time reconnect on upgrade. `clear()` now guards undefined `localStorage` in SSR environments, and reserved session key prefixes are rejected in the constructor.

@@ -210,11 +210,10 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
 
 /**
  * The `C…` strkey of a contract address in request XDR. Every other address
- * type gets a 403. This includes a CAP-84 muxed contract (`W…`), which
- * `Address.fromScAddress` cannot convert and which would otherwise give a 500.
+ * type gets a 403, including CAP-84 muxed contract addresses (`W…`).
  */
 function contractIdOf(address: xdr.ScAddress, message: string): string {
-  if (address.switch().name !== "scAddressTypeContract") {
+  if (address.type !== "scAddressTypeContract") {
     throw new RequestError(message, 403);
   }
   return Address.fromScAddress(address).toString();
@@ -222,7 +221,7 @@ function contractIdOf(address: xdr.ScAddress, message: string): string {
 
 /** Like `contractIdOf`, but also accepts a `G…` account address. */
 function accountOrContractIdOf(address: xdr.ScAddress, message: string): string {
-  const type = address.switch().name;
+  const type = address.type;
   if (type !== "scAddressTypeAccount" && type !== "scAddressTypeContract") {
     throw new RequestError(message, 403);
   }
@@ -484,11 +483,13 @@ async function walletContractIsAllowed(
       new Contract(contractId).getFootprint()
     );
     const entry = response.entries[0];
-    if (!entry) return false;
-    const executable = entry.val.contractData().val().instance().executable();
+    if (!entry || entry.val.type !== "contractData") return false;
+    const val = entry.val.contractData.val;
+    if (val.type !== "scvContractInstance") return false;
+    const executable = val.instance.executable;
     return (
-      executable.switch().name === "contractExecutableWasm" &&
-      hashes.has(toHex(executable.wasmHash()))
+      executable.type === "contractExecutableWasm" &&
+      hashes.has(toHex(executable.wasmHash.toBytes()))
     );
   } catch (error) {
     console.error("Wallet allowlist RPC verification failed:", error);
@@ -509,9 +510,11 @@ async function tokenContractIsAllowed(
       new Contract(contractId).getFootprint()
     );
     const entry = response.entries[0];
-    if (!entry) return false;
-    const executable = entry.val.contractData().val().instance().executable();
-    return executable.switch().name === "contractExecutableStellarAsset";
+    if (!entry || entry.val.type !== "contractData") return false;
+    const val = entry.val.contractData.val;
+    if (val.type !== "scvContractInstance") return false;
+    const executable = val.instance.executable;
+    return executable.type === "contractExecutableStellarAsset";
   } catch (error) {
     console.error("Token allowlist RPC verification failed:", error);
     throw new RequestError("Could not verify token contract", 503);
@@ -522,21 +525,21 @@ function validateAuthorizedInvocation(
   invocation: xdr.SorobanAuthorizedInvocation,
   contractId: string
 ): void {
-  const fn = invocation.function();
-  if (fn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") {
+  const fn = invocation.function;
+  if (fn.type !== "sorobanAuthorizedFunctionTypeContractFn") {
     throw new RequestError(
       "Auth entries may authorize only wallet contract calls",
       403
     );
   }
   const invokedContract = contractIdOf(
-    fn.contractFn().contractAddress(),
+    fn.contractFn.contractAddress,
     "Auth entry target must be a contract"
   );
   if (invokedContract !== contractId) {
     throw new RequestError("Auth entry targets a non-allowlisted contract", 403);
   }
-  for (const child of invocation.subInvocations()) {
+  for (const child of invocation.subInvocations) {
     validateAuthorizedInvocation(child, contractId);
   }
 }
@@ -546,23 +549,23 @@ function validateDeployFunction(
   func: xdr.HostFunction,
   requireAllowedDeployer = true
 ): string {
-  if (func.switch().name !== "hostFunctionTypeCreateContractV2") {
+  if (func.type !== "hostFunctionTypeCreateContractV2") {
     throw new RequestError("Only createContractV2 deployments are allowed", 403);
   }
-  const deploy = func.createContractV2();
-  const executable = deploy.executable();
-  if (executable.switch().name !== "contractExecutableWasm") {
+  const deploy = func.createContractV2;
+  const executable = deploy.executable;
+  if (executable.type !== "contractExecutableWasm") {
     throw new RequestError("Deploy executable must be approved WASM", 403);
   }
-  if (!allowedDeployWasmHashes(env).has(toHex(executable.wasmHash()))) {
+  if (!allowedDeployWasmHashes(env).has(toHex(executable.wasmHash.toBytes()))) {
     throw new RequestError("Deploy WASM hash is not allowlisted", 403);
   }
-  const preimage = deploy.contractIdPreimage();
-  if (preimage.switch().name !== "contractIdPreimageFromAddress") {
+  const preimage = deploy.contractIdPreimage;
+  if (preimage.type !== "contractIdPreimageFromAddress") {
     throw new RequestError("Deploy must use an address contract-id preimage", 403);
   }
   const deployer = accountOrContractIdOf(
-    preimage.fromAddress().address(),
+    preimage.fromAddress.address,
     "Deploy preimage address must be an account or contract"
   );
   if (
@@ -580,40 +583,44 @@ function validateDeployFunction(
  * This check is not an ownership proof or a trust boundary.
  */
 function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
-  const args = deploy.constructorArgs();
+  const args = deploy.constructorArgs;
   if (
     args.length !== 2 ||
-    args[0]?.switch().name !== "scvVec" ||
-    args[1]?.switch().name !== "scvMap"
+    args[0]?.type !== "scvVec" ||
+    args[1]?.type !== "scvMap"
   ) {
     throw new RequestError("Deploy constructor has an invalid argument shape", 403);
   }
-  const signers = args[0].vec() ?? [];
-  if (signers.length !== 1 || signers[0]?.switch().name !== "scvVec") {
+  const signers = args[0].vec ?? [];
+  if (signers.length !== 1 || signers[0]?.type !== "scvVec") {
     throw new RequestError("Deploy must contain exactly one initial signer", 403);
   }
-  const signer = signers[0].vec() ?? [];
+  const signer = signers[0].vec ?? [];
   if (
     signer.length !== 3 ||
-    signer[0]?.switch().name !== "scvSymbol" ||
-    signer[0].sym().toString() !== "External" ||
-    signer[1]?.switch().name !== "scvAddress" ||
-    signer[2]?.switch().name !== "scvBytes"
+    signer[0]?.type !== "scvSymbol" ||
+    signer[0].sym.toString() !== "External" ||
+    signer[1]?.type !== "scvAddress" ||
+    signer[2]?.type !== "scvBytes"
   ) {
     throw new RequestError("Deploy initial signer must be External", 403);
   }
   // The verifier is a contract. Refuse every other address arm, such as a
   // CAP-84 muxed contract, which the constructor traps on after the sponsor pays.
   contractIdOf(
-    signer[1].address(),
+    signer[1].address,
     "Deploy initial signer verifier must be a contract"
   );
-  const keyData = signer[2].bytes();
+  const keyData = signer[2].bytes.toBytes();
   if (keyData.length <= 65 || keyData[0] !== 0x04) {
     throw new RequestError("Deploy initial signer has invalid WebAuthn key data", 403);
   }
   const credentialId = keyData.subarray(65);
-  const salt = deploy.contractIdPreimage().fromAddress().salt();
+  const preimage = deploy.contractIdPreimage;
+  if (preimage.type !== "contractIdPreimageFromAddress") {
+    throw new RequestError("Deploy must use an address contract-id preimage", 403);
+  }
+  const salt = preimage.fromAddress.salt.toBytes();
   if (!bytesEqual(hash(credentialId), salt)) {
     throw new RequestError("Deploy salt does not match the signer credential id", 403);
   }
@@ -622,12 +629,12 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
   // contract, which the constructor traps on after the sponsor pays. The
   // policy values stay opaque.
   const policyKeyMessage = "Deploy policy key must be a contract address";
-  for (const entry of args[1].map() ?? []) {
-    const key = entry.key();
-    if (key.switch().name !== "scvAddress") {
+  for (const entry of args[1].map ?? []) {
+    const key = entry.key;
+    if (key.type !== "scvAddress") {
       throw new RequestError(policyKeyMessage, 403);
     }
-    contractIdOf(key.address(), policyKeyMessage);
+    contractIdOf(key.address, policyKeyMessage);
   }
 }
 
@@ -638,13 +645,13 @@ function validateDeployConstructor(deploy: xdr.CreateContractArgsV2): void {
  * Source-account and delegated credentials stay refused.
  */
 function walletAuthAddress(entry: xdr.SorobanAuthorizationEntry): string {
-  const credentials = entry.credentials();
+  const credentials = entry.credentials;
   const message = "Auth credential address must be an account or contract";
-  switch (credentials.switch().name) {
+  switch (credentials.type) {
     case "sorobanCredentialsAddress":
-      return accountOrContractIdOf(credentials.address().address(), message);
+      return accountOrContractIdOf(credentials.address.address, message);
     case "sorobanCredentialsAddressV2":
-      return accountOrContractIdOf(credentials.addressV2().address(), message);
+      return accountOrContractIdOf(credentials.addressV2.address, message);
   }
   throw new RequestError("Only address credentials are allowed for wallet auth", 403);
 }
@@ -655,7 +662,7 @@ async function validateWalletInvocation(
   auth: xdr.SorobanAuthorizationEntry[]
 ): Promise<void> {
   const contractId = contractIdOf(
-    invoke.contractAddress(),
+    invoke.contractAddress,
     "Wallet invocation target must be a contract"
   );
   if (!(await walletContractIsAllowed(env, contractId))) {
@@ -664,7 +671,7 @@ async function validateWalletInvocation(
   const functions = csvSet(
     env.ALLOWED_WALLET_FUNCTIONS ?? DEFAULT_WALLET_FUNCTIONS.join(",")
   );
-  if (!functions.has(invoke.functionName().toString())) {
+  if (!functions.has(invoke.functionName.toString())) {
     throw new RequestError("Wallet function is not allowlisted", 403);
   }
   for (const entry of auth) {
@@ -672,12 +679,11 @@ async function validateWalletInvocation(
     if (signer !== contractId) {
       throw new RequestError("Auth credential is not for the invoked wallet", 403);
     }
-    validateAuthorizedInvocation(entry.rootInvocation(), contractId);
+    validateAuthorizedInvocation(entry.rootInvocation, contractId);
+    const rootFn = entry.rootInvocation.function;
     if (
-      !bytesEqual(
-        entry.rootInvocation().function().contractFn().toXDR(),
-        invoke.toXDR()
-      )
+      rootFn.type !== "sorobanAuthorizedFunctionTypeContractFn" ||
+      !bytesEqual(rootFn.contractFn.toXdr(), invoke.toXdr())
     ) {
       throw new RequestError("Auth root invocation does not match func", 403);
     }
@@ -694,26 +700,26 @@ async function validateDirectTokenTransfer(
   if (auth.length !== 1) {
     throw new RequestError("Transfer must contain exactly one auth entry", 403);
   }
-  const args = invoke.args();
-  if (args.length !== 3 || args[0].switch().name !== "scvAddress") {
+  const args = invoke.args;
+  if (args.length !== 3 || args[0].type !== "scvAddress") {
     throw new RequestError("Token transfer has an invalid argument shape", 403);
   }
   // A sponsored transfer must come from a wallet contract. A `G…` source
   // otherwise reaches walletContractIsAllowed and gives a retryable 503.
   const from = contractIdOf(
-    args[0].address(),
+    args[0].address,
     "Token transfer source must be a contract"
   );
   for (const entry of auth) {
     const wallet = walletAuthAddress(entry);
-    const root = entry.rootInvocation();
-    const rootFn = root.function();
+    const root = entry.rootInvocation;
+    const rootFn = root.function;
     if (
       wallet !== from ||
       !(await walletContractIsAllowed(env, wallet)) ||
-      root.subInvocations().length !== 0 ||
-      rootFn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
-      !bytesEqual(rootFn.contractFn().toXDR(), invoke.toXDR())
+      root.subInvocations.length !== 0 ||
+      rootFn.type !== "sorobanAuthorizedFunctionTypeContractFn" ||
+      !bytesEqual(rootFn.contractFn.toXdr(), invoke.toXdr())
     ) {
       throw new RequestError(
         "Transfer auth does not exactly match func and wallet",
@@ -722,7 +728,7 @@ async function validateDirectTokenTransfer(
     }
   }
   const token = contractIdOf(
-    invoke.contractAddress(),
+    invoke.contractAddress,
     "Token transfer target must be a contract"
   );
   if (!(await tokenContractIsAllowed(env, token))) {
@@ -737,38 +743,38 @@ async function validateFuncSubmission(
   let func: xdr.HostFunction;
   let auth: xdr.SorobanAuthorizationEntry[];
   try {
-    func = xdr.HostFunction.fromXDR(body.func, "base64");
+    func = xdr.HostFunction.fromXdr(body.func, "base64");
     auth = body.auth.map((entry) =>
-      xdr.SorobanAuthorizationEntry.fromXDR(entry, "base64")
+      xdr.SorobanAuthorizationEntry.fromXdr(entry, "base64")
     );
   } catch {
     throw new RequestError("func/auth contains invalid XDR");
   }
 
-  if (func.switch().name === "hostFunctionTypeCreateContractV2") {
+  if (func.type === "hostFunctionTypeCreateContractV2") {
     if (auth.length !== 1) {
       throw new RequestError("Deploy must contain exactly one auth entry", 403);
     }
     const deployer = validateDeployFunction(env, func);
     const entry = auth[0];
-    const credentials = entry.credentials();
-    if (credentials.switch().name !== "sorobanCredentialsAddress") {
+    const credentials = entry.credentials;
+    if (credentials.type !== "sorobanCredentialsAddress") {
       throw new RequestError("Deploy requires V1 address credentials", 403);
     }
     const signer = accountOrContractIdOf(
-      credentials.address().address(),
+      credentials.address.address,
       "Deploy credential address must be an account or contract"
     );
-    const root = entry.rootInvocation();
-    const rootFunction = root.function();
+    const root = entry.rootInvocation;
+    const rootFunction = root.function;
     if (
       signer !== deployer ||
-      root.subInvocations().length !== 0 ||
-      rootFunction.switch().name !==
+      root.subInvocations.length !== 0 ||
+      rootFunction.type !==
         "sorobanAuthorizedFunctionTypeCreateContractV2HostFn" ||
       !bytesEqual(
-        rootFunction.createContractV2HostFn().toXDR(),
-        func.createContractV2().toXDR()
+        rootFunction.createContractV2HostFn.toXdr(),
+        func.createContractV2.toXdr()
       )
     ) {
       throw new RequestError(
@@ -776,9 +782,9 @@ async function validateFuncSubmission(
         403
       );
     }
-  } else if (func.switch().name === "hostFunctionTypeInvokeContract") {
-    const invoke = func.invokeContract();
-    if (invoke.functionName().toString() === "transfer") {
+  } else if (func.type === "hostFunctionTypeInvokeContract") {
+    const invoke = func.invokeContract;
+    if (invoke.functionName.toString() === "transfer") {
       await validateDirectTokenTransfer(env, invoke, auth);
     } else {
       await validateWalletInvocation(env, invoke, auth);
@@ -836,7 +842,7 @@ function validateSourceSignature(transaction: Transaction): void {
   const txHash = transaction.hash();
   if (
     !transaction.signatures.some((signature) =>
-      source.verify(txHash, signature.signature())
+      source.verify(txHash, signature.signature)
     )
   ) {
     throw new RequestError("Deploy transaction lacks a valid source signature", 403);
@@ -854,18 +860,19 @@ function validateXdrDeployAuth(operation: Operation.InvokeHostFunction): void {
     throw new RequestError("Deploy must contain exactly one auth entry", 403);
   }
   const entry = auth[0];
-  if (entry.credentials().switch().name !== "sorobanCredentialsSourceAccount") {
+  if (entry.credentials.type !== "sorobanCredentialsSourceAccount") {
     throw new RequestError("Signed xdr deploy requires source-account credentials", 403);
   }
-  const root = entry.rootInvocation();
-  const rootFunction = root.function();
+  const root = entry.rootInvocation;
+  const rootFunction = root.function;
   if (
-    root.subInvocations().length !== 0 ||
-    rootFunction.switch().name !==
+    root.subInvocations.length !== 0 ||
+    rootFunction.type !==
       "sorobanAuthorizedFunctionTypeCreateContractV2HostFn" ||
+    operation.func.type !== "hostFunctionTypeCreateContractV2" ||
     !bytesEqual(
-      rootFunction.createContractV2HostFn().toXDR(),
-      operation.func.createContractV2().toXDR()
+      rootFunction.createContractV2HostFn.toXdr(),
+      operation.func.createContractV2.toXdr()
     )
   ) {
     throw new RequestError("Deploy auth does not exactly match the operation", 403);
@@ -878,7 +885,7 @@ async function validateXdrSubmission(
 ): Promise<void> {
   let transaction: Transaction;
   try {
-    const decoded = TransactionBuilder.fromXDR(body.xdr, networkPassphrase(env));
+    const decoded = TransactionBuilder.fromXdr(body.xdr, networkPassphrase(env));
     if (!(decoded instanceof Transaction)) throw new Error("fee bump");
     transaction = decoded;
   } catch {
@@ -913,14 +920,14 @@ async function validateXdrSubmission(
   let declared: xdr.SorobanTransactionData;
   try {
     const envelope = transaction.toEnvelope();
-    if (envelope.switch().name !== "envelopeTypeTx") throw new Error("not v1");
-    const ext = envelope.v1().tx().ext();
-    if (ext.switch() !== 1) throw new Error("missing Soroban data");
-    declared = ext.sorobanData();
+    if (envelope.type !== "envelopeTypeTx") throw new Error("not v1");
+    const ext = envelope.v1.tx.ext;
+    if (ext.type !== "sorobanData") throw new Error("missing Soroban data");
+    declared = ext.sorobanData;
   } catch {
     throw new RequestError("Deploy transaction is missing Soroban resource data");
   }
-  if (declared.resourceFee().toBigInt() > maxResourceFee(env)) {
+  if (declared.resourceFee > maxResourceFee(env)) {
     throw new RequestError("Resource fee exceeds configured maximum", 413);
   }
   // The static checks cannot see whether the constructor runs. For example, a

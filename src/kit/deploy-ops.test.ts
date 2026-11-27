@@ -48,14 +48,14 @@ function makeDeps() {
 function makeAuthEntryDeployment() {
   return {
     kind: "auth-entry" as const,
-    func: { toXDR: vi.fn(() => "func-xdr") },
-    auth: [{ toXDR: vi.fn(() => "auth-xdr") }],
+    func: { toXdr: vi.fn(() => "func-xdr"), toXDR: vi.fn(() => "func-xdr") },
+    auth: [{ toXdr: vi.fn(() => "auth-xdr"), toXDR: vi.fn(() => "auth-xdr") }],
   };
 }
 
 function makeCreateSimulation(
   deployer: string,
-  salt: Buffer,
+  salt: Uint8Array,
   subInvocations: xdr.SorobanAuthorizedInvocation[] = []
 ) {
   const operation = Operation.createCustomContract({
@@ -65,11 +65,13 @@ function makeCreateSimulation(
     constructorArgs: [],
     auth: [],
   });
-  const func = operation.body().invokeHostFunctionOp().hostFunction();
+  const body = xdr.expectUnionVariant(operation.body, "invokeHostFunction");
+  const func = body.invokeHostFunctionOp.hostFunction;
+  const createV2 = xdr.expectUnionVariant(func, "hostFunctionTypeCreateContractV2").createContractV2;
   const rootInvocation = new xdr.SorobanAuthorizedInvocation({
     function:
       xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
-        func.createContractV2()
+        createV2
       ),
     subInvocations,
   });
@@ -94,7 +96,7 @@ function makeTx(sendResult?: {
   getTransactionResponse?: { status?: string; ledger?: number };
 }) {
   return {
-    signed: { toXDR: vi.fn(() => "signed-xdr") },
+    signed: { toXdr: vi.fn(() => "signed-xdr"), toXDR: vi.fn(() => "signed-xdr") },
     send: vi.fn().mockResolvedValue(
       sendResult ?? {
         sendTransactionResponse: { hash: "rpc-hash" },
@@ -126,16 +128,16 @@ describe("confirmSubmittedDeployment", () => {
       .addOperation(actualOperation)
       .setTimeout(0)
       .build();
-    const expectedFunc = expectedOperation
-      .body()
-      .invokeHostFunctionOp()
-      .hostFunction();
+    const expectedFunc = xdr.expectUnionVariant(
+      expectedOperation.body,
+      "invokeHostFunction"
+    ).invokeHostFunctionOp.hostFunction;
     const deployment = {
       built: {
         operations: [{ type: "invokeHostFunction", func: expectedFunc }],
       },
     };
-    const transactionHash = transaction.hash().toString("hex");
+    const transactionHash = xdr.encodeBytes(transaction.hash(), "hex");
     const rpc = {
       getTransaction: vi.fn().mockResolvedValue({
         status: Api.GetTransactionStatus.SUCCESS,
@@ -550,17 +552,21 @@ describe("buildDeployTransaction", () => {
     expect(constructorArgs.policies).toEqual(new Map());
     expect(options.address).toBe(deployerKeypair.publicKey());
     expect(options.publicKey).toBeUndefined();
-    expect(Buffer.from(options.salt ?? [])).toEqual(salt);
+    expect(Buffer.from(options.salt ?? [])).toEqual(Buffer.from(salt));
 
-    const fromAddress = result.func
-      .createContractV2()
-      .contractIdPreimage()
-      .fromAddress();
-    expect(Address.fromScAddress(fromAddress.address()).toString()).toBe(
+    const createV2 = xdr.expectUnionVariant(
+      result.func,
+      "hostFunctionTypeCreateContractV2"
+    ).createContractV2;
+    const contractIdPreimage = createV2.contractIdPreimage;
+    const fromAddress = xdr.expectUnionVariant(
+      contractIdPreimage,
+      "contractIdPreimageFromAddress"
+    ).fromAddress;
+    expect(Address.fromScAddress(fromAddress.address).toString()).toBe(
       deployerKeypair.publicKey()
     );
-    expect(Buffer.from(fromAddress.salt())).toEqual(salt);
-    const contractIdPreimage = result.func.createContractV2().contractIdPreimage();
+    expect(Buffer.from(fromAddress.salt.toBytes())).toEqual(Buffer.from(salt));
     const contractId = StrKey.encodeContract(
       hash(
         xdr.HashIdPreimage.envelopeTypeContractId(
@@ -568,7 +574,7 @@ describe("buildDeployTransaction", () => {
             networkId: hash(Buffer.from(networkPassphrase)),
             contractIdPreimage,
           })
-        ).toXDR()
+        ).toXdr()
       )
     );
     expect(contractId).toBe(
@@ -576,22 +582,23 @@ describe("buildDeployTransaction", () => {
     );
 
     const entry = result.auth[0];
-    expect(entry.credentials().switch().name).toBe("sorobanCredentialsAddress");
-    const credentials = getAddressCredentials(entry.credentials());
-    expect(Address.fromScAddress(credentials.address()).toString()).toBe(
+    expect(entry.credentials.type).toBe("sorobanCredentialsAddress");
+    const credentials = getAddressCredentials(entry.credentials);
+    expect(Address.fromScAddress(credentials.address).toString()).toBe(
       deployerKeypair.publicKey()
     );
-    const signature = Buffer.from(
-      credentials.signature().vec()?.[0].map()?.[1].val().bytes() ?? []
-    );
+    const sigVec = xdr.expectUnionVariant(credentials.signature, "scvVec").vec ?? [];
+    const sigMap = xdr.expectUnionVariant(sigVec[0]!, "scvMap").map ?? [];
+    const sigVal = xdr.expectUnionVariant(sigMap[1]!.val, "scvBytes").bytes.toBytes();
+    const signature = Buffer.from(sigVal);
     expect(
       deployerKeypair.verify(
         hash(
           buildSignaturePreimage(
             networkPassphrase,
             entry,
-            credentials.signatureExpirationLedger()
-          ).toXDR()
+            credentials.signatureExpirationLedger
+          ).toXdr()
         ),
         signature
       )

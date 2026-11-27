@@ -5,7 +5,7 @@
 # Generates TypeScript bindings from the configured smart-account target and builds the package.
 #
 # Prerequisites:
-# - Stellar CLI installed (`stellar --version`)
+# - pnpm + @stellar/stellar-sdk installed (uses stellar-contract-bindings-typescript)
 #
 # Configuration resolution order (never sources the local demo/.env, which may be
 # stale or hold secrets):
@@ -79,27 +79,38 @@ if [ -z "$STELLAR_NETWORK" ]; then
         "Public Global Stellar Network ; September 2015")
             STELLAR_NETWORK="mainnet"
             ;;
+        "Test SDF Future Network ; October 2022")
+            STELLAR_NETWORK="futurenet"
+            ;;
+        "Standalone Network ; February 2017")
+            STELLAR_NETWORK="localnet"
+            ;;
     esac
 fi
 
 # Validate
-if ! command -v stellar &> /dev/null; then
-    echo -e "${RED}Error: stellar CLI not found${NC}"
+if ! command -v pnpm &> /dev/null; then
+    echo -e "${RED}Error: pnpm not found${NC}" >&2
     exit 1
 fi
 
-if [ -z "$ACCOUNT_WASM" ] && { [ -z "$STELLAR_RPC_URL" ] || [ -z "$STELLAR_NETWORK_PASSPHRASE" ]; }; then
-    echo -e "${RED}Error: RPC URL or network passphrase not set (via env or demo/.env.example)${NC}"
+if [ -z "$ACCOUNT_WASM" ] && [ -z "$STELLAR_RPC_URL" ]; then
+    echo -e "${RED}Error: RPC URL not set (via env or demo/.env.example)${NC}" >&2
+    exit 1
+fi
+
+if [ -z "$ACCOUNT_WASM" ] && [ -z "$STELLAR_NETWORK" ]; then
+    echo -e "${RED}Error: network not set or passphrase not recognized (set STELLAR_NETWORK or a known STELLAR_NETWORK_PASSPHRASE)${NC}" >&2
     exit 1
 fi
 
 if [ -z "$ACCOUNT_WASM" ] && [ -z "$ACCOUNT_WASM_HASH" ] && [ -z "$ACCOUNT_CONTRACT_ID" ]; then
-    echo -e "${RED}Error: local WASM, WASM hash, or contract ID must be configured${NC}"
+    echo -e "${RED}Error: local WASM, WASM hash, or contract ID must be configured${NC}" >&2
     exit 1
 fi
 
 if [ -n "$ACCOUNT_WASM" ] && [ ! -f "$ACCOUNT_WASM" ]; then
-    echo -e "${RED}Error: local WASM not found: $ACCOUNT_WASM${NC}"
+    echo -e "${RED}Error: local WASM not found: $ACCOUNT_WASM${NC}" >&2
     exit 1
 fi
 
@@ -118,51 +129,59 @@ fi
 echo -e "  config from: ${GREEN}$CONFIG_SOURCE${NC}"
 echo ""
 
-# Step 1: Generate bindings
+# Step 1: Generate bindings into a staging directory so failed RPC/generator
+# runs never clobber the checked-in package.
 echo -e "${YELLOW}Generating TypeScript bindings...${NC}"
 
-STELLAR_CMD=(stellar contract bindings typescript)
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
+OUT_DIR="$STAGE_DIR/out"
+
+GEN_CMD=(pnpm --dir "$KIT_DIR" exec stellar-contract-bindings-typescript)
 if [ -n "$ACCOUNT_WASM" ]; then
-    STELLAR_CMD+=(--wasm "$ACCOUNT_WASM")
+    GEN_CMD+=(--wasm "$ACCOUNT_WASM")
 else
+    if [ -n "$STELLAR_RPC_URL" ]; then
+        GEN_CMD+=(--rpc-url "$STELLAR_RPC_URL")
+    fi
     if [ -n "$STELLAR_NETWORK" ]; then
-        STELLAR_CMD+=(--network "$STELLAR_NETWORK")
-    else
-        STELLAR_CMD+=(--rpc-url "$STELLAR_RPC_URL")
-        STELLAR_CMD+=(--network-passphrase "$STELLAR_NETWORK_PASSPHRASE")
+        GEN_CMD+=(--network "$STELLAR_NETWORK")
     fi
 
     if [ -n "$ACCOUNT_WASM_HASH" ]; then
-        STELLAR_CMD+=(--wasm-hash "$ACCOUNT_WASM_HASH")
+        GEN_CMD+=(--wasm-hash "$ACCOUNT_WASM_HASH")
     else
-        STELLAR_CMD+=(--contract-id "$ACCOUNT_CONTRACT_ID")
+        GEN_CMD+=(--contract-id "$ACCOUNT_CONTRACT_ID")
     fi
 fi
 
-STELLAR_CMD+=(--output-dir "$BINDINGS_DIR" --overwrite)
-"${STELLAR_CMD[@]}"
+GEN_CMD+=(--output-dir "$OUT_DIR" --overwrite)
+"${GEN_CMD[@]}"
 
-# Stellar CLI generates a generic README. Restore the repository-maintained
+# Generator writes a generic README. Restore the repository-maintained
 # package guide so regeneration cannot reintroduce obsolete CLI/API examples.
-cp "$BINDINGS_README_TEMPLATE" "$BINDINGS_DIR/README.md"
+cp "$BINDINGS_README_TEMPLATE" "$OUT_DIR/README.md"
 
 echo -e "${GREEN}Bindings generated${NC}"
 
-# Step 2: Patch package.json for npm
+# Step 2: Patch staged package.json, tsconfig.json, and sources before replacing
 echo -e "${YELLOW}Patching package.json...${NC}"
 
-cd "$BINDINGS_DIR"
+cd "$OUT_DIR"
 
 # The kit lists the SDK only in `dependencies`, so pnpm gives the kit and the
-# bindings their own SDK 16 copy when an app installs another major version.
+# bindings their own SDK copy when an app installs another major version.
 STELLAR_SDK_PEER=$(node -p "require('$KIT_DIR/package.json').dependencies['@stellar/stellar-sdk']")
 
 node -e "
 const fs = require('fs');
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 const rootPkg = JSON.parse(fs.readFileSync('$KIT_DIR/package.json', 'utf8'));
+pkg.name = 'smart-account-kit-bindings';
 pkg.version = '$CURRENT_VERSION';
 pkg.description = 'TypeScript bindings for OpenZeppelin smart account contracts on Stellar';
+pkg.exports = './dist/index.js';
+pkg.typings = './dist/index.d.ts';
 pkg.main = 'dist/index.js';
 pkg.module = 'dist/index.js';
 pkg.types = 'dist/index.d.ts';
@@ -176,8 +195,12 @@ pkg.devDependencies = {
   typescript: rootPkg.devDependencies.typescript,
 };
 pkg.publishConfig = { registry: 'https://registry.npmjs.org/', access: 'public' };
-if (pkg.dependencies && pkg.dependencies['@stellar/stellar-sdk']) {
-    delete pkg.dependencies['@stellar/stellar-sdk'];
+if (pkg.dependencies) {
+  delete pkg.dependencies['@stellar/stellar-sdk'];
+  delete pkg.dependencies['buffer'];
+  if (Object.keys(pkg.dependencies).length === 0) {
+    delete pkg.dependencies;
+  }
 }
 fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 "
@@ -186,24 +209,45 @@ fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 node -e "
 const fs = require('fs');
 const path = 'tsconfig.json';
-const source = fs.readFileSync(path, 'utf8');
-const patched = source.replace(
-  /\/\/ \"rootDir\": \"\.\/\",[^\n]*/,
-  '\"rootDir\": \"./src\",'
-);
-if (patched === source) {
-  throw new Error('Could not patch rootDir in generated tsconfig.json');
-}
-fs.writeFileSync(path, patched.endsWith('\\n') ? patched : patched + '\\n');
+const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
+cfg.compilerOptions = {
+  ...(cfg.compilerOptions || {}),
+  rootDir: './src',
+};
+fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
 "
 
-# Keep generated sources compatible with the repository's whitespace checks.
+# Keep generated sources compatible with the repository's whitespace checks and
+# emit a companion type alias when the SDK bindings generator references an
+# error map value (`SmartAccountError`) in a type position (`Result<null, SmartAccountError>`).
 node -e "
 const fs = require('fs');
-const path = 'src/index.ts';
-const source = fs.readFileSync(path, 'utf8');
-fs.writeFileSync(path, source.replace(/[ \\t]+$/gm, ''));
+const path = require('path');
+for (const file of fs.readdirSync('src')) {
+  if (!file.endsWith('.ts')) continue;
+  const full = path.join('src', file);
+  let source = fs.readFileSync(full, 'utf8').replace(/[ \\t]+$/gm, '');
+  if (
+    file === 'types.ts' &&
+    /export const SmartAccountError\\s*=/.test(source) &&
+    !/export type SmartAccountError\\b/.test(source)
+  ) {
+    source = source.replace(
+      /(export const SmartAccountError = \\{[\\s\\S]*?\\n\\})/,
+      '\$1 as const;\\nexport type SmartAccountError = (typeof SmartAccountError)[keyof typeof SmartAccountError];'
+    );
+  }
+  fs.writeFileSync(full, source.endsWith('\n') ? source : source + '\n');
+}
 "
+
+# Replace checked-in package contents only after generation and patching succeed.
+mkdir -p "$BINDINGS_DIR"
+rm -rf "$BINDINGS_DIR/src"
+cp -R "$OUT_DIR/src" "$BINDINGS_DIR/src"
+cp "$OUT_DIR/package.json" "$BINDINGS_DIR/package.json"
+cp "$OUT_DIR/tsconfig.json" "$BINDINGS_DIR/tsconfig.json"
+cp "$OUT_DIR/README.md" "$BINDINGS_DIR/README.md"
 
 # Step 3: Install and build
 echo -e "${YELLOW}Building...${NC}"

@@ -59,12 +59,12 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
-    "@stellar/stellar-sdk": "^16.4.1",
+    "@stellar/stellar-sdk": "^17.4.0",
     "base64url": "^3.0.1",
     "smart-account-kit-bindings": "workspace:*"
   },
   "devDependencies": {
-    "@creit-tech/stellar-wallets-kit": "jsr:2.5.0",
+    "@creit-tech/stellar-wallets-kit": "jsr:2.6.0",
     "@types/node": "^25.5.2",
     "@types/react": "^19.2.18",
     "fake-indexeddb": "^6.2.5",
@@ -72,12 +72,12 @@
     "vitest": "^5.0.5"
   },
   "engines": {
-    "node": ">=22.0.0",
+    "node": ">=22.12.0",
     "pnpm": ">=10.0.0"
   },
   "packageManager": "pnpm@10.33.0",
   "peerDependencies": {
-    "@creit-tech/stellar-wallets-kit": ">=2.1.0 <2.6.0"
+    "@creit-tech/stellar-wallets-kit": ">=2.6.0 <3.0.0"
   },
   "peerDependenciesMeta": {
     "@creit-tech/stellar-wallets-kit": {

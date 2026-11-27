@@ -2,6 +2,7 @@ import {
   Address,
   buildAuthorizationEntryPreimage,
   hash,
+  StrKey,
   xdr,
 } from "@stellar/stellar-sdk";
 import type {
@@ -32,15 +33,26 @@ export const WALLET_MUTATION_FUNCTIONS = new Set([
 /**
  * The strkey of an `ScAddress` from an authorization entry or signer key.
  *
- * SDK 16.x decodes some address types that `Address.fromScAddress` cannot
- * convert, such as a CAP-84 muxed contract (`W…`). The SDK then throws a plain
- * `Error`. Refuse those addresses with a `ValidationError` instead.
+ * Only plain account (`G…`) and contract (`C…`) addresses are valid in
+ * authorization credentials, invocation targets, signers, upgrade operators, and
+ * executable reference owners. Refuse CAP-84 muxed contract (`W…`) and any
+ * other address arm with a `ValidationError`.
  */
 export function scAddressToString(address: xdr.ScAddress, field: string): string {
+  const addressType = address.type;
+  if (
+    addressType !== "scAddressTypeAccount" &&
+    addressType !== "scAddressTypeContract"
+  ) {
+    throw new ValidationError(
+      `${field} has an unsupported address type: ${addressType}`,
+      SmartAccountErrorCode.INVALID_INPUT,
+      { field, addressType }
+    );
+  }
   try {
     return Address.fromScAddress(address).toString();
   } catch {
-    const addressType = address.switch().name;
     throw new ValidationError(
       `${field} has an unsupported address type: ${addressType}`,
       SmartAccountErrorCode.INVALID_INPUT,
@@ -79,21 +91,21 @@ export function assertWalletMutationIntent(
   }> = [];
 
   const walk = (invocation: xdr.SorobanAuthorizedInvocation, depth: number) => {
-    const fn = invocation.function();
-    if (fn.switch().name === "sorobanAuthorizedFunctionTypeContractFn") {
-      const args = fn.contractFn();
-      const target = scAddressToString(args.contractAddress(), "Authorized invocation target");
-      const name = args.functionName().toString();
+    const fn = invocation.function;
+    if (fn.type === "sorobanAuthorizedFunctionTypeContractFn") {
+      const args = fn.contractFn;
+      const target = scAddressToString(args.contractAddress, "Authorized invocation target");
+      const name = args.functionName.toString();
       if (target === contractId && WALLET_MUTATION_FUNCTIONS.has(name)) {
         mutations.push({ invocation, depth, name });
       }
     }
-    for (const child of invocation.subInvocations()) {
+    for (const child of invocation.subInvocations) {
       walk(child, depth + 1);
     }
   };
 
-  walk(entry.rootInvocation(), 0);
+  walk(entry.rootInvocation, 0);
   if (mutations.length === 0) return;
 
   const fail = (message: string): never => {
@@ -113,30 +125,34 @@ export function assertWalletMutationIntent(
   if (mutations.length !== 1 || mutations[0].depth !== 0) {
     fail("Refusing nested or multiple smart-account mutations in one authorization tree.");
   }
-  if (adminHostFunction.switch().name !== "hostFunctionTypeInvokeContract") {
-    fail("The admin authorization root does not match an invokeContract transaction.");
+  if (adminHostFunction.type !== "hostFunctionTypeInvokeContract") {
+    return fail("The admin authorization root does not match an invokeContract transaction.");
   }
 
-  const rootArgs = mutations[0].invocation.function().contractFn();
-  const transactionArgs = adminHostFunction.invokeContract();
-  if (!Buffer.from(rootArgs.toXDR()).equals(Buffer.from(transactionArgs.toXDR()))) {
+  const rootFn = mutations[0].invocation.function;
+  if (rootFn.type !== "sorobanAuthorizedFunctionTypeContractFn") {
+    return fail("The admin authorization root does not match an invokeContract transaction.");
+  }
+  const rootArgs = rootFn.contractFn;
+  const transactionArgs = adminHostFunction.invokeContract;
+  if (!Buffer.from(rootArgs.toXdr()).equals(Buffer.from(transactionArgs.toXdr()))) {
     fail("The admin authorization root does not match the transaction host function.");
   }
   assertAddedSignersValid(rootArgs, contractId);
   if (mutations[0].name === "upgrade") {
-    const target = rootArgs.args()[0];
-    if (!target || target.switch().name !== "scvBytes") {
-      fail("The upgrade target must be a 32-byte WASM hash.");
+    const target = rootArgs.args[0];
+    if (!target || target.type !== "scvBytes") {
+      return fail("The upgrade target must be a 32-byte WASM hash.");
     }
     if (!upgradeTargetPolicy) {
       return fail("The admin signing path requires an upgrade target policy.");
     }
-    assertUpgradeTarget(upgradeTargetPolicy, Buffer.from(target.bytes()));
-    const operator = rootArgs.args()[1];
+    assertUpgradeTarget(upgradeTargetPolicy, Buffer.from(target.bytes.toBytes()));
+    const operator = rootArgs.args[1];
     if (
       !operator ||
-      operator.switch().name !== "scvAddress" ||
-      scAddressToString(operator.address(), "Upgrade operator") !== contractId
+      operator.type !== "scvAddress" ||
+      scAddressToString(operator.address, "Upgrade operator") !== contractId
     ) {
       fail("The upgrade operator must be the wallet itself, as kit.upgrade() sets it.");
     }
@@ -152,10 +168,11 @@ function assertAddedSignersValid(
   args: xdr.InvokeContractArgs,
   contractId: string
 ): void {
-  const position = SIGNER_ARGUMENTS[args.functionName().toString()];
-  const value = position && args.args()[position.index];
+  const position = SIGNER_ARGUMENTS[args.functionName.toString()];
+  const value = position && args.args[position.index];
   if (!value) return;
-  const signers = position.list ? value.vec() ?? [] : [value];
+  const signers =
+    position.list && value.type === "scvVec" ? value.vec ?? [] : [value];
   for (const signer of signers) {
     validateSigner(parseSignerScVal(signer), contractId);
   }
@@ -166,7 +183,9 @@ export function buildSignaturePayload(
   entry: xdr.SorobanAuthorizationEntry,
   expiration: number
 ): Buffer {
-  return hash(buildSignaturePreimage(networkPassphrase, entry, expiration).toXDR());
+  return Buffer.from(
+    hash(buildSignaturePreimage(networkPassphrase, entry, expiration).toXdr())
+  );
 }
 
 export function buildSignaturePreimage(
@@ -174,9 +193,8 @@ export function buildSignaturePreimage(
   entry: xdr.SorobanAuthorizationEntry,
   expiration: number
 ): xdr.HashIdPreimage {
-  const credentials = getAddressCredentials(entry.credentials());
+  getAddressCredentials(entry.credentials);
   const normalizedExpiration = normalizeSignatureExpirationLedger(expiration);
-  credentials.signatureExpirationLedger(normalizedExpiration);
   return buildAuthorizationEntryPreimage(
     entry,
     normalizedExpiration,
@@ -203,21 +221,73 @@ export function normalizeSignatureExpirationLedger(expiration: number): number {
 export function getAddressCredentials(
   credentials: xdr.SorobanCredentials
 ): xdr.SorobanAddressCredentials {
-  switch (credentials.switch().name) {
+  switch (credentials.type) {
     case "sorobanCredentialsAddress":
-      return credentials.address();
+      return credentials.address;
     case "sorobanCredentialsAddressV2":
-      return credentials.addressV2();
+      return credentials.addressV2;
     case "sorobanCredentialsAddressWithDelegates":
-      return credentials.addressWithDelegates().addressCredentials();
+      return credentials.addressWithDelegates.addressCredentials;
   }
 
-  throw new Error(`Soroban credentials do not contain address credentials: ${credentials.switch().name}`);
+  throw new Error(`Soroban credentials do not contain address credentials: ${credentials.type}`);
+}
+
+/**
+ * Return a new `SorobanAuthorizationEntry` with updated `signatureExpirationLedger`
+ * and/or `signature` on its address credentials, preserving the exact credential
+ * variant (V1, V2, or AddressWithDelegates).
+ */
+export function withUpdatedAddressCredentials(
+  entry: xdr.SorobanAuthorizationEntry,
+  updates: {
+    signatureExpirationLedger?: number;
+    signature?: xdr.ScVal;
+  }
+): xdr.SorobanAuthorizationEntry {
+  const current = getAddressCredentials(entry.credentials);
+  const nextAddressCreds = new xdr.SorobanAddressCredentials({
+    address: current.address,
+    nonce: current.nonce,
+    signatureExpirationLedger:
+      updates.signatureExpirationLedger ?? current.signatureExpirationLedger,
+    signature: updates.signature ?? current.signature,
+  });
+
+  let nextCredentials: xdr.SorobanCredentials;
+  switch (entry.credentials.type) {
+    case "sorobanCredentialsAddress":
+      nextCredentials =
+        xdr.SorobanCredentials.sorobanCredentialsAddress(nextAddressCreds);
+      break;
+    case "sorobanCredentialsAddressV2":
+      nextCredentials =
+        xdr.SorobanCredentials.sorobanCredentialsAddressV2(nextAddressCreds);
+      break;
+    case "sorobanCredentialsAddressWithDelegates":
+      nextCredentials =
+        xdr.SorobanCredentials.sorobanCredentialsAddressWithDelegates(
+          new xdr.SorobanAddressCredentialsWithDelegates({
+            addressCredentials: nextAddressCreds,
+            delegates: entry.credentials.addressWithDelegates.delegates,
+          })
+        );
+      break;
+    default:
+      throw new Error(
+        `Soroban credentials do not contain address credentials: ${entry.credentials.type}`
+      );
+  }
+
+  return new xdr.SorobanAuthorizationEntry({
+    credentials: nextCredentials,
+    rootInvocation: entry.rootInvocation,
+  });
 }
 
 export function getAuthEntryAddress(entry: xdr.SorobanAuthorizationEntry): string {
   return scAddressToString(
-    getAddressCredentials(entry.credentials()).address(),
+    getAddressCredentials(entry.credentials).address,
     "Auth entry credential address"
   );
 }
@@ -238,16 +308,16 @@ export function createAddressCredentials(
   return xdr.SorobanCredentials.sorobanCredentialsAddress(credentials);
 }
 
-/** The `legacy-concat` digest: `sha256(signature_payload ++ scvVec(ids).toXDR())`. */
+/** The `legacy-concat` digest: `sha256(signature_payload ++ scvVec(ids).toXdr())`. */
 export function buildLegacyAuthDigest(
   signaturePayload: Buffer,
   contextRuleIds: number[]
 ): Buffer {
   const ruleIdsXdr = xdr.ScVal.scvVec(
     contextRuleIds.map((contextRuleId) => xdr.ScVal.scvU32(contextRuleId))
-  ).toXDR();
+  ).toXdr();
 
-  return hash(Buffer.concat([signaturePayload, ruleIdsXdr]));
+  return Buffer.from(hash(Buffer.concat([signaturePayload, ruleIdsXdr])));
 }
 
 /**
@@ -283,26 +353,28 @@ export function buildAuthDigestPreimage(
   ]);
 }
 
-/** The `preimage-v1` digest: `sha256(preimage.toXDR())`. */
+/** The `preimage-v1` digest: `sha256(preimage.toXdr())`. */
 export function buildPreimageAuthDigest(preimage: xdr.ScVal): Buffer {
-  return hash(preimage.toXDR());
+  return Buffer.from(hash(preimage.toXdr()));
 }
 
 export function buildWebAuthnSignatureBytes(sigData: WebAuthnSigData): Buffer {
-  return xdr.ScVal.scvMap([
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("authenticator_data"),
-      val: xdr.ScVal.scvBytes(sigData.authenticator_data),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("client_data"),
-      val: xdr.ScVal.scvBytes(sigData.client_data),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("signature"),
-      val: xdr.ScVal.scvBytes(sigData.signature),
-    }),
-  ]).toXDR();
+  return Buffer.from(
+    xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("authenticator_data"),
+        val: xdr.ScVal.scvBytes(sigData.authenticator_data),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("client_data"),
+        val: xdr.ScVal.scvBytes(sigData.client_data),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("signature"),
+        val: xdr.ScVal.scvBytes(sigData.signature),
+      }),
+    ]).toXdr()
+  );
 }
 
 export function buildAddressSignatureScVal(
@@ -331,51 +403,51 @@ export function emptyAuthPayload(): AuthPayload {
 }
 
 export function readAuthPayload(signature: xdr.ScVal): AuthPayload {
-  if (signature.switch().name === "scvVoid") {
+  if (signature.type === "scvVoid") {
     return emptyAuthPayload();
   }
 
-  if (signature.switch().name !== "scvMap") {
+  if (signature.type !== "scvMap") {
     throw new Error("Smart account auth signature is not encoded as AuthPayload");
   }
 
   const payload = emptyAuthPayload();
 
-  for (const entry of signature.map() ?? []) {
-    const key = entry.key();
-    if (key.switch().name !== "scvSymbol") {
+  for (const entry of signature.map ?? []) {
+    const key = entry.key;
+    if (key.type !== "scvSymbol") {
       continue;
     }
 
-    const field = key.sym().toString();
+    const field = key.sym.toString();
     if (field === "context_rule_ids") {
-      const value = entry.val();
-      if (value.switch().name !== "scvVec") {
+      const value = entry.val;
+      if (value.type !== "scvVec") {
         throw new Error("AuthPayload.context_rule_ids is not a vector");
       }
 
-      payload.context_rule_ids = (value.vec() ?? []).map((item) => {
-        if (item.switch().name !== "scvU32") {
+      payload.context_rule_ids = (value.vec ?? []).map((item) => {
+        if (item.type !== "scvU32") {
           throw new Error("AuthPayload.context_rule_ids contains a non-u32 value");
         }
-        return item.u32();
+        return item.u32;
       });
     }
 
     if (field === "signers") {
-      const value = entry.val();
-      if (value.switch().name !== "scvMap") {
+      const value = entry.val;
+      if (value.type !== "scvMap") {
         throw new Error("AuthPayload.signers is not a map");
       }
 
-      for (const signerEntry of value.map() ?? []) {
-        const signer = parseSignerScVal(signerEntry.key());
-        const signerValue = signerEntry.val();
-        if (signerValue.switch().name !== "scvBytes") {
+      for (const signerEntry of value.map ?? []) {
+        const signer = parseSignerScVal(signerEntry.key);
+        const signerValue = signerEntry.val;
+        if (signerValue.type !== "scvBytes") {
           throw new Error("AuthPayload.signers contains a non-bytes signature value");
         }
 
-        payload.signers.set(signer, Buffer.from(signerValue.bytes()));
+        payload.signers.set(signer, Buffer.from(signerValue.bytes.toBytes()));
       }
     }
   }
@@ -390,7 +462,7 @@ export function readAuthPayload(signature: xdr.ScVal): AuthPayload {
  *
  * This is deliberately NOT a comparison of the XDR byte encodings. XDR prefixes
  * every variable-length payload (Bytes, Symbol, String, Vec) with a 4-byte
- * length, so `toXDR("hex")` sorting is length-major; the host instead compares
+ * length, so `toXdr("hex")` sorting is length-major; the host instead compares
  * those payloads element-wise by content (Rust slice `Ord`), where a shorter
  * value that is a prefix of a longer one sorts first. For two same-verifier
  * External signer keys whose `keyData` differs only in length, the two orders
@@ -402,56 +474,63 @@ export function readAuthPayload(signature: xdr.ScVal): AuthPayload {
  * order-equivalently to the host.
  */
 export function compareScVal(a: xdr.ScVal, b: xdr.ScVal): number {
-  const aType = a.switch().value;
-  const bType = b.switch().value;
+  const aType = xdr.ScValType[a.type].value;
+  const bType = xdr.ScValType[b.type].value;
   if (aType !== bType) {
     return aType < bType ? -1 : 1;
   }
 
-  switch (a.switch().name) {
-    case "scvVec": {
-      const av = a.vec() ?? [];
-      const bv = b.vec() ?? [];
-      const len = Math.min(av.length, bv.length);
-      for (let i = 0; i < len; i += 1) {
-        const cmp = compareScVal(av[i], bv[i]);
-        if (cmp !== 0) return cmp;
-      }
-      return av.length - bv.length;
+  if (a.type === "scvVec" && b.type === "scvVec") {
+    const av = a.vec ?? [];
+    const bv = b.vec ?? [];
+    const len = Math.min(av.length, bv.length);
+    for (let i = 0; i < len; i += 1) {
+      const cmp = compareScVal(av[i], bv[i]);
+      if (cmp !== 0) return cmp;
     }
-    case "scvMap": {
-      const am = a.map() ?? [];
-      const bm = b.map() ?? [];
-      const len = Math.min(am.length, bm.length);
-      for (let i = 0; i < len; i += 1) {
-        const keyCmp = compareScVal(am[i].key(), bm[i].key());
-        if (keyCmp !== 0) return keyCmp;
-        const valCmp = compareScVal(am[i].val(), bm[i].val());
-        if (valCmp !== 0) return valCmp;
-      }
-      return am.length - bm.length;
-    }
-    case "scvSymbol":
-      return Buffer.compare(
-        Buffer.from(a.sym().toString(), "utf8"),
-        Buffer.from(b.sym().toString(), "utf8")
-      );
-    case "scvString":
-      return Buffer.compare(
-        Buffer.from(a.str().toString(), "utf8"),
-        Buffer.from(b.str().toString(), "utf8")
-      );
-    case "scvBytes":
-      return Buffer.compare(Buffer.from(a.bytes()), Buffer.from(b.bytes()));
-    case "scvAddress":
-      // ScAddress is a type discriminant plus a fixed-width key, so a byte
-      // comparison of the encoding matches the host's (type, key) ordering.
-      return Buffer.compare(a.address().toXDR(), b.address().toXDR());
-    default:
-      // Same-type scalar (or any unhandled shape): its XDR encoding is
-      // fixed-width for a given type, so a byte comparison is order-equivalent.
-      return Buffer.compare(a.toXDR(), b.toXDR());
+    return av.length - bv.length;
   }
+  if (a.type === "scvMap" && b.type === "scvMap") {
+    const am = a.map ?? [];
+    const bm = b.map ?? [];
+    const len = Math.min(am.length, bm.length);
+    for (let i = 0; i < len; i += 1) {
+      const keyCmp = compareScVal(am[i].key, bm[i].key);
+      if (keyCmp !== 0) return keyCmp;
+      const valCmp = compareScVal(am[i].val, bm[i].val);
+      if (valCmp !== 0) return valCmp;
+    }
+    return am.length - bm.length;
+  }
+  if (a.type === "scvSymbol" && b.type === "scvSymbol") {
+    return Buffer.compare(
+      Buffer.from(a.sym.toString(), "utf8"),
+      Buffer.from(b.sym.toString(), "utf8")
+    );
+  }
+  if (a.type === "scvString" && b.type === "scvString") {
+    return Buffer.compare(
+      Buffer.from(a.str.toString(), "utf8"),
+      Buffer.from(b.str.toString(), "utf8")
+    );
+  }
+  if (a.type === "scvBytes" && b.type === "scvBytes") {
+    return Buffer.compare(
+      Buffer.from(a.bytes.toBytes()),
+      Buffer.from(b.bytes.toBytes())
+    );
+  }
+  if (a.type === "scvAddress" && b.type === "scvAddress") {
+    // ScAddress is a type discriminant plus a fixed-width key, so a byte
+    // comparison of the encoding matches the host's (type, key) ordering.
+    return Buffer.compare(
+      Buffer.from(a.address.toXdr()),
+      Buffer.from(b.address.toXdr())
+    );
+  }
+  // Same-type scalar (or any unhandled shape): its XDR encoding is
+  // fixed-width for a given type, so a byte comparison is order-equivalent.
+  return Buffer.compare(Buffer.from(a.toXdr()), Buffer.from(b.toXdr()));
 }
 
 export function writeAuthPayload(payload: AuthPayload): xdr.ScVal {
@@ -465,7 +544,7 @@ export function writeAuthPayload(payload: AuthPayload): xdr.ScVal {
 
   // Host order (see compareScVal): the smart account converts this signer map
   // to a host object and rejects it if the keys are not in host-sort order.
-  signerEntries.sort((a, b) => compareScVal(a.key(), b.key()));
+  signerEntries.sort((a, b) => compareScVal(a.key, b.key));
 
   return xdr.ScVal.scvMap([
     new xdr.ScMapEntry({
@@ -505,59 +584,74 @@ export function upsertAuthPayloadSigner(
  * i64 makes a collision astronomically unlikely, matching the SDK's own
  * `authorizeEntry` nonce strategy.
  */
-export function randomAuthEntryNonce(): xdr.Int64 {
+export function randomAuthEntryNonce(): bigint {
   const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
   // DataView, not Buffer#readBigInt64BE: common bundler `buffer` polyfills
   // (Next.js ships a pre-6.x feross/buffer) lack the BigInt accessors, which
   // crashed every browser flow that builds an auth entry.
-  return xdr.Int64.fromString(
-    new DataView(bytes.buffer).getBigInt64(0, false).toString(),
-  );
+  return new DataView(bytes.buffer).getBigInt64(0, false);
 }
 
 export function signerToScVal(signer: ContractSigner): xdr.ScVal {
   if (signer.tag === "Delegated") {
+    const address = signer.values[0];
+    if (!StrKey.isValidEd25519PublicKey(address) && !StrKey.isValidContract(address)) {
+      throw new ValidationError(
+        `Invalid Delegated signer address: ${address} (must be a valid G... or C... address)`,
+        SmartAccountErrorCode.INVALID_ADDRESS,
+        { field: "signer", value: address.slice(0, 10) + "..." }
+      );
+    }
     return xdr.ScVal.scvVec([
       xdr.ScVal.scvSymbol("Delegated"),
-      xdr.ScVal.scvAddress(Address.fromString(signer.values[0]).toScAddress()),
+      xdr.ScVal.scvAddress(Address.fromString(address).toScAddress()),
     ]);
+  }
+
+  const verifier = signer.values[0];
+  if (!StrKey.isValidContract(verifier)) {
+    throw new ValidationError(
+      `Invalid External signer verifier address: ${verifier} (must be a valid contract C... address)`,
+      SmartAccountErrorCode.INVALID_ADDRESS,
+      { field: "verifier", value: verifier.slice(0, 10) + "..." }
+    );
   }
 
   return xdr.ScVal.scvVec([
     xdr.ScVal.scvSymbol("External"),
-    xdr.ScVal.scvAddress(Address.fromString(signer.values[0]).toScAddress()),
+    xdr.ScVal.scvAddress(Address.fromString(verifier).toScAddress()),
     xdr.ScVal.scvBytes(signer.values[1]),
   ]);
 }
 
 export function parseSignerScVal(value: xdr.ScVal): ContractSigner {
-  if (value.switch().name !== "scvVec") {
+  if (value.type !== "scvVec") {
     throw new Error("Signer key is not encoded as a vector");
   }
 
-  const items = value.vec() ?? [];
-  if (items.length < 2 || items[0].switch().name !== "scvSymbol") {
+  const items = value.vec ?? [];
+  if (items.length < 2 || items[0].type !== "scvSymbol") {
     throw new Error("Signer key is not a valid enum encoding");
   }
 
-  const variant = items[0].sym().toString();
+  const variant = items[0].sym.toString();
   if (variant === "Delegated") {
-    if (items[1].switch().name !== "scvAddress") {
+    if (items[1].type !== "scvAddress") {
       throw new Error("Delegated signer is missing an address");
     }
 
     return {
       tag: "Delegated",
-      values: [scAddressToString(items[1].address(), "Delegated signer address")],
+      values: [scAddressToString(items[1].address, "Delegated signer address")],
     };
   }
 
   if (variant === "External") {
     if (
       items.length < 3 ||
-      items[1].switch().name !== "scvAddress" ||
-      items[2].switch().name !== "scvBytes"
+      items[1].type !== "scvAddress" ||
+      items[2].type !== "scvBytes"
     ) {
       throw new Error("External signer is missing required verifier or key data");
     }
@@ -565,8 +659,8 @@ export function parseSignerScVal(value: xdr.ScVal): ContractSigner {
     return {
       tag: "External",
       values: [
-        scAddressToString(items[1].address(), "External signer verifier address"),
-        Buffer.from(items[2].bytes()),
+        scAddressToString(items[1].address, "External signer verifier address"),
+        Buffer.from(items[2].bytes.toBytes()),
       ],
     };
   }

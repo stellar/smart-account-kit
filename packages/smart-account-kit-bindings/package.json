@@ -1,22 +1,19 @@
 {
-  "version": "0.5.0",
   "name": "smart-account-kit-bindings",
+  "version": "0.6.0",
+  "description": "TypeScript bindings for OpenZeppelin smart account contracts on Stellar",
   "type": "module",
-  "exports": "./dist/index.js",
-  "typings": "dist/index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc"
-  },
-  "dependencies": {
-    "buffer": "6.0.3"
   },
   "devDependencies": {
     "typescript": "^6.0.2"
   },
-  "description": "TypeScript bindings for OpenZeppelin smart account contracts on Stellar",
-  "main": "dist/index.js",
+  "exports": "./dist/index.js",
+  "typings": "./dist/index.d.ts",
   "module": "dist/index.js",
-  "types": "dist/index.d.ts",
   "files": [
     "dist"
   ],
@@ -27,7 +24,7 @@
     "url": "https://github.com/stellar/smart-account-kit"
   },
   "peerDependencies": {
-    "@stellar/stellar-sdk": "^16.3.0"
+    "@stellar/stellar-sdk": "^17.4.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

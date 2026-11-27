@@ -22,15 +22,15 @@ export interface ContextRuleManagerDeps {
       add_context_rule: (args: {
         context_type: ContextRuleType;
         name: string;
-        valid_until: number | undefined;
+        valid_until: number | null;
         signers: ContractSigner[];
         policies: Map<string, unknown>;
       }) => Promise<AssembledTransaction<ContextRule>>;
       get_context_rule: (args: { context_rule_id: number }) => Promise<AssembledTransaction<ContextRule>>;
       get_context_rules_count: () => Promise<AssembledTransaction<number>>;
-      remove_context_rule: (args: { context_rule_id: number }) => Promise<AssembledTransaction<null>>;
+      remove_context_rule: (args: { context_rule_id: number }) => Promise<AssembledTransaction<void | null>>;
       update_context_rule_name: (args: { context_rule_id: number; name: string }) => Promise<AssembledTransaction<ContextRule>>;
-      update_context_rule_valid_until: (args: { context_rule_id: number; valid_until: number | undefined }) => Promise<AssembledTransaction<ContextRule>>;
+      update_context_rule_valid_until: (args: { context_rule_id: number; valid_until: number | null }) => Promise<AssembledTransaction<ContextRule>>;
     };
     contractId: string;
   };
@@ -100,7 +100,7 @@ export class ContextRuleManager {
     return wallet.add_context_rule({
       context_type: contextType,
       name,
-      valid_until: validUntil,
+      valid_until: validUntil ?? null,
       signers,
       policies: sortPolicyMap(policies),
     });
@@ -213,7 +213,7 @@ export class ContextRuleManager {
     validateValidUntil(validUntil);
     return this.deps.requireWallet().wallet.update_context_rule_valid_until({
       context_rule_id: contextRuleId,
-      valid_until: validUntil,
+      valid_until: validUntil ?? null,
     });
   }
 }

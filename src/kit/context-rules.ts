@@ -58,8 +58,9 @@ type ContextRuleDiscoveryDeps = {
 } & ContextRuleReadDeps;
 
 const READ_ONLY_SIM_ACCOUNT = new Account(
-  Keypair.fromRawEd25519Seed(hash(Buffer.from("smart-account-kit-context-rule-read")))
-    .publicKey(),
+  Keypair.fromRawEd25519Seed(
+    hash(new TextEncoder().encode("smart-account-kit-context-rule-read"))
+  ).publicKey(),
   "0"
 );
 
@@ -97,16 +98,18 @@ export function buildInvocationContextTypes(
   const contexts: ContextRuleType[] = [];
 
   const walk = (invocation: xdr.SorobanAuthorizedInvocation) => {
-    const fn = invocation.function();
-    const switchName = fn.switch().name;
+    const fn = invocation.function;
 
-    if (switchName === "sorobanAuthorizedFunctionTypeContractFn") {
-      const args = fn.contractFn();
+    if (fn.type === "sorobanAuthorizedFunctionTypeContractFn") {
+      const args = fn.contractFn;
       contexts.push({
         tag: "CallContract",
-        values: [scAddressToString(args.contractAddress(), "Authorized invocation target")],
+        values: [scAddressToString(args.contractAddress, "Authorized invocation target")],
       });
-    } else if (switchName.startsWith("sorobanAuthorizedFunctionTypeCreateContract")) {
+    } else if (
+      fn.type === "sorobanAuthorizedFunctionTypeCreateContractHostFn" ||
+      fn.type === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
+    ) {
       const contextType = extractCreateContractContextType(fn);
       if (!contextType) {
         throw new Error(
@@ -117,12 +120,12 @@ export function buildInvocationContextTypes(
       contexts.push(contextType);
     }
 
-    for (const sub of invocation.subInvocations()) {
+    for (const sub of invocation.subInvocations) {
       walk(sub);
     }
   };
 
-  walk(entry.rootInvocation());
+  walk(entry.rootInvocation);
   return contexts;
 }
 
@@ -245,12 +248,12 @@ function decodeContextRuleWithSpec(
 ): ContextRule {
   let toDecode = retval;
 
-  if (retval.switch().name === "scvMap") {
-    const entries = retval.map() ?? [];
+  if (retval.type === "scvMap") {
+    const entries = retval.map ?? [];
     const presentKeys = new Set(
       entries
-        .filter((entry) => entry.key().switch().name === "scvSymbol")
-        .map((entry) => entry.key().sym().toString())
+        .filter((entry) => entry.key.type === "scvSymbol")
+        .map((entry) => (entry.key.type === "scvSymbol" ? entry.key.sym.toString() : ""))
     );
 
     const injected = [...entries];
@@ -274,8 +277,8 @@ function decodeContextRuleWithSpec(
       // sorts near 'i') can reorder field names like policies/policy_ids and
       // misalign the positional decode.
       injected.sort((a, b) => {
-        const aKey = a.key().sym().toString();
-        const bKey = b.key().sym().toString();
+        const aKey = a.key.type === "scvSymbol" ? a.key.sym.toString() : "";
+        const bKey = b.key.type === "scvSymbol" ? b.key.sym.toString() : "";
         return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
       });
       toDecode = xdr.ScVal.scvMap(injected);
@@ -285,15 +288,10 @@ function decodeContextRuleWithSpec(
   // Pass the base64 XDR (not the ScVal object) so the spec deserializes with its
   // own js-xdr instance — XDR bytes are instance-agnostic, avoiding dual-package
   // ScVal incompatibilities.
-  const rule = spec.funcResToNative(
+  return spec.funcResToNative(
     "get_context_rule",
-    toDecode.toXDR("base64")
+    toDecode.toXdr("base64")
   ) as ContextRule;
-  // Normalize the Option<u32> void case to undefined for a consistent shape.
-  if (rule.valid_until === null) {
-    rule.valid_until = undefined;
-  }
-  return rule;
 }
 
 /**
@@ -458,12 +456,12 @@ export async function findWebAuthnSignerInRules(
         continue;
       }
 
-      const keyData = signer.values[1] as Buffer;
+      const keyData = Buffer.from(signer.values[1] as Buffer | Uint8Array);
       if (keyData.length <= credentialId.length) {
         continue;
       }
 
-      const suffix = keyData.slice(keyData.length - credentialId.length);
+      const suffix = keyData.subarray(keyData.length - credentialId.length);
       if (suffix.equals(credentialId)) {
         return signer;
       }
@@ -589,23 +587,26 @@ function extractCreateContractContextType(
   fn: xdr.SorobanAuthorizedFunction
 ): ContextRuleType | null {
   const executable =
-    fn.switch().name === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
-      ? fn.createContractV2HostFn().executable()
-      : fn.switch().name === "sorobanAuthorizedFunctionTypeCreateContractHostFn"
-        ? fn.createContractHostFn().executable()
+    fn.type === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
+      ? fn.createContractV2HostFn.executable
+      : fn.type === "sorobanAuthorizedFunctionTypeCreateContractHostFn"
+        ? fn.createContractHostFn.executable
         : null;
 
-  switch (executable?.switch().name) {
+  switch (executable?.type) {
     case "contractExecutableWasm":
-      return { tag: "CreateContract", values: [Buffer.from(executable.wasmHash())] };
+      return {
+        tag: "CreateContract",
+        values: [Buffer.from(executable.wasmHash.toBytes())],
+      };
     case "contractExecutableExternalRef": {
-      const ref = executable.externalRef();
-      const tag = ref.tag();
+      const ref = executable.externalRef;
+      const tag = ref.tag;
       return {
         tag: "CreateContractExternalRef",
         values: [
-          scAddressToString(ref.executableOwner(), "Executable reference owner"),
-          typeof tag === "string" ? tag : Buffer.from(tag).toString("utf8"),
+          scAddressToString(ref.executableOwner, "Executable reference owner"),
+          typeof tag === "string" ? tag : tag.toString(),
         ],
       };
     }

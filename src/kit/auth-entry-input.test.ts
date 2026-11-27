@@ -26,9 +26,25 @@ function entryWithPadding(padding: "=" | "=="): string {
   // XDR pads strings to 4 bytes, so each 4-character step in the function
   // name moves the entry length by 4 bytes and cycles the base64 padding.
   for (const name of ["transfer", "transfer1234", "transfer12345678"]) {
-    const entry = makeAddressAuthEntry(makeContract(1));
-    entry.rootInvocation().function().contractFn().functionName(name);
-    const encoded = entry.toXDR("base64");
+    const base = makeAddressAuthEntry(makeContract(1));
+    const fn = base.rootInvocation.function;
+    if (fn.type !== "sorobanAuthorizedFunctionTypeContractFn") {
+      throw new Error("Expected contractFn");
+    }
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: base.credentials,
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({
+            contractAddress: fn.contractFn.contractAddress,
+            functionName: name,
+            args: fn.contractFn.args,
+          })
+        ),
+        subInvocations: base.rootInvocation.subInvocations,
+      }),
+    });
+    const encoded = entry.toXdr("base64");
     if (encoded.endsWith(padding) && !encoded.endsWith(`=${padding}`)) {
       return encoded;
     }
@@ -44,42 +60,50 @@ describe("toAuthEntry", () => {
 
   it("decodes a base64 string into an equal kit XDR object", () => {
     const entry = makeAddressAuthEntry(makeContract(1));
-    const decoded = toAuthEntry(entry.toXDR("base64"));
+    const decoded = toAuthEntry(entry.toXdr("base64"));
 
     expect(decoded).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
     expect(decoded).not.toBe(entry);
-    expect(decoded.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(decoded.toXdr("base64")).toBe(entry.toXdr("base64"));
   });
 
   it("ignores surrounding whitespace in a base64 string", () => {
     const entry = makeAddressAuthEntry(makeContract(1));
-    const decoded = toAuthEntry(`  ${entry.toXDR("base64")}\n`);
-    expect(decoded.toXDR("base64")).toBe(entry.toXDR("base64"));
+    const decoded = toAuthEntry(`  ${entry.toXdr("base64")}\n`);
+    expect(decoded.toXdr("base64")).toBe(entry.toXdr("base64"));
   });
 
   it("decodes a base64 entry produced by @stellar/stellar-sdk 17.4.0", () => {
     const decoded = toAuthEntry(SDK17_TRANSFER_ENTRY_BASE64);
 
-    expect(decoded.credentials().switch().name).toBe("sorobanCredentialsAddress");
-    const credentials = decoded.credentials().address();
-    expect(credentials.nonce().toString()).toBe("42");
-    expect(Address.fromScAddress(credentials.address()).toString()).toBe(makeContract(1));
-    const fn = decoded.rootInvocation().function().contractFn();
-    expect(Address.fromScAddress(fn.contractAddress()).toString()).toBe(makeContract(2));
-    expect(fn.functionName().toString()).toBe("transfer");
-    expect(fn.args()).toHaveLength(3);
+    expect(decoded.credentials.type).toBe("sorobanCredentialsAddress");
+    if (decoded.credentials.type !== "sorobanCredentialsAddress") {
+      throw new Error("Expected sorobanCredentialsAddress");
+    }
+    const credentials = decoded.credentials.address;
+    expect(credentials.nonce.toString()).toBe("42");
+    expect(Address.fromScAddress(credentials.address).toString()).toBe(makeContract(1));
+    const rootFn = decoded.rootInvocation.function;
+    expect(rootFn.type).toBe("sorobanAuthorizedFunctionTypeContractFn");
+    if (rootFn.type !== "sorobanAuthorizedFunctionTypeContractFn") {
+      throw new Error("Expected sorobanAuthorizedFunctionTypeContractFn");
+    }
+    const fn = rootFn.contractFn;
+    expect(Address.fromScAddress(fn.contractAddress).toString()).toBe(makeContract(2));
+    expect(fn.functionName.toString()).toBe("transfer");
+    expect(fn.args).toHaveLength(3);
     // Round-trips to the same bytes, so the wire format matches SDK 17.
-    expect(decoded.toXDR("base64")).toBe(SDK17_TRANSFER_ENTRY_BASE64);
+    expect(decoded.toXdr("base64")).toBe(SDK17_TRANSFER_ENTRY_BASE64);
   });
 
   it("re-decodes an XDR object from another SDK copy through its bytes", () => {
     const entry = makeAddressAuthEntry(makeContract(1));
-    const foreign = new ForeignXdrObject(entry.toXDR());
+    const foreign = new ForeignXdrObject(entry.toXdr());
 
     const decoded = toAuthEntry(foreign as unknown as xdr.SorobanAuthorizationEntry);
 
     expect(decoded).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
-    expect(decoded.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(decoded.toXdr("base64")).toBe(entry.toXdr("base64"));
   });
 
   it("rejects malformed base64 with a ValidationError", () => {
@@ -109,8 +133,11 @@ describe("toAuthEntry", () => {
         expect(altered).not.toBe(canonical);
         // Both strings carry the same bytes.
         expect(Buffer.from(altered, "base64")).toEqual(Buffer.from(canonical, "base64"));
-        expect(toAuthEntry(canonical).toXDR("base64")).toBe(canonical);
-        expectInvalidEntry(() => toAuthEntry(altered), /not canonical base64/);
+        expect(toAuthEntry(canonical).toXdr("base64")).toBe(canonical);
+        expectInvalidEntry(
+          () => toAuthEntry(altered),
+          /does not decode to a SorobanAuthorizationEntry|not canonical base64/
+        );
       });
     }
   });
@@ -135,14 +162,14 @@ describe("toAuthEntry", () => {
       /does not decode to a SorobanAuthorizationEntry/
     );
     expectInvalidEntry(
-      () => toAuthEntry(xdr.ScVal.scvU32(5).toXDR("base64")),
+      () => toAuthEntry(xdr.ScVal.scvU32(5).toXdr("base64")),
       /does not decode to a SorobanAuthorizationEntry/
     );
   });
 
   it("rejects an entry with trailing bytes", () => {
     const entry = makeAddressAuthEntry(makeContract(1));
-    const padded = Buffer.concat([entry.toXDR(), Buffer.alloc(4)]).toString("base64");
+    const padded = Buffer.concat([entry.toXdr(), Buffer.alloc(4)]).toString("base64");
     expectInvalidEntry(
       () => toAuthEntry(padded),
       /does not decode to a SorobanAuthorizationEntry/
@@ -150,7 +177,7 @@ describe("toAuthEntry", () => {
   });
 
   it("rejects a foreign object that does not encode an auth entry", () => {
-    const foreign = new ForeignXdrObject(xdr.ScVal.scvU32(5).toXDR());
+    const foreign = new ForeignXdrObject(xdr.ScVal.scvU32(5).toXdr());
     expectInvalidEntry(
       () => toAuthEntry(foreign as unknown as xdr.SorobanAuthorizationEntry),
       /does not encode a SorobanAuthorizationEntry/
@@ -212,7 +239,7 @@ describe("toAuthEntry", () => {
     const entry = makeAddressAuthEntry(makeContract(1));
     let calls = 0;
     const foreign = {
-      bytes: entry.toXDR(),
+      bytes: entry.toXdr(),
       toXDR(this: { bytes: Uint8Array }) {
         calls += 1;
         return this.bytes;
@@ -220,7 +247,7 @@ describe("toAuthEntry", () => {
     };
     const decoded = toAuthEntry(foreign as unknown as string);
     expect(calls).toBe(1);
-    expect(decoded.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(decoded.toXdr("base64")).toBe(entry.toXdr("base64"));
   });
 
   it("names the field in the error", () => {

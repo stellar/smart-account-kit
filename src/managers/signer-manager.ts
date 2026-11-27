@@ -21,9 +21,9 @@ export interface SignerManagerDeps {
   requireWallet: () => {
     wallet: {
       add_signer: (args: { context_rule_id: number; signer: ContractSigner }) => Promise<AssembledTransaction<number>>;
-      batch_add_signer: (args: { context_rule_id: number; signers: ContractSigner[] }) => Promise<AssembledTransaction<null>>;
+      batch_add_signer: (args: { context_rule_id: number; signers: ContractSigner[] }) => Promise<AssembledTransaction<void | null>>;
       get_signer_id: (args: { signer: ContractSigner }) => Promise<AssembledTransaction<number>>;
-      remove_signer: (args: { context_rule_id: number; signer_id: number }) => Promise<AssembledTransaction<null>>;
+      remove_signer: (args: { context_rule_id: number; signer_id: number }) => Promise<AssembledTransaction<void | null>>;
     };
     contractId: string;
   };

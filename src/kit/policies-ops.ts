@@ -1,4 +1,4 @@
-import { Address, xdr } from "@stellar/stellar-sdk";
+import { Address, StrKey, xdr } from "@stellar/stellar-sdk";
 import type { Client as SmartAccountClient, Signer as ContractSigner } from "smart-account-kit-bindings";
 import { SmartAccountErrorCode, ValidationError, WalletNotConnectedError } from "../errors.js";
 import type { PolicyConfig } from "../types.js";
@@ -46,15 +46,17 @@ function foreignScValError(address: string, error?: unknown): ValidationError {
  */
 function toKitScVal(value: unknown, address: string): xdr.ScVal | undefined {
   if (value instanceof xdr.ScVal) {
-    return value;
+    return value as xdr.ScVal;
   }
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
   // Read the encoder once, inside the guard: a hostile getter can throw.
+  // Accept both SDK 17 `toXdr` and SDK 16 `toXDR` from foreign SDK copies.
   let encode: unknown;
   try {
-    encode = (value as { toXDR?: unknown }).toXDR;
+    const record = value as { toXdr?: unknown; toXDR?: unknown };
+    encode = typeof record.toXdr === "function" ? record.toXdr : record.toXDR;
   } catch (error) {
     throw foreignScValError(address, error);
   }
@@ -64,27 +66,23 @@ function toKitScVal(value: unknown, address: string): xdr.ScVal | undefined {
   try {
     const bytes: unknown = encode.call(value);
     if (!(bytes instanceof Uint8Array)) {
-      throw new TypeError("toXDR() did not return bytes");
+      throw new TypeError("toXdr() did not return bytes");
     }
-    return xdr.ScVal.fromXDR(Buffer.from(bytes));
+    return xdr.ScVal.fromXdr(bytes);
   } catch (error) {
     throw foreignScValError(address, error);
   }
 }
 
 function policyAddressToScVal(address: string): xdr.ScVal {
-  try {
-    return new Address(address).toScVal();
-  } catch (error) {
+  if (!StrKey.isValidContract(address)) {
     throw new ValidationError(
-      `Invalid policy address: ${address}`,
+      `Invalid policy address: ${address} (must be a valid contract C... address)`,
       SmartAccountErrorCode.INVALID_ADDRESS,
-      {
-        address,
-        cause: error instanceof Error ? error.message : String(error),
-      }
+      { address }
     );
   }
+  return new Address(address).toScVal();
 }
 
 /** Return a new policy map in the Soroban host's ScAddress key order. */
@@ -179,7 +177,7 @@ function encodeWeightedThresholdParams(params: unknown): xdr.ScVal {
   // Signer (vector) keys must be in Soroban host-sort order, not XDR-hex order:
   // same-verifier signers differ only in variable-length keyData, where the two
   // orders diverge and the host would reject the map. See compareScVal.
-  weightEntries.sort((a, b) => compareScVal(a.key(), b.key()));
+  weightEntries.sort((a, b) => compareScVal(a.key, b.key));
   return xdr.ScVal.scvMap([
     symbolEntry("signer_weights", xdr.ScVal.scvMap(weightEntries)),
     symbolEntry("threshold", xdr.ScVal.scvU32(requireU32(threshold, "threshold"))),
@@ -319,7 +317,7 @@ export function buildPoliciesScVal(
 
   // Address keys are fixed-width, but use the shared host-order comparator for
   // consistency and to avoid locale-sensitive string comparison.
-  entries.sort((a, b) => compareScVal(a.key(), b.key()));
+  entries.sort((a, b) => compareScVal(a.key, b.key));
 
   return xdr.ScVal.scvMap(entries);
 }

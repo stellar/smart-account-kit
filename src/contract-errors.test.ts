@@ -106,7 +106,7 @@ describe("CONTRACT_ERROR_REGISTRY", () => {
     });
     const docs = new Map<number, string>(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (client as any).spec.errorCases().map((c: any) => [c.value(), c.doc().toString()])
+      (client as any).spec.errorCases().map((c: any) => [c.value, c.doc.toString()])
     );
 
     for (const code of [3000, 3006, 3008]) {

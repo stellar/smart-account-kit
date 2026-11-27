@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import base64url from "base64url";
+import { StrKey } from "@stellar/stellar-sdk";
 import {
   compactSignature,
   deriveContractAddress,
   extractPublicKeyFromAttestation,
+  validateAddress,
 } from "./utils";
 
 const TESTNET = "Test SDF Network ; September 2015";
@@ -142,5 +144,24 @@ describe("utils.compactSignature", () => {
     expect(() => compactSignature(encodeDer(validR, paddedS))).toThrow(
       /non-minimal leading zero/i
     );
+  });
+});
+
+describe("utils.validateAddress", () => {
+  const muxedBytes = new Uint8Array(40);
+  muxedBytes.fill(7, 0, 32);
+  muxedBytes[39] = 42;
+  const muxedContract = StrKey.encodeMuxedContract(muxedBytes);
+
+  it("rejects CAP-84 muxed contract (W...) addresses by default", () => {
+    expect(() => validateAddress(muxedContract, "tokenContract")).toThrow(
+      /account \(G\.\.\.\) or contract \(C\.\.\.\)/
+    );
+  });
+
+  it("accepts CAP-84 muxed contract (W...) addresses when allowMuxed is true", () => {
+    expect(() =>
+      validateAddress(muxedContract, "recipient", { allowMuxed: true })
+    ).not.toThrow();
   });
 });

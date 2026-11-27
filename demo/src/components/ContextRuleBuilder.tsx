@@ -198,7 +198,7 @@ export function ContextRuleBuilder({
         setContractAddress(editingRule.context_type.values[0] as string);
       } else if (editingRule.context_type.tag === "CreateContract") {
         setContextType("create_contract");
-        const hashBytes = editingRule.context_type.values[0] as Buffer;
+        const hashBytes = Buffer.from(editingRule.context_type.values[0]);
         setWasmHash(hashBytes.toString("hex"));
       } else if (editingRule.context_type.tag === "CreateContractExternalRef") {
         setContextType("create_contract_external_ref");

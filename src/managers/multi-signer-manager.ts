@@ -7,8 +7,10 @@
 
 import {
   Address,
+  extractBaseAddress,
   hash,
   Operation,
+  StrKey,
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
@@ -38,6 +40,7 @@ import {
   randomAuthEntryNonce,
   readAuthPayload,
   upsertAuthPayloadSigner,
+  withUpdatedAddressCredentials,
   writeAuthPayload,
 } from "../kit/auth-payload.js";
 import { resolveContextRuleIdsForEntry } from "../kit/context-rules.js";
@@ -197,17 +200,17 @@ export class MultiSignerManager {
     authAddress: string,
     expiration: number
   ): Promise<xdr.SorobanAuthorizationEntry> {
-    const signedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
     const normalizedExpiration = normalizeSignatureExpirationLedger(expiration);
-    const credentialType = signedEntry.credentials().switch().name as string;
+    const credentialType = entry.credentials.type;
     if (credentialType === "sorobanCredentialsAddressWithDelegates") {
       throw new Error(
         "ADDRESS_WITH_DELEGATES auth entries are not supported by wallet signing yet"
       );
     }
 
-    const credentials = getAddressCredentials(signedEntry.credentials());
-    credentials.signatureExpirationLedger(normalizedExpiration);
+    let signedEntry = withUpdatedAddressCredentials(entry, {
+      signatureExpirationLedger: normalizedExpiration,
+    });
     const preimage = buildSignaturePreimage(
       this.deps.networkPassphrase,
       signedEntry,
@@ -215,16 +218,16 @@ export class MultiSignerManager {
     );
 
     const { signedAuthEntry } = await this.deps.externalSigners.signAuthEntry(
-      preimage.toXDR("base64"),
+      preimage.toXdr("base64"),
       authAddress
     );
 
-    credentials.signature(
-      buildAddressSignatureScVal(
-        Address.fromString(authAddress).toScAddress().accountId().ed25519(),
+    signedEntry = withUpdatedAddressCredentials(signedEntry, {
+      signature: buildAddressSignatureScVal(
+        StrKey.decodeEd25519PublicKey(authAddress),
         Buffer.from(signedAuthEntry, "base64")
-      )
-    );
+      ),
+    });
 
     return signedEntry;
   }
@@ -289,8 +292,8 @@ export class MultiSignerManager {
       );
 
       for (const [authEntryIndex, entry] of authEntries.entries()) {
-        const credentials = entry.credentials();
-        const credentialType = credentials.switch().name as string;
+        const credentials = entry.credentials;
+        const credentialType = credentials.type;
 
         if (credentialType === "sorobanCredentialsAddressWithDelegates") {
           return failedTransaction(
@@ -310,7 +313,7 @@ export class MultiSignerManager {
 
         const existingExpiration = getAddressCredentials(
           credentials
-        ).signatureExpirationLedger();
+        ).signatureExpirationLedger;
         const expiration = existingExpiration || defaultExpiration;
 
         const authAddress = getAuthEntryAddress(entry);
@@ -333,16 +336,21 @@ export class MultiSignerManager {
           continue;
         }
 
+        // Deep-copy the auth entry before intent validation so caller-held
+        // mutable invocation arrays cannot mutate it across async awaits.
+        const snapshotEntry = xdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr());
+
         assertWalletMutationIntent(
-          entry,
+          snapshotEntry,
           contractId,
           allowWalletMutation ? hostFunc : undefined,
           this.deps
         );
         authDigestScheme ??= await this.deps.resolveAuthDigestScheme(contractId);
 
-        let signedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
-        getAddressCredentials(signedEntry.credentials()).signatureExpirationLedger(expiration);
+        let signedEntry = withUpdatedAddressCredentials(snapshotEntry, {
+          signatureExpirationLedger: expiration,
+        });
         const selectedContractSigners = selectedSigners
           .map(({ signer }) => signer)
           .filter((signer): signer is ContractSigner => signer !== undefined);
@@ -362,7 +370,7 @@ export class MultiSignerManager {
           );
 
         const existingPayload = readAuthPayload(
-          getAddressCredentials(signedEntry.credentials()).signature()
+          getAddressCredentials(signedEntry.credentials).signature
         );
         if (
           existingPayload.context_rule_ids.length > 0 &&
@@ -385,8 +393,7 @@ export class MultiSignerManager {
           });
         }
 
-        const signedCredentials = getAddressCredentials(signedEntry.credentials());
-        signedCredentials.signatureExpirationLedger(expiration);
+        const signedCredentials = getAddressCredentials(signedEntry.credentials);
 
         for (const walletSigner of walletSigners) {
           if (!walletSigner.walletAddress) continue;
@@ -399,7 +406,7 @@ export class MultiSignerManager {
           }
         }
 
-        const authPayload = readAuthPayload(signedCredentials.signature());
+        const authPayload = readAuthPayload(signedCredentials.signature);
         if (authPayload.context_rule_ids.length === 0) {
           authPayload.context_rule_ids = resolvedContextRuleIds;
         }
@@ -436,7 +443,10 @@ export class MultiSignerManager {
           if (!walletSigner.walletAddress) continue;
           upsertAuthPayloadSigner(authPayload, walletSigner.signer as ContractSigner, Buffer.alloc(0));
         }
-        signedCredentials.signature(writeAuthPayload(authPayload));
+        signedEntry = withUpdatedAddressCredentials(signedEntry, {
+          signatureExpirationLedger: expiration,
+          signature: writeAuthPayload(authPayload),
+        });
         signedAuthEntries.push(signedEntry);
 
         if (walletSigners.length === 0) {
@@ -472,7 +482,7 @@ export class MultiSignerManager {
           );
 
           const { signedAuthEntry: walletSignatureBase64 } = await this.deps.externalSigners.signAuthEntry(
-            delegatedPreimage.toXDR("base64"),
+            delegatedPreimage.toXdr("base64"),
             walletSigner.walletAddress
           );
 
@@ -484,7 +494,7 @@ export class MultiSignerManager {
                   nonce: delegatedNonce,
                   signatureExpirationLedger: expiration,
                   signature: buildAddressSignatureScVal(
-                    Address.fromString(walletSigner.walletAddress).toScAddress().accountId().ed25519(),
+                    StrKey.decodeEd25519PublicKey(walletSigner.walletAddress),
                     Buffer.from(walletSignatureBase64, "base64")
                   ),
                 })
@@ -582,8 +592,8 @@ export class MultiSignerManager {
 
       if (authEntries.length === 0) {
         onLog("No auth entries - submitting directly...");
-        const preparedTx = TransactionBuilder.fromXDR(
-          builtTx.toXDR(),
+        const preparedTx = TransactionBuilder.fromXdr(
+          builtTx.toXdr(),
           this.deps.networkPassphrase
         ) as Transaction;
         signFeePayer(preparedTx, this.deps.deployerKeypair, this.deps, submissionOptions);
@@ -616,13 +626,16 @@ export class MultiSignerManager {
 
     try {
       validateAddress(tokenContract, "tokenContract");
-      validateAddress(recipient, "recipient");
+      validateAddress(recipient, "recipient", { allowMuxed: true });
       validateAmount(amount, "amount");
     } catch (err) {
       return failedTransaction(wrapError(err, SmartAccountErrorCode.INVALID_INPUT));
     }
 
-    if (recipient === contractId) {
+    const recipientBase = StrKey.isValidMuxedContract(recipient)
+      ? extractBaseAddress(recipient)
+      : recipient;
+    if (recipientBase === contractId) {
       return failedTransaction(new ValidationError("Cannot transfer to self"));
     }
 

@@ -22,12 +22,12 @@ function instanceEntry(executable: xdr.ContractExecutable) {
   return {
     val: xdr.LedgerEntryData.contractData(
       new xdr.ContractDataEntry({
-        ext: new xdr.ExtensionPoint(0),
+        ext: xdr.ExtensionPoint.v0(),
         contract: Address.fromString(CONTRACT).toScAddress(),
         key: xdr.ScVal.scvLedgerKeyContractInstance(),
-        durability: xdr.ContractDataDurability.persistent(),
+        durability: xdr.ContractDataDurability.persistent,
         val: xdr.ScVal.scvContractInstance(
-          new xdr.ScContractInstance({ executable, storage: null })
+          new xdr.ScContractInstance({ executable, storage: undefined })
         ),
       })
     ),

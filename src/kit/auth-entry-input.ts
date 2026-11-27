@@ -79,7 +79,7 @@ export function toAuthEntry(
     }
     let decoded: xdr.SorobanAuthorizationEntry;
     try {
-      decoded = xdr.SorobanAuthorizationEntry.fromXDR(encoded, "base64");
+      decoded = xdr.SorobanAuthorizationEntry.fromXdr(encoded, "base64");
     } catch (error) {
       throw invalidEntry(
         fieldName,
@@ -89,7 +89,7 @@ export function toAuthEntry(
     }
     // The pattern allows nonzero unused bits before the padding (for example
     // `AB==` decodes like `AA==`). Accept only the one canonical encoding.
-    if (decoded.toXDR("base64") !== encoded) {
+    if (decoded.toXdr("base64") !== encoded) {
       throw invalidEntry(fieldName, "the string is not canonical base64 XDR");
     }
     return decoded;
@@ -97,11 +97,13 @@ export function toAuthEntry(
 
   // An XDR object from another copy of the SDK. The wire format is the same,
   // so re-decode its bytes with the kit's SDK. Read the encoder once, inside
-  // a guard, because a hostile getter can throw.
+  // a guard, because a hostile getter can throw. Accept both SDK 17 `toXdr`
+  // and SDK 16 `toXDR`.
   let encode: unknown;
   if (typeof value === "object" && value !== null) {
     try {
-      encode = (value as { toXDR?: unknown }).toXDR;
+      const record = value as { toXdr?: unknown; toXDR?: unknown };
+      encode = typeof record.toXdr === "function" ? record.toXdr : record.toXDR;
     } catch (error) {
       throw invalidEntry(fieldName, "the object could not be encoded as XDR", error);
     }
@@ -114,10 +116,10 @@ export function toAuthEntry(
       throw invalidEntry(fieldName, "the object could not be encoded as XDR", error);
     }
     if (!(bytes instanceof Uint8Array)) {
-      throw invalidEntry(fieldName, "the object's toXDR() did not return bytes");
+      throw invalidEntry(fieldName, "the object's toXdr() did not return bytes");
     }
     try {
-      return xdr.SorobanAuthorizationEntry.fromXDR(Buffer.from(bytes));
+      return xdr.SorobanAuthorizationEntry.fromXdr(bytes);
     } catch (error) {
       throw invalidEntry(
         fieldName,

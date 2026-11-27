@@ -39,6 +39,7 @@ import {
   normalizeSignatureExpirationLedger,
   readAuthPayload,
   upsertAuthPayloadSigner,
+  withUpdatedAddressCredentials,
   writeAuthPayload,
 } from "./kit/auth-payload.js";
 import {
@@ -64,14 +65,12 @@ export interface EntryAuthDigest {
  * Compute the signature payload and auth digest for a smart-account auth entry.
  *
  * Single source of truth for the auth-digest formula shared by every signer
- * type. Note: like {@link buildSignaturePayload}, this normalizes and writes the
- * entry's `signatureExpirationLedger` to `expiration` as a side effect. The
- * side effect applies only to an `xdr.SorobanAuthorizationEntry` from the kit's
- * SDK; a base64 string input is decoded into a new object first.
+ * type. The input `entry` is never mutated; `expiration` is normalized and
+ * hashed into the authorization preimage.
  *
  * @param networkPassphrase - Network passphrase
  * @param entry - The Soroban auth entry being signed, as base64 XDR or an XDR
- *   object. Apps on Stellar SDK 17 can pass `entry.toXdr("base64")`.
+ *   object.
  * @param expiration - Signature expiration ledger
  * @param contextRuleIds - Context rule ids bound into the digest
  * @param scheme - The digest scheme of the code the smart account runs
@@ -86,6 +85,7 @@ export function computeEntryAuthDigest(
   scheme: AuthDigestScheme
 ): EntryAuthDigest {
   const authEntry = toAuthEntry(entry);
+  const authAddress = getAuthEntryAddress(authEntry);
   const signaturePayload = buildSignaturePayload(networkPassphrase, authEntry, expiration);
 
   switch (scheme) {
@@ -99,7 +99,7 @@ export function computeEntryAuthDigest(
     }
     case "preimage-v1": {
       const preimage = buildAuthDigestPreimage(
-        getAuthEntryAddress(authEntry),
+        authAddress,
         signaturePayload,
         contextRuleIds
       );
@@ -209,7 +209,7 @@ export class Ed25519Signer implements AuthDigestSigner {
         { actualLength: signature.length }
       );
     }
-    return signature;
+    return Buffer.from(signature);
   }
 }
 
@@ -322,11 +322,11 @@ export async function signAuthEntryWithSigners(
   // Never modify the caller's object: copy a kit XDR object. A string or a
   // foreign-SDK object is already decoded into a new object.
   const decoded = toAuthEntry(entry);
-  const signed =
+  let signed =
     decoded === entry
-      ? xdr.SorobanAuthorizationEntry.fromXDR(decoded.toXDR())
+      ? xdr.SorobanAuthorizationEntry.fromXdr(decoded.toXdr())
       : decoded;
-  const credentialType = signed.credentials().switch().name as string;
+  const credentialType = signed.credentials.type;
   if (credentialType === "sorobanCredentialsAddressWithDelegates") {
     throw new ValidationError(
       "ADDRESS_WITH_DELEGATES auth entries are not supported by sign-only signing yet",
@@ -348,8 +348,8 @@ export async function signAuthEntryWithSigners(
   // No host function: this is a generic path and must refuse admin mutations.
   assertWalletMutationIntent(signed, contractId);
 
-  const credentials = getAddressCredentials(signed.credentials());
-  const existingExpiration = credentials.signatureExpirationLedger();
+  const credentials = getAddressCredentials(signed.credentials);
+  const existingExpiration = credentials.signatureExpirationLedger;
   const requestedExpiration = options.expiration ?? existingExpiration;
   if (!requestedExpiration) {
     throw new ValidationError(
@@ -359,7 +359,7 @@ export async function signAuthEntryWithSigners(
   }
   const expiration = normalizeSignatureExpirationLedger(requestedExpiration);
 
-  const authPayload = readAuthPayload(credentials.signature());
+  const authPayload = readAuthPayload(credentials.signature);
   if (authPayload.signers.size > 0 && expiration !== existingExpiration) {
     throw new ValidationError(
       "Existing signatures cover a different expiration ledger",
@@ -399,6 +399,9 @@ export async function signAuthEntryWithSigners(
   }
 
   authPayload.context_rule_ids = [...contextRuleIds];
-  credentials.signature(writeAuthPayload(authPayload));
-  return typeof entry === "string" ? signed.toXDR("base64") : signed;
+  signed = withUpdatedAddressCredentials(signed, {
+    signatureExpirationLedger: expiration,
+    signature: writeAuthPayload(authPayload),
+  });
+  return typeof entry === "string" ? signed.toXdr("base64") : signed;
 }

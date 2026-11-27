@@ -44,7 +44,7 @@ import { decodeContractError } from "./contract-errors.js";
 /** Deterministic, well-known read-only source account for getter simulation. */
 const READ_ONLY_SIM_ACCOUNT = new Account(
   Keypair.fromRawEd25519Seed(
-    hash(Buffer.from("smart-account-kit-policy-read"))
+    hash(new TextEncoder().encode("smart-account-kit-policy-read"))
   ).publicKey(),
   "0"
 );
@@ -267,12 +267,12 @@ export class SpendingLimitPolicyClient extends PolicyClientBase {
  * key them directly).
  */
 function decodeSignerWeights(retval: xdr.ScVal): Map<ContractSigner, number> {
-  if (retval.switch().name !== "scvMap") {
+  if (retval.type !== "scvMap") {
     throw new SimulationError("get_signer_weights did not return a map");
   }
   const weights = new Map<ContractSigner, number>();
-  for (const entry of retval.map() ?? []) {
-    weights.set(parseSignerScVal(entry.key()), Number(scValToNative(entry.val())));
+  for (const entry of retval.map ?? []) {
+    weights.set(parseSignerScVal(entry.key), Number(scValToNative(entry.val)));
   }
   return weights;
 }

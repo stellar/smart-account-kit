@@ -537,12 +537,12 @@ export class ExternalSignerManager {
     const keypairSigner = this.keypairSigners.get(address);
     if (keypairSigner) {
       // Parse the preimage and sign
-      const preimage = xdr.HashIdPreimage.fromXDR(preimageXdr, "base64");
-      const payload = hash(preimage.toXDR());
+      const preimage = xdr.HashIdPreimage.fromXdr(preimageXdr, "base64");
+      const payload = hash(preimage.toXdr());
       const signature = keypairSigner.keypair.sign(payload);
 
       return {
-        signedAuthEntry: signature.toString("base64"),
+        signedAuthEntry: xdr.encodeBytes(signature, "base64"),
         signerAddress: address,
       };
     }

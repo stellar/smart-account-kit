@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Address, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { Address, Keypair, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
 import { Client as SmartAccountClient } from "smart-account-kit-bindings";
 import {
   createDefaultContext,
@@ -289,9 +289,9 @@ describe("buildPoliciesScVal", () => {
       new Map<string, unknown>([[POLICY, foreignScVal(original)]]),
       new Map([[POLICY, "custom" as const]])
     );
-    const [entry] = result.map()!;
-    expect(entry.val()).toBeInstanceOf(xdr.ScVal);
-    expect(entry.val().toXDR("base64")).toBe(original.toXDR("base64"));
+    const [entry] = xdr.expectUnionVariant(result, "scvMap").map ?? [];
+    expect(entry.val).toBeInstanceOf(xdr.ScVal);
+    expect(entry.val.toXdr("base64")).toBe(original.toXdr("base64"));
   });
 
   it("refuses a foreign object whose toXDR() is not an ScVal", () => {
@@ -317,6 +317,24 @@ describe("sortPolicyMap", () => {
       expect((error as ValidationError).code).toBe(
         SmartAccountErrorCode.INVALID_ADDRESS
       );
+    }
+  });
+
+  it("rejects CAP-84 muxed contract (W...) and account (G...) policy addresses", () => {
+    const muxed = StrKey.encodeMuxedContract(
+      Buffer.concat([Buffer.alloc(32, 9), Buffer.alloc(8, 1)])
+    );
+    const account = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 9)).publicKey();
+    for (const invalid of [muxed, account]) {
+      try {
+        sortPolicyMap(new Map([[invalid, xdr.ScVal.scvVoid()]]));
+        throw new Error(`Expected sortPolicyMap to reject ${invalid}`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ValidationError);
+        expect((error as ValidationError).code).toBe(
+          SmartAccountErrorCode.INVALID_ADDRESS
+        );
+      }
     }
   });
 });

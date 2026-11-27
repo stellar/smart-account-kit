@@ -49,10 +49,11 @@ function createDeployTxMock() {
     salt: hash(Buffer.from("wallet-ops-test")),
     constructorArgs: [xdr.ScVal.scvVec([]), xdr.ScVal.scvMap([])],
   });
-  const func = operation.body().invokeHostFunctionOp().hostFunction();
+  const func = xdr.expectUnionVariant(operation.body, "invokeHostFunction").invokeHostFunctionOp.hostFunction;
   return {
     built: { operations: [{ type: "invokeHostFunction", func }] },
     signed: {
+      toXdr: vi.fn(() => "signed-xdr"),
       toXDR: vi.fn(() => "signed-xdr"),
     },
   };
@@ -65,18 +66,22 @@ const ACCEPTED_WASM_HASH = "ab".repeat(32);
 /** An instance ledger entry carrying a WASM executable hash. */
 function instanceWithWasm(hashHex: string) {
   return {
-    val: {
-      contractData: () => ({
-        val: () => ({
-          instance: () => ({
-            executable: () => ({
-              switch: () => ({ name: "contractExecutableWasm" }),
-              wasmHash: () => Buffer.from(hashHex, "hex"),
-            }),
-          }),
-        }),
-      }),
-    },
+    val: xdr.LedgerEntryData.contractData(
+      new xdr.ContractDataEntry({
+        ext: xdr.ExtensionPoint.v0(),
+        contract: Address.contract(Buffer.alloc(32, 1)).toScAddress(),
+        key: xdr.ScVal.scvLedgerKeyContractInstance(),
+        durability: xdr.ContractDataDurability.persistent,
+        val: xdr.ScVal.scvContractInstance(
+          new xdr.ScContractInstance({
+            executable: xdr.ContractExecutable.contractExecutableWasm(
+              new xdr.Hash(Buffer.from(hashHex, "hex"))
+            ),
+            storage: [],
+          })
+        ),
+      })
+    ),
   };
 }
 

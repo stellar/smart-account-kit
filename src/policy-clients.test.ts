@@ -37,7 +37,7 @@ function makeRule(signers: ContractSigner[]): ContextRule {
     signer_ids: signers.map((_, i) => i),
     policies: [],
     policy_ids: [],
-    valid_until: undefined,
+    valid_until: null,
   };
 }
 
@@ -62,10 +62,10 @@ function makeDeps(overrides: Partial<PolicyClientDeps> = {}): PolicyClientDeps &
 function simulatedCall(deps: ReturnType<typeof makeDeps>) {
   const tx = deps.rpc.simulateTransaction.mock.calls[0][0];
   const op = tx.operations[0];
-  const invoke = op.func.invokeContract();
+  const invoke = op.func.invokeContract;
   return {
-    fnName: invoke.functionName().toString(),
-    args: invoke.args() as xdr.ScVal[],
+    fnName: invoke.functionName.toString(),
+    args: invoke.args as xdr.ScVal[],
   };
 }
 
@@ -82,7 +82,10 @@ describe("SimpleThresholdPolicyClient", () => {
     const { fnName, args } = simulatedCall(deps);
     expect(fnName).toBe("get_threshold");
     expect(scValToNative(args[0])).toBe(2);
-    expect(Address.fromScAddress(args[1].address()).toString()).toBe(SMART_ACCOUNT);
+    expect(args[1].type).toBe("scvAddress");
+    if (args[1].type === "scvAddress") {
+      expect(Address.fromScAddress(args[1].address).toString()).toBe(SMART_ACCOUNT);
+    }
   });
 
   it("routes set_threshold through execute() with the full ContextRule", async () => {
@@ -97,8 +100,9 @@ describe("SimpleThresholdPolicyClient", () => {
     expect(target).toBe(POLICY);
     expect(fnName).toBe("set_threshold");
     expect(scValToNative(args[0])).toBe(2);
-    expect(args[1].switch().name).toBe("scvMap"); // encoded ContextRule
-    expect(Address.fromScAddress(args[2].address()).toString()).toBe(SMART_ACCOUNT);
+    expect(args[1].type).toBe("scvMap"); // encoded ContextRule
+    expect(args[2].type).toBe("scvAddress");
+    expect(Address.fromScAddress(args[2].address).toString()).toBe(SMART_ACCOUNT);
   });
 });
 
@@ -136,7 +140,7 @@ describe("WeightedThresholdPolicyClient", () => {
     const [target, fnName, args] = deps.execute.mock.calls[0];
     expect(target).toBe(POLICY);
     expect(fnName).toBe("set_signer_weight");
-    expect(args[0].switch().name).toBe("scvVec"); // encoded Signer
+    expect(args[0].type).toBe("scvVec"); // encoded Signer
     expect(scValToNative(args[1])).toBe(3); // weight
   });
 });

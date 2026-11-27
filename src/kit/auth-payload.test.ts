@@ -24,6 +24,7 @@ import {
   scAddressToString,
   signerToScVal,
   upsertAuthPayloadSigner,
+  withUpdatedAddressCredentials,
   writeAuthPayload,
 } from "./auth-payload";
 import { SmartAccountErrorCode, ValidationError } from "../errors";
@@ -65,9 +66,9 @@ function makeAuthEntry(address: string): xdr.SorobanAuthorizationEntry {
     rootInvocation: new xdr.SorobanAuthorizedInvocation({
       function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
         new xdr.InvokeContractArgs({
-          contractAddress: xdr.ScAddress.scAddressTypeContract(
+          contractAddress: Address.contract(
             hash(Buffer.from("contract"))
-          ),
+          ).toScAddress(),
           functionName: "do_it",
           args: [],
         })
@@ -100,9 +101,16 @@ function withRootInvocation(
   rootInvocation: xdr.SorobanAuthorizedInvocation
 ): xdr.SorobanAuthorizationEntry {
   return new xdr.SorobanAuthorizationEntry({
-    credentials: entry.credentials(),
+    credentials: entry.credentials,
     rootInvocation,
   });
+}
+
+function contractFnOf(invocation: xdr.SorobanAuthorizedInvocation): xdr.InvokeContractArgs {
+  if (invocation.function.type !== "sorobanAuthorizedFunctionTypeContractFn") {
+    throw new Error(`Expected contractFn, got ${invocation.function.type}`);
+  }
+  return invocation.function.contractFn;
 }
 
 describe("auth-payload", () => {
@@ -123,7 +131,7 @@ describe("auth-payload", () => {
       assertWalletMutationIntent(
         entry,
         wallet,
-        xdr.HostFunction.hostFunctionTypeInvokeContract(root.function().contractFn()),
+        xdr.HostFunction.hostFunctionTypeInvokeContract(contractFnOf(root)),
         withPolicy ? policy : undefined
       );
     }
@@ -186,7 +194,7 @@ describe("auth-payload", () => {
     ]);
     const entry = withRootInvocation(makeAuthEntry(makeAccount(23)), root);
     const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
-      root.function().contractFn()
+      contractFnOf(root)
     );
 
     expect(() =>
@@ -206,7 +214,7 @@ describe("auth-payload", () => {
       )
     );
     const nestedHostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
-      nested.rootInvocation().function().contractFn()
+      contractFnOf(nested.rootInvocation)
     );
 
     expect(() =>
@@ -216,7 +224,7 @@ describe("auth-payload", () => {
     const root = makeContractInvocation(wallet, "execute", [nestedMutation]);
     const multiple = withRootInvocation(makeAuthEntry(makeAccount(25)), root);
     const multipleHostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
-      root.function().contractFn()
+      contractFnOf(root)
     );
 
     expect(() =>
@@ -252,7 +260,7 @@ describe("auth-payload", () => {
       const root = makeContractInvocation(wallet, functionName, [], args);
       const entry = withRootInvocation(makeAuthEntry(makeAccount(27)), root);
       const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
-        root.function().contractFn()
+        contractFnOf(root)
       );
       assertWalletMutationIntent(entry, wallet, hostFunction);
     }
@@ -338,18 +346,20 @@ describe("auth-payload", () => {
   });
 
   it("binds context rule ids into the legacy auth digest", () => {
-    const signaturePayload = hash(Buffer.from("payload"));
+    const signaturePayload = Buffer.from(hash(Buffer.from("payload")));
 
     const digestA = buildLegacyAuthDigest(signaturePayload, [1]);
     const digestB = buildLegacyAuthDigest(signaturePayload, [2]);
 
     expect(digestA.equals(digestB)).toBe(false);
 
-    const expected = hash(
-      Buffer.concat([
-        signaturePayload,
-        xdr.ScVal.scvVec([xdr.ScVal.scvU32(1)]).toXDR(),
-      ])
+    const expected = Buffer.from(
+      hash(
+        Buffer.concat([
+          signaturePayload,
+          xdr.ScVal.scvVec([xdr.ScVal.scvU32(1)]).toXdr(),
+        ])
+      )
     );
     expect(digestA).toEqual(expected);
   });
@@ -359,31 +369,40 @@ describe("auth-payload", () => {
     const signature = Buffer.from("deadbeef", "hex");
 
     const scVal = buildAddressSignatureScVal(publicKey, signature);
-    const items = scVal.vec();
+    expect(scVal.type).toBe("scvVec");
+    if (scVal.type !== "scvVec") throw new Error("Expected scvVec");
+    const items = scVal.vec ?? [];
     expect(items).toHaveLength(1);
 
-    const entries = items?.[0].map();
+    const first = items[0];
+    expect(first.type).toBe("scvMap");
+    if (first.type !== "scvMap") throw new Error("Expected scvMap");
+    const entries = first.map ?? [];
     expect(entries).toHaveLength(2);
-    expect(entries?.[0].key().sym().toString()).toBe("public_key");
-    expect(Buffer.from(entries?.[0].val().bytes() ?? [])).toEqual(Buffer.from(publicKey));
-    expect(entries?.[1].key().sym().toString()).toBe("signature");
-    expect(Buffer.from(entries?.[1].val().bytes() ?? [])).toEqual(signature);
+    expect(entries[0].key.type === "scvSymbol" && entries[0].key.sym.toString()).toBe("public_key");
+    expect(
+      entries[0].val.type === "scvBytes" ? Buffer.from(entries[0].val.bytes.toBytes()) : null
+    ).toEqual(Buffer.from(publicKey));
+    expect(entries[1].key.type === "scvSymbol" && entries[1].key.sym.toString()).toBe("signature");
+    expect(
+      entries[1].val.type === "scvBytes" ? Buffer.from(entries[1].val.bytes.toBytes()) : null
+    ).toEqual(signature);
   });
 
   it("unwraps address credentials through the shared helper", () => {
     const account = makeAccount(4);
     const entry = makeAuthEntry(account);
-    const credentials = getAddressCredentials(entry.credentials());
+    const credentials = getAddressCredentials(entry.credentials);
 
-    expect(entry.credentials().switch().name).toBe("sorobanCredentialsAddress");
-    expect(credentials.nonce().toString()).toBe("7");
-    expect(Address.fromScAddress(credentials.address()).toString()).toBe(account);
+    expect(entry.credentials.type).toBe("sorobanCredentialsAddress");
+    expect(credentials.nonce.toString()).toBe("7");
+    expect(Address.fromScAddress(credentials.address).toString()).toBe(account);
   });
 
   it("always builds V1 ADDRESS credentials (classic G-account authorizers)", () => {
-    const credentials = getAddressCredentials(makeAuthEntry(makeAccount(5)).credentials());
+    const credentials = getAddressCredentials(makeAuthEntry(makeAccount(5)).credentials);
 
-    expect(createAddressCredentials(credentials).switch().name).toBe(
+    expect(createAddressCredentials(credentials).type).toBe(
       "sorobanCredentialsAddress"
     );
   });
@@ -391,13 +410,16 @@ describe("auth-payload", () => {
   it("matches the SDK auth preimage helper for legacy ADDRESS credentials", () => {
     const networkPassphrase = "Test SDF Network ; September 2015";
     const entry = makeAuthEntry(makeAccount(7));
-    const expectedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+    const expectedEntry = xdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr());
     const preimage = buildSignaturePreimage(networkPassphrase, entry, 123);
     const expected = buildAuthorizationEntryPreimage(expectedEntry, 123, networkPassphrase);
 
-    expect(preimage.toXDR()).toEqual(expected.toXDR());
-    expect(preimage.switch().name).toBe("envelopeTypeSorobanAuthorization");
-    expect(getAddressCredentials(entry.credentials()).signatureExpirationLedger()).toBe(123);
+    expect(preimage.toXdr()).toEqual(expected.toXdr());
+    expect(preimage.type).toBe("envelopeTypeSorobanAuthorization");
+    if (preimage.type === "envelopeTypeSorobanAuthorization") {
+      expect(preimage.sorobanAuthorization.signatureExpirationLedger).toBe(123);
+    }
+    expect(getAddressCredentials(entry.credentials).signatureExpirationLedger).toBe(1);
   });
 
   it("matches the SDK auth preimage helper for ADDRESS_V2 credentials", () => {
@@ -408,18 +430,21 @@ describe("auth-payload", () => {
     // directly to pin that the preimage helper still handles them.
     const entry = new xdr.SorobanAuthorizationEntry({
       credentials: xdr.SorobanCredentials.sorobanCredentialsAddressV2(
-        getAddressCredentials(baseEntry.credentials())
+        getAddressCredentials(baseEntry.credentials)
       ),
-      rootInvocation: baseEntry.rootInvocation(),
+      rootInvocation: baseEntry.rootInvocation,
     });
-    const expectedEntry = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+    const expectedEntry = xdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr());
     const preimage = buildSignaturePreimage(networkPassphrase, entry, 123);
     const expected = buildAuthorizationEntryPreimage(expectedEntry, 123, networkPassphrase);
 
-    expect(preimage.toXDR()).toEqual(expected.toXDR());
-    expect(preimage.switch().name).toBe("envelopeTypeSorobanAuthorizationWithAddress");
+    expect(preimage.toXdr()).toEqual(expected.toXdr());
+    expect(preimage.type).toBe("envelopeTypeSorobanAuthorizationWithAddress");
+    if (preimage.type === "envelopeTypeSorobanAuthorizationWithAddress") {
+      expect(preimage.sorobanAuthorizationWithAddress.signatureExpirationLedger).toBe(123);
+    }
     expect(buildSignaturePayload(networkPassphrase, entry, 123)).toHaveLength(32);
-    expect(getAddressCredentials(entry.credentials()).signatureExpirationLedger()).toBe(123);
+    expect(getAddressCredentials(entry.credentials).signatureExpirationLedger).toBe(1);
   });
 
   it("matches the SDK auth preimage helper for ADDRESS_WITH_DELEGATES credentials", () => {
@@ -429,31 +454,49 @@ describe("auth-payload", () => {
       validUntilLedgerSeq: 123,
       delegates: [{ address: makeAccount(15) }],
     });
-    const expectedEntry = xdr.SorobanAuthorizationEntry.fromXDR(delegatedEntry.toXDR());
+    const expectedEntry = xdr.SorobanAuthorizationEntry.fromXdr(delegatedEntry.toXdr());
     const preimage = buildSignaturePreimage(networkPassphrase, delegatedEntry, 123);
     const expected = buildAuthorizationEntryPreimage(expectedEntry, 123, networkPassphrase);
 
-    expect(delegatedEntry.credentials().switch().name).toBe(
+    expect(delegatedEntry.credentials.type).toBe(
       "sorobanCredentialsAddressWithDelegates"
     );
-    expect(preimage.toXDR()).toEqual(expected.toXDR());
-    expect(preimage.switch().name).toBe("envelopeTypeSorobanAuthorizationWithAddress");
+    expect(preimage.toXdr()).toEqual(expected.toXdr());
+    expect(preimage.type).toBe("envelopeTypeSorobanAuthorizationWithAddress");
   });
 
-  it("keeps the submitted expiration in sync with the signed payload", () => {
+  it("binds the requested expiration into the signed payload without mutating the entry", () => {
     const entry = makeAuthEntry(makeAccount(16));
+    const preimage = buildSignaturePreimage("Test SDF Network ; September 2015", entry, 123);
     const payload = buildSignaturePayload("Test SDF Network ; September 2015", entry, 123);
+    const updated = withUpdatedAddressCredentials(entry, { signatureExpirationLedger: 123 });
 
     expect(payload).toHaveLength(32);
-    expect(getAddressCredentials(entry.credentials()).signatureExpirationLedger()).toBe(123);
+    expect(preimage.type).toBe("envelopeTypeSorobanAuthorization");
+    if (preimage.type === "envelopeTypeSorobanAuthorization") {
+      expect(preimage.sorobanAuthorization.signatureExpirationLedger).toBe(123);
+    }
+    expect(payload).toEqual(
+      buildSignaturePayload("Test SDF Network ; September 2015", updated, 123)
+    );
+    expect(getAddressCredentials(entry.credentials).signatureExpirationLedger).toBe(1);
+    expect(getAddressCredentials(updated.credentials).signatureExpirationLedger).toBe(123);
   });
 
   it("rounds fractional signature expirations up before XDR serialization", () => {
     const entry = makeAuthEntry(makeAccount(17));
+    const preimage = buildSignaturePreimage("Test SDF Network ; September 2015", entry, 123.2);
     const payload = buildSignaturePayload("Test SDF Network ; September 2015", entry, 123.2);
 
     expect(payload).toHaveLength(32);
-    expect(getAddressCredentials(entry.credentials()).signatureExpirationLedger()).toBe(124);
+    expect(preimage.type).toBe("envelopeTypeSorobanAuthorization");
+    if (preimage.type === "envelopeTypeSorobanAuthorization") {
+      expect(preimage.sorobanAuthorization.signatureExpirationLedger).toBe(124);
+    }
+    expect(payload).toEqual(
+      buildSignaturePayload("Test SDF Network ; September 2015", entry, 124)
+    );
+    expect(getAddressCredentials(entry.credentials).signatureExpirationLedger).toBe(1);
   });
 
   it("rejects non-finite signature expirations without mutating the entry", () => {
@@ -462,7 +505,7 @@ describe("auth-payload", () => {
     expect(() =>
       buildSignaturePayload("Test SDF Network ; September 2015", entry, Number.NaN)
     ).toThrow("Signature expiration ledger must be a finite number");
-    expect(getAddressCredentials(entry.credentials()).signatureExpirationLedger()).toBe(1);
+    expect(getAddressCredentials(entry.credentials).signatureExpirationLedger).toBe(1);
   });
 
   it("rejects out-of-range signature expirations without mutating the entry", () => {
@@ -473,19 +516,19 @@ describe("auth-payload", () => {
     expect(() =>
       buildSignaturePayload("Test SDF Network ; September 2015", negativeEntry, -1)
     ).toThrow("Signature expiration ledger must fit in u32");
-    expect(getAddressCredentials(negativeEntry.credentials()).signatureExpirationLedger()).toBe(1);
+    expect(getAddressCredentials(negativeEntry.credentials).signatureExpirationLedger).toBe(1);
 
     expect(() =>
       buildSignaturePayload("Test SDF Network ; September 2015", negativeFractionEntry, -0.5)
     ).toThrow("Signature expiration ledger must fit in u32");
     expect(
-      getAddressCredentials(negativeFractionEntry.credentials()).signatureExpirationLedger()
+      getAddressCredentials(negativeFractionEntry.credentials).signatureExpirationLedger
     ).toBe(1);
 
     expect(() =>
       buildSignaturePayload("Test SDF Network ; September 2015", oversizedEntry, 0x1_0000_0000)
     ).toThrow("Signature expiration ledger must fit in u32");
-    expect(getAddressCredentials(oversizedEntry.credentials()).signatureExpirationLedger()).toBe(1);
+    expect(getAddressCredentials(oversizedEntry.credentials).signatureExpirationLedger).toBe(1);
   });
 });
 
@@ -513,7 +556,7 @@ describe("compareScVal (Soroban host key order)", () => {
     // 0x00000051 (81) < 0x00000061 (97), so the shorter key sorts first
     // regardless of content.
     const xdrOrder = [keyA, keyB].sort((a, b) =>
-      a.toXDR("hex").localeCompare(b.toXDR("hex"))
+      a.toXdr("hex").localeCompare(b.toXdr("hex"))
     );
     expect(xdrOrder[0]).toBe(keyA);
 
@@ -553,14 +596,18 @@ describe("compareScVal (Soroban host key order)", () => {
     };
 
     const encoded = writeAuthPayload(payload);
-    const signersEntry = (encoded.map() ?? []).find(
-      (entry) => entry.key().sym().toString() === "signers"
+    expect(encoded.type).toBe("scvMap");
+    if (encoded.type !== "scvMap") throw new Error("Expected scvMap");
+    const signersEntry = (encoded.map ?? []).find(
+      (entry) => entry.key.type === "scvSymbol" && entry.key.sym.toString() === "signers"
     );
-    const signerKeys = (signersEntry?.val().map() ?? []).map((entry) => entry.key());
+    const signerKeys = (
+      signersEntry?.val.type === "scvMap" ? signersEntry.val.map ?? [] : []
+    ).map((entry) => entry.key);
 
     // Host order puts the content-lower (longer) key first.
-    expect(signerKeys[0].toXDR("hex")).toBe(signerToScVal(signerB).toXDR("hex"));
-    expect(signerKeys[1].toXDR("hex")).toBe(signerToScVal(signerA).toXDR("hex"));
+    expect(signerKeys[0].toXdr("hex")).toBe(signerToScVal(signerB).toXdr("hex"));
+    expect(signerKeys[1].toXdr("hex")).toBe(signerToScVal(signerA).toXdr("hex"));
     expect(compareScVal(signerKeys[0], signerKeys[1])).toBeLessThan(0);
   });
 });
@@ -568,14 +615,18 @@ describe("compareScVal (Soroban host key order)", () => {
 describe("CAP-84 muxed contract addresses", () => {
   const wallet = Address.contract(hash(Buffer.from("wallet-muxed"))).toString();
   const walletScVal = xdr.ScVal.scvAddress(Address.fromString(wallet).toScAddress());
-  // A muxed contract address (`W…`) over another contract id. SDK 16.x decodes
-  // it, but `Address.fromScAddress` cannot convert it.
+  // A muxed contract address (`W…`) over another contract id. `Address.fromScAddress`
+  // cannot convert it, so our wrapper refuses it with a `ValidationError`.
+  const muxedTargetScAddress = Address.contract(
+    hash(Buffer.from("muxed-target"))
+  ).toScAddress();
+  if (muxedTargetScAddress.type !== "scAddressTypeContract") {
+    throw new Error("Expected contract ScAddress");
+  }
   const muxed = xdr.ScAddress.scAddressTypeMuxedContract(
     new xdr.MuxedContract({
       id: xdr.Uint64.fromString("42"),
-      contractId: Address.contract(hash(Buffer.from("muxed-target")))
-        .toScAddress()
-        .contractId(),
+      contractId: muxedTargetScAddress.contractId,
     })
   );
   const muxedScVal = xdr.ScVal.scvAddress(muxed);
@@ -602,7 +653,7 @@ describe("CAP-84 muxed contract addresses", () => {
     const root = makeContractInvocation(wallet, functionName, [], args);
     return {
       entry: withRootInvocation(makeAuthEntry(wallet), root),
-      hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(root.function().contractFn()),
+      hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(contractFnOf(root)),
     };
   }
 
@@ -613,8 +664,7 @@ describe("CAP-84 muxed contract addresses", () => {
   });
 
   it("refuses a muxed sub-invocation target with a ValidationError", () => {
-    const root = makeContractInvocation(wallet, "__check_auth");
-    root.subInvocations([
+    const root = makeContractInvocation(wallet, "__check_auth", [
       new xdr.SorobanAuthorizedInvocation({
         function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
           new xdr.InvokeContractArgs({ contractAddress: muxed, functionName: "transfer", args: [] })
@@ -641,8 +691,19 @@ describe("CAP-84 muxed contract addresses", () => {
   });
 
   it("refuses a muxed credential address with a ValidationError", () => {
-    const entry = makeAuthEntry(wallet);
-    getAddressCredentials(entry.credentials()).address(muxed);
+    const baseEntry = makeAuthEntry(wallet);
+    const baseCreds = getAddressCredentials(baseEntry.credentials);
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: createAddressCredentials(
+        new xdr.SorobanAddressCredentials({
+          address: muxed,
+          nonce: baseCreds.nonce,
+          signatureExpirationLedger: baseCreds.signatureExpirationLedger,
+          signature: baseCreds.signature,
+        })
+      ),
+      rootInvocation: baseEntry.rootInvocation,
+    });
     expectInvalidInput(() => getAuthEntryAddress(entry), "Auth entry credential address");
   });
 
@@ -661,6 +722,23 @@ describe("CAP-84 muxed contract addresses", () => {
       () => assertWalletMutationIntent(entry, wallet, hostFunction),
       "Delegated signer address"
     );
+
+    const muxedStr = Address.fromScAddress(muxed).toString();
+    expect(() =>
+      signerToScVal({ tag: "Delegated", values: [muxedStr] })
+    ).toThrow(ValidationError);
+    expect(() =>
+      signerToScVal({
+        tag: "External",
+        values: [muxedStr, Buffer.alloc(65, 4)],
+      })
+    ).toThrow(ValidationError);
+    expect(() =>
+      signerToScVal({
+        tag: "External",
+        values: [makeAccount(8), Buffer.alloc(65, 4)],
+      })
+    ).toThrow(ValidationError);
   });
 
   it("still accepts the wallet as the upgrade operator", () => {

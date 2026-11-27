@@ -395,7 +395,7 @@ export function useWalletSession({
       const amount = parseFloat(amountRaw.trim());
 
       try {
-        validateAddress(recipient, "recipient address");
+        validateAddress(recipient, "recipient address", { allowMuxed: true });
         validateAmount(amount, "transfer amount");
       } catch (error) {
         log(error instanceof Error ? error.message : "Validation failed", "error");

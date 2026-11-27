@@ -10,6 +10,7 @@ import {
 import { SmartAccountKit } from "./kit";
 import { SmartAccountErrorCode, ValidationError } from "./errors";
 import { buildAuthDigestSchemeTable } from "./kit/auth-digest-scheme";
+import { withUpdatedAddressCredentials } from "./kit/auth-payload";
 import {
   ForeignXdrObject,
   makeAddressAuthEntry,
@@ -65,16 +66,19 @@ describe("SmartAccountKit top-level surface", () => {
       salt: hash(Buffer.from("kit-test")),
       constructorArgs: [xdr.ScVal.scvVec([]), xdr.ScVal.scvMap([])],
     });
+    if (createOperation.body.type !== "invokeHostFunction") {
+      throw new Error("Expected invokeHostFunction operation");
+    }
     const deployTx = {
       built: {
         operations: [
           {
             type: "invokeHostFunction",
-            func: createOperation.body().invokeHostFunctionOp().hostFunction(),
+            func: createOperation.body.invokeHostFunctionOp.hostFunction,
           },
         ],
       },
-      signed: { toXDR: () => "SIGNED_XDR" },
+      signed: { toXdr: () => "SIGNED_XDR" },
     };
     const setConnectedState = vi.fn();
     const createPasskey = vi.fn(async () => ({
@@ -375,16 +379,18 @@ describe("SmartAccountKit top-level surface", () => {
       Object.assign(kit, { _contractId: contractId, wallet: {} });
       const startAuthentication = vi.spyOn((kit as any).webAuthn, "startAuthentication");
       const sendAndPoll = vi.spyOn(kit as any, "sendAndPoll");
-      const entry = makeAuthEntry();
-      entry.credentials().address().address(Address.fromString(contractId).toScAddress());
       const args = new xdr.InvokeContractArgs({
         contractAddress: Address.fromString(contractId).toScAddress(),
         functionName: "upgrade",
         args: [xdr.ScVal.scvBytes(Buffer.from(target, "hex")), Address.fromString(contractId).toScVal()],
       });
-      entry.rootInvocation().function(
-        xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(args)
-      );
+      const entry = new xdr.SorobanAuthorizationEntry({
+        credentials: makeAddressAuthEntry(contractId).credentials,
+        rootInvocation: new xdr.SorobanAuthorizedInvocation({
+          function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(args),
+          subInvocations: [],
+        }),
+      });
       const transaction = {
         built: {
           operations: [{ type: "invokeHostFunction", func: xdr.HostFunction.hostFunctionTypeInvokeContract(args) }],
@@ -480,28 +486,26 @@ describe("SmartAccountKit top-level surface", () => {
   it("signAuthEntry accepts base64 XDR and returns base64 XDR", async () => {
     const entry = makeAuthEntry();
     // Stand-in for the WebAuthn path: mark the entry as signed.
-    const signAuthEntryInternal = vi.fn(async (input: xdr.SorobanAuthorizationEntry) => {
-      const signed = xdr.SorobanAuthorizationEntry.fromXDR(input.toXDR());
-      signed.credentials().address().signatureExpirationLedger(777);
-      return signed;
-    });
+    const signAuthEntryInternal = vi.fn(async (input: xdr.SorobanAuthorizationEntry) =>
+      withUpdatedAddressCredentials(input, { signatureExpirationLedger: 777 })
+    );
     const kit = { signAuthEntryInternal } as unknown as SmartAccountKit;
     const options = { credentialId: "cred-1", expiration: 777, contextRuleIds: [4] };
 
     const fromString = await SmartAccountKit.prototype.signAuthEntry.call(
       kit,
-      entry.toXDR("base64"),
+      entry.toXdr("base64"),
       options
     );
     const fromObject = await SmartAccountKit.prototype.signAuthEntry.call(kit, entry, options);
 
     expect(typeof fromString).toBe("string");
     expect(fromObject).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
-    expect(fromString).toBe(fromObject.toXDR("base64"));
+    expect(fromString).toBe(fromObject.toXdr("base64"));
     // The decoded string reaches the signer as the kit's own XDR type.
     const [decodedInput, decodedOptions] = signAuthEntryInternal.mock.calls[0];
     expect(decodedInput).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
-    expect(decodedInput.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(decodedInput.toXdr("base64")).toBe(entry.toXdr("base64"));
     expect(decodedOptions).toEqual(options);
   });
 
@@ -525,10 +529,10 @@ describe("SmartAccountKit top-level surface", () => {
     const entry = makeAuthEntry();
     const signAuthEntryInternal = vi.fn(
       async (input: xdr.SorobanAuthorizationEntry) =>
-        xdr.SorobanAuthorizationEntry.fromXDR(input.toXDR())
+        xdr.SorobanAuthorizationEntry.fromXdr(input.toXdr())
     );
     const kit = { signAuthEntryInternal } as unknown as SmartAccountKit;
-    const foreign = new ForeignXdrObject(entry.toXDR());
+    const foreign = new ForeignXdrObject(entry.toXdr());
 
     const result = await SmartAccountKit.prototype.signAuthEntry.call(
       kit,
@@ -540,11 +544,11 @@ describe("SmartAccountKit top-level surface", () => {
     const [decodedInput] = signAuthEntryInternal.mock.calls[0];
     expect(decodedInput).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
     expect(decodedInput).not.toBe(foreign);
-    expect(decodedInput.toXDR("base64")).toBe(entry.toXDR("base64"));
+    expect(decodedInput.toXdr("base64")).toBe(entry.toXdr("base64"));
     expect(typeof result).toBe("object");
     expect(result).toBeInstanceOf(xdr.SorobanAuthorizationEntry);
-    expect((result as xdr.SorobanAuthorizationEntry).toXDR("base64")).toBe(
-      entry.toXDR("base64")
+    expect((result as xdr.SorobanAuthorizationEntry).toXdr("base64")).toBe(
+      entry.toXdr("base64")
     );
   });
 
@@ -565,8 +569,8 @@ describe("SmartAccountKit top-level surface", () => {
 
     const inputs = {
       object: otherWalletEntry,
-      base64: otherWalletEntry.toXDR("base64"),
-      foreign: new ForeignXdrObject(otherWalletEntry.toXDR()),
+      base64: otherWalletEntry.toXdr("base64"),
+      foreign: new ForeignXdrObject(otherWalletEntry.toXdr()),
     };
     const errors: Record<string, unknown> = {};
     for (const [form, input] of Object.entries(inputs)) {

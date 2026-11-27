@@ -250,7 +250,7 @@ describe("CredentialManager", () => {
       deploymentStatus: "pending" as const,
     };
     const deps = makeDeps([credential]);
-    const signed = { toXDR: vi.fn().mockReturnValue("signed-xdr") };
+    const signed = { toXdr: vi.fn().mockReturnValue("signed-xdr") };
     const deployTx = { signed } as any;
 
     deps.deriveContractAddress.mockReturnValue("CCONTRACT");
@@ -295,7 +295,7 @@ describe("CredentialManager", () => {
     };
     const deps = makeDeps([credential]);
     const deployTx = {
-      signed: { toXDR: vi.fn().mockReturnValue("signed-xdr") },
+      signed: { toXdr: vi.fn().mockReturnValue("signed-xdr") },
     } as any;
     deps.deriveContractAddress.mockReturnValue("CCONTRACT");
     deps.buildDeployTransaction.mockResolvedValue(deployTx);
@@ -331,7 +331,7 @@ describe("CredentialManager", () => {
       deploymentStatus: "pending" as const,
     };
     const deps = makeDeps([credential]);
-    const deployTx = { signed: { toXDR: vi.fn().mockReturnValue("signed-xdr") } } as any;
+    const deployTx = { signed: { toXdr: vi.fn().mockReturnValue("signed-xdr") } } as any;
     deps.deriveContractAddress.mockReturnValue("CCONTRACT");
     deps.buildDeployTransaction.mockResolvedValue(deployTx);
     deps.signWithDeployer.mockResolvedValue(undefined);

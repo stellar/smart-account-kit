@@ -14,9 +14,11 @@ import type {
   RegistrationResponseJSON,
 } from "@simplewebauthn/browser";
 import {
+  extractBaseAddress,
   hash,
   xdr,
   Keypair,
+  StrKey,
   Transaction,
   Horizon,
   Networks,
@@ -1376,7 +1378,7 @@ export class SmartAccountKit {
       expiration: options?.expiration,
       contextRuleIds: options?.contextRuleIds,
     });
-    return typeof entry === "string" ? signed.toXDR("base64") : signed;
+    return typeof entry === "string" ? signed.toXdr("base64") : signed;
   }
 
   /** @internal */
@@ -1468,7 +1470,7 @@ export class SmartAccountKit {
    * default deployer never does — a relayer/channel account supplies both.
    *
     * @param tokenContract - Token contract address (SAC address for native assets)
-    * @param recipient - Recipient address (G... or C...)
+    * @param recipient - Recipient address (G..., C..., or CAP-84 muxed contract W...)
     * @param amount - Amount to transfer in token units (scaled by the token's
     * on-chain `decimals()`; amounts with more precision than the token
     * supports are rejected before any authorization)
@@ -1488,13 +1490,16 @@ export class SmartAccountKit {
 
     try {
       validateAddress(tokenContract, "tokenContract");
-      validateAddress(recipient, "recipient");
+      validateAddress(recipient, "recipient", { allowMuxed: true });
       validateAmount(amount, "amount");
     } catch (err) {
       return failedTransaction(wrapError(err, SmartAccountErrorCode.INVALID_INPUT));
     }
 
-    if (recipient === contractId) {
+    const recipientBase = StrKey.isValidMuxedContract(recipient)
+      ? extractBaseAddress(recipient)
+      : recipient;
+    if (recipientBase === contractId) {
       return failedTransaction(new ValidationError("Cannot transfer to self"));
     }
 

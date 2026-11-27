@@ -84,10 +84,12 @@ export interface UpgradeTargetPolicy {
 /** Validate upgrade targets before building or signing an upgrade. */
 export function assertUpgradeTarget(
   policy: UpgradeTargetPolicy,
-  newWasmHash: string | Buffer
+  newWasmHash: string | Buffer | Uint8Array
 ): Buffer {
   const wasmHash =
-    typeof newWasmHash === "string" ? Buffer.from(newWasmHash, "hex") : newWasmHash;
+    typeof newWasmHash === "string"
+      ? Buffer.from(newWasmHash, "hex")
+      : Buffer.from(newWasmHash);
   if (wasmHash.length !== 32) {
     throw new ValidationError(
       `newWasmHash must be a 32-byte hash (got ${wasmHash.length} bytes)`,

@@ -6,6 +6,7 @@ import {
   Keypair,
   nativeToScVal,
   Operation,
+  StrKey,
   Transaction,
   TransactionBuilder,
   xdr,
@@ -28,7 +29,7 @@ import {
   failedTransaction,
   submissionFailure,
 } from "../contract-errors.js";
-import { isDefaultDeployer } from "../utils.js";
+import { isDefaultDeployer, validateAddress } from "../utils.js";
 import { getAddressCredentials } from "./auth-payload.js";
 import { ValidationError } from "../errors.js";
 
@@ -107,8 +108,8 @@ export async function sendAndPoll(
       }
 
       const invokeOp = op as Operation.InvokeHostFunction;
-      const funcXdr = invokeOp.func.toXDR("base64");
-      const authXdrs = (invokeOp.auth ?? []).map((entry) => entry.toXDR("base64"));
+      const funcXdr = invokeOp.func.toXdr("base64");
+      const authXdrs = (invokeOp.auth ?? []).map((entry) => entry.toXdr("base64"));
 
       const relayerResult = await deps.relayer.send(funcXdr, authXdrs);
 
@@ -134,7 +135,7 @@ export async function sendAndPoll(
 
       if (sendResult.status === "ERROR") {
         return submissionFailure(
-          sendResult.errorResult?.toXDR("base64") ?? "Transaction submission failed",
+          sendResult.errorResult?.toXdr("base64") ?? "Transaction submission failed",
           sendResult.hash
         );
       }
@@ -157,7 +158,7 @@ export async function sendAndPoll(
   }
 
   if (txResult.status === "FAILED") {
-    const resultXdr = txResult.resultXdr?.toXDR("base64");
+    const resultXdr = txResult.resultXdr?.toXdr("base64");
     return submissionFailure(
       resultXdr
         ? `Transaction failed on-chain: ${resultXdr}`
@@ -180,7 +181,7 @@ export function hasSourceAccountAuth(transaction: Transaction): boolean {
     if (!invokeOp.auth) continue;
 
     for (const entry of invokeOp.auth) {
-      if (entry.credentials().switch().name === "sorobanCredentialsSourceAccount") {
+      if (entry.credentials.type === "sorobanCredentialsSourceAccount") {
         return true;
       }
     }
@@ -198,12 +199,29 @@ export function buildI128ScVal(amount: bigint): xdr.ScVal {
   return nativeToScVal(amount, { type: "i128" });
 }
 
+function validateTokenContractAddress(tokenContract: string): void {
+  if (!tokenContract || typeof tokenContract !== "string" || !StrKey.isValidContract(tokenContract)) {
+    throw new ValidationError(
+      "Invalid tokenContract: must be a valid Stellar contract (C...) address",
+      SmartAccountErrorCode.INVALID_ADDRESS,
+      {
+        field: "tokenContract",
+        value: typeof tokenContract === "string" ? tokenContract.slice(0, 10) + "..." : String(tokenContract),
+      }
+    );
+  }
+}
+
 export function buildTokenTransferHostFunction(
   tokenContract: string,
   fromAddress: string,
   toAddress: string,
   amountInStroops: bigint
 ): xdr.HostFunction {
+  validateTokenContractAddress(tokenContract);
+  validateAddress(fromAddress, "fromAddress");
+  validateAddress(toAddress, "toAddress", { allowMuxed: true });
+
   return xdr.HostFunction.hostFunctionTypeInvokeContract(
     new xdr.InvokeContractArgs({
       contractAddress: Address.fromString(tokenContract).toScAddress(),
@@ -240,6 +258,7 @@ function readOnlyTokenTx(
   functionName: string,
   args: xdr.ScVal[]
 ): Transaction {
+  validateTokenContractAddress(tokenContract);
   return new TransactionBuilder(TOKEN_READ_ACCOUNT, {
     fee: BASE_FEE,
     networkPassphrase: deps.networkPassphrase,
@@ -500,7 +519,7 @@ export async function resimulateAndAssemble(
     );
   }
 
-  const normalizedTx = TransactionBuilder.fromXDR(resimTx.toXDR(), deps.networkPassphrase);
+  const normalizedTx = TransactionBuilder.fromXdr(resimTx.toXdr(), deps.networkPassphrase);
   return rpc.assembleTransaction(normalizedTx as Transaction, resimResult).build() as Transaction;
 }
 
@@ -639,12 +658,12 @@ export async function sign(
   await transaction.signAuthEntries({
     address: contractId,
     authorizeEntry: async (entry: xdr.SorobanAuthorizationEntry) => {
-      const clone = xdr.SorobanAuthorizationEntry.fromXDR(entry.toXDR());
+      const clone = xdr.SorobanAuthorizationEntry.fromXdr(entry.toXdr());
       const authEntries = transaction.simulationData?.result?.auth || [];
       const entryKey = authorizationKey(entry);
       const entryIndex = authEntries.findIndex(
         (authEntry) =>
-          authEntry.credentials().switch().name !== "sorobanCredentialsSourceAccount" &&
+          authEntry.credentials.type !== "sorobanCredentialsSourceAccount" &&
           authorizationKey(authEntry) === entryKey
       );
       return deps.signAuthEntry(clone, {
@@ -667,11 +686,11 @@ export async function sign(
  * simulation entry, but an entry with a changed invocation does not.
  */
 function authorizationKey(entry: xdr.SorobanAuthorizationEntry): string {
-  const credentials = getAddressCredentials(entry.credentials());
+  const credentials = getAddressCredentials(entry.credentials);
   return [
-    credentials.address().toXDR("base64"),
-    credentials.nonce().toString(),
-    entry.rootInvocation().toXDR("base64"),
+    credentials.address.toXdr("base64"),
+    credentials.nonce.toString(),
+    entry.rootInvocation.toXdr("base64"),
   ].join(":");
 }
 

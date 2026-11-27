@@ -15,7 +15,7 @@ Most applications should install [`smart-account-kit`](https://www.npmjs.com/pac
 ## Install
 
 ```bash
-pnpm add smart-account-kit-bindings @stellar/stellar-sdk@^16.3.0
+pnpm add smart-account-kit-bindings @stellar/stellar-sdk@^17.4.0
 ```
 
 ## Use the generated client
@@ -37,17 +37,17 @@ Contract calls return `AssembledTransaction` values from `@stellar/stellar-sdk/c
 
 ## Regenerate in this repository
 
-The repository wrapper preserves package metadata, formatting, and this README after invoking Stellar CLI:
+The repository wrapper preserves package metadata, formatting, and this README after invoking `@stellar/stellar-sdk`'s TypeScript bindings generator:
 
 ```bash
 ACCOUNT_WASM=/path/to/multisig_account_example.wasm \
-BINDINGS_VERSION=0.5.0 \
+BINDINGS_VERSION=0.6.0 \
 pnpm build:bindings
 ```
 
 You can also configure a deployed WASM hash or contract ID in `demo/.env`. `build:bindings` prefers explicit env/args, falls back to `demo/.env.example`, and prints the source and hash it binds against. See the repository's [release guide](https://github.com/stellar/smart-account-kit/blob/main/docs/releasing.md) for the optimized contract build and publish sequence.
 
-The underlying Stellar CLI command is `stellar contract bindings typescript`; the older `soroban contract bindings ts` spelling is no longer used.
+The underlying generator command is `stellar-contract-bindings-typescript` (bundled with `@stellar/stellar-sdk` 17).
 
 ## Verify against the deployed contract
 
@@ -57,4 +57,4 @@ These bindings are generated from the canonical deployed WASM and must stay byte
 pnpm verify:bindings
 ```
 
-This regenerates from the canonical testnet WASM hash recorded in [`docs/deployments-protocol-27-2026-07-09.md`](https://github.com/stellar/smart-account-kit/blob/main/docs/deployments-protocol-27-2026-07-09.md), diffs the result against the checked-in `src/index.ts`, and exits nonzero on drift. Never hand-edit the generated sources to resolve drift — fix it on the contract side (redeploy) and regenerate, or the next `verify:bindings` will flag it again.
+This regenerates from the canonical testnet WASM hash recorded in [`docs/deployments-protocol-27-2026-07-09.md`](https://github.com/stellar/smart-account-kit/blob/main/docs/deployments-protocol-27-2026-07-09.md), diffs the result against the checked-in `src/`, and exits nonzero on drift. Never hand-edit the generated sources to resolve drift — fix it on the contract side (redeploy) and regenerate, or the next `verify:bindings` will flag it again.

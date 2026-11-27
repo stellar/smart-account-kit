@@ -511,7 +511,7 @@ export function formatSignerForDisplay(signer: Signer): { type: string; display:
     };
   }
 
-  const keyData = signer.values[1] as Buffer;
+  const keyData = Buffer.from(signer.values[1] as Buffer | Uint8Array);
   if (keyData.length === 32) {
     return {
       type: "Ed25519",
@@ -535,7 +535,7 @@ export function formatContextType(contextType: ContextRuleType): string {
   }
 
   if (contextType.tag === "CreateContract") {
-    const hashBytes = contextType.values[0] as Buffer;
+    const hashBytes = Buffer.from(contextType.values[0] as Buffer | Uint8Array);
     return `Create Contract: ${hashBytes.toString("hex").slice(0, 8)}...`;
   }
 

@@ -25,6 +25,7 @@ import {
   buildSignaturePreimage,
   createAddressCredentials,
   randomAuthEntryNonce,
+  withUpdatedAddressCredentials,
 } from "./auth-payload.js";
 import { constructorArgsHash } from "./wallet-provenance.js";
 
@@ -71,17 +72,17 @@ export function describeDeploymentBirth(
       func = operation.func;
     }
   }
-  if (!func || func.switch().name !== "hostFunctionTypeCreateContractV2") {
+  if (!func || func.type !== "hostFunctionTypeCreateContractV2") {
     throw new SubmissionError("Deployment does not contain one CreateContractV2 operation");
   }
-  const create = func.createContractV2();
-  const executable = create.executable();
-  if (executable.switch().name !== "contractExecutableWasm") {
+  const create = func.createContractV2;
+  const executable = create.executable;
+  if (executable.type !== "contractExecutableWasm") {
     throw new SubmissionError("Deployment does not create a WASM contract");
   }
   return {
-    birthWasmHash: Buffer.from(executable.wasmHash()).toString("hex"),
-    birthConstructorArgsHash: constructorArgsHash(create.constructorArgs()),
+    birthWasmHash: xdr.encodeBytes(executable.wasmHash.toBytes(), "hex"),
+    birthConstructorArgsHash: constructorArgsHash(create.constructorArgs),
   };
 }
 
@@ -100,10 +101,10 @@ function deploymentCreateArgs(
       func = operation.func;
     }
   }
-  if (!func || func.switch().name !== "hostFunctionTypeCreateContractV2") {
+  if (!func || func.type !== "hostFunctionTypeCreateContractV2") {
     throw new SubmissionError("Deployment does not contain CreateContractV2");
   }
-  return func.createContractV2();
+  return func.createContractV2;
 }
 
 export async function confirmSubmittedDeployment(
@@ -123,11 +124,11 @@ export async function confirmSubmittedDeployment(
       transactionHash
     );
   }
-  const parsed = TransactionBuilder.fromXDR(
+  const parsed = TransactionBuilder.fromXdr(
     response.envelopeXdr,
     networkPassphrase
   );
-  if (parsed.hash().toString("hex") !== transactionHash.toLowerCase()) {
+  if (xdr.encodeBytes(parsed.hash(), "hex") !== transactionHash.toLowerCase()) {
     throw new SubmissionError(
       "The confirmed deployment envelope has the wrong transaction hash",
       transactionHash
@@ -135,12 +136,12 @@ export async function confirmSubmittedDeployment(
   }
   const transaction =
     parsed instanceof FeeBumpTransaction ? parsed.innerTransaction : parsed;
-  const expected = deploymentCreateArgs(deployment).toXDR();
+  const expected = Buffer.from(deploymentCreateArgs(deployment).toXdr());
   const matchingCreates = transaction.operations.filter(
     (operation) =>
       operation.type === "invokeHostFunction" &&
-      operation.func.switch().name === "hostFunctionTypeCreateContractV2" &&
-      Buffer.from(operation.func.createContractV2().toXDR()).equals(expected)
+      operation.func.type === "hostFunctionTypeCreateContractV2" &&
+      Buffer.from(operation.func.createContractV2.toXdr()).equals(expected)
   );
   if (matchingCreates.length !== 1) {
     throw new SubmissionError(
@@ -172,8 +173,8 @@ export async function prepareDeploymentArtifacts(
   if (isAuthEntryDeployment(deployment)) {
     return {
       relayerPayload: {
-        func: deployment.func.toXDR("base64"),
-        auth: deployment.auth.map((entry) => entry.toXDR("base64")),
+        func: deployment.func.toXdr("base64"),
+        auth: deployment.auth.map((entry) => entry.toXdr("base64")),
       },
     };
   }
@@ -182,7 +183,7 @@ export async function prepareDeploymentArtifacts(
   if (!deployment.signed) {
     throw new Error("Failed to sign deployment transaction");
   }
-  return { signedTransaction: deployment.signed.toXDR() };
+  return { signedTransaction: deployment.signed.toXdr() };
 }
 
 /** Refusal for any shared-deployer route without relayer-sourced `{func,auth}`. */
@@ -208,10 +209,11 @@ async function sendDeploymentTxViaRpc<T>(
     if (
       error instanceof contract.SentTransaction.Errors.TransactionStillPending
     ) {
-      const signed = tx.signed as { hash?: () => Buffer } | undefined;
+      const signed = tx.signed as { hash?: () => Uint8Array } | undefined;
+      const signedHash = signed?.hash?.();
       throw transactionConfirmationError(
         "NOT_FOUND",
-        signed?.hash?.().toString("hex")
+        signedHash ? xdr.encodeBytes(signedHash, "hex") : undefined
       );
     }
     throw error;
@@ -286,8 +288,8 @@ export async function submitDeploymentTx(
     let submittedHash: string | undefined;
     try {
       const relayerResult = await deps.relayer!.send(
-        deployment.func.toXDR("base64"),
-        deployment.auth.map((entry) => entry.toXDR("base64"))
+        deployment.func.toXdr("base64"),
+        deployment.auth.map((entry) => entry.toXdr("base64"))
       );
       if (!relayerResult.success) {
         throw new Error(relayerResult.error ?? "Relayer submission failed");
@@ -481,26 +483,29 @@ export async function buildDeployTransaction(
   }
 
   const deployerPublicKey = deps.deployerKeypair.publicKey();
-  const authorizedFunction = discoveredAuth[0].rootInvocation().function();
-  const authorizedCreate = authorizedFunction.switch().name ===
-    "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
-    ? authorizedFunction.createContractV2HostFn()
-    : undefined;
-  const operationCreate = operation.func.switch().name ===
-    "hostFunctionTypeCreateContractV2"
-    ? operation.func.createContractV2()
-    : undefined;
-  const fromAddress = authorizedCreate?.contractIdPreimage().fromAddress();
+  const authorizedFunction = discoveredAuth[0].rootInvocation.function;
+  const authorizedCreate =
+    authorizedFunction.type === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn"
+      ? authorizedFunction.createContractV2HostFn
+      : undefined;
+  const operationCreate =
+    operation.func.type === "hostFunctionTypeCreateContractV2"
+      ? operation.func.createContractV2
+      : undefined;
+  const fromAddress =
+    authorizedCreate?.contractIdPreimage.type === "contractIdPreimageFromAddress"
+      ? authorizedCreate.contractIdPreimage.fromAddress
+      : undefined;
   if (
     !authorizedCreate ||
     !operationCreate ||
-    !Buffer.from(authorizedCreate.toXDR()).equals(operationCreate.toXDR()) ||
+    !Buffer.from(authorizedCreate.toXdr()).equals(Buffer.from(operationCreate.toXdr())) ||
     !fromAddress ||
-    Address.fromScAddress(fromAddress.address()).toString() !== deployerPublicKey ||
-    !Buffer.from(fromAddress.salt()).equals(salt) ||
+    Address.fromScAddress(fromAddress.address).toString() !== deployerPublicKey ||
+    !Buffer.from(fromAddress.salt.toBytes()).equals(Buffer.from(salt)) ||
     // The deployer signs the whole tree, so anything hanging off the root would
     // be authorized too. A deployment needs no sub-invocations; refuse any.
-    discoveredAuth[0].rootInvocation().subInvocations().length !== 0
+    discoveredAuth[0].rootInvocation.subInvocations.length !== 0
   ) {
     throw new SubmissionError(
       "Shared deploy simulation returned authorization for the wrong deployer"
@@ -508,27 +513,28 @@ export async function buildDeployTransaction(
   }
 
   const expirationLedger = latestLedger + LEDGERS_PER_HOUR;
-  const credentials = new xdr.SorobanAddressCredentials({
-    address: Address.fromString(deployerPublicKey).toScAddress(),
-    nonce: randomAuthEntryNonce(),
-    signatureExpirationLedger: expirationLedger,
-    signature: xdr.ScVal.scvVoid(),
-  });
-  const signedAuthEntry = new xdr.SorobanAuthorizationEntry({
-    credentials: createAddressCredentials(credentials),
-    rootInvocation: discoveredAuth[0].rootInvocation(),
+  const unsignedAuthEntry = new xdr.SorobanAuthorizationEntry({
+    credentials: createAddressCredentials(
+      new xdr.SorobanAddressCredentials({
+        address: Address.fromString(deployerPublicKey).toScAddress(),
+        nonce: randomAuthEntryNonce(),
+        signatureExpirationLedger: expirationLedger,
+        signature: xdr.ScVal.scvVoid(),
+      })
+    ),
+    rootInvocation: discoveredAuth[0].rootInvocation,
   });
   const preimage = buildSignaturePreimage(
     deps.networkPassphrase,
-    signedAuthEntry,
+    unsignedAuthEntry,
     expirationLedger
   );
-  credentials.signature(
-    buildAddressSignatureScVal(
+  const signedAuthEntry = withUpdatedAddressCredentials(unsignedAuthEntry, {
+    signature: buildAddressSignatureScVal(
       deps.deployerKeypair.rawPublicKey(),
-      deps.deployerKeypair.sign(hash(preimage.toXDR()))
-    )
-  );
+      deps.deployerKeypair.sign(hash(preimage.toXdr()))
+    ),
+  });
 
   return {
     kind: "auth-entry",

@@ -78,8 +78,8 @@ export function contractIdFromCreateV2(
   networkPassphrase: string,
   create: xdr.CreateContractArgsV2
 ): string | undefined {
-  const preimage = create.contractIdPreimage();
-  if (preimage.switch().name !== "contractIdPreimageFromAddress") {
+  const preimage = create.contractIdPreimage;
+  if (preimage.type !== "contractIdPreimageFromAddress") {
     return undefined;
   }
 
@@ -89,12 +89,12 @@ export function contractIdFromCreateV2(
       contractIdPreimage: preimage,
     })
   );
-  return StrKey.encodeContract(hash(hashPreimage.toXDR()));
+  return StrKey.encodeContract(hash(hashPreimage.toXdr()));
 }
 
 /** Hash the complete constructor argument vector. */
 export function constructorArgsHash(args: readonly xdr.ScVal[]): string {
-  return hash(xdr.ScVal.scvVec([...args]).toXDR()).toString("hex");
+  return xdr.encodeBytes(hash(xdr.ScVal.scvVec([...args]).toXdr()), "hex");
 }
 
 function expectedPoliciesScVal(policies: readonly PolicyConfig[]): xdr.ScVal {
@@ -105,7 +105,7 @@ function expectedPoliciesScVal(policies: readonly PolicyConfig[]): xdr.ScVal {
         val: value,
       })
   );
-  entries.sort((left, right) => compareScVal(left.key(), right.key()));
+  entries.sort((left, right) => compareScVal(left.key, right.key));
   return xdr.ScVal.scvMap(entries);
 }
 
@@ -113,16 +113,16 @@ function validateConstructor(
   create: xdr.CreateContractArgsV2,
   deps: WalletBirthVerificationDeps
 ): { signer: ContractSigner; argsHash: string } | WalletBirthResult {
-  const args = create.constructorArgs();
+  const args = create.constructorArgs;
   const argsHash = constructorArgsHash(args);
-  if (args.length !== 2 || args[0]?.switch().name !== "scvVec") {
+  if (args.length !== 2 || args[0]?.type !== "scvVec") {
     return fail(
       "constructor_mismatch",
       "the wallet constructor must contain one signer vector and one policy map"
     );
   }
 
-  const signerValues = args[0].vec() ?? [];
+  const signerValues = args[0].vec ?? [];
   if (signerValues.length !== 1) {
     return fail(
       "constructor_mismatch",
@@ -164,7 +164,7 @@ function validateConstructor(
   } else {
     const actualPolicies = args[1];
     const expectedPolicies = expectedPoliciesScVal(deps.expectedPolicies ?? []);
-    if (!actualPolicies || !bytesEqual(actualPolicies.toXDR(), expectedPolicies.toXDR())) {
+    if (!actualPolicies || !bytesEqual(actualPolicies.toXdr(), expectedPolicies.toXdr())) {
       return fail(
         "constructor_mismatch",
         "the immutable constructor policies do not match the expected policy configuration"
@@ -246,16 +246,16 @@ export async function verifyWalletBirth(
     );
   }
 
-  let parsed: ReturnType<typeof TransactionBuilder.fromXDR>;
+  let parsed: ReturnType<typeof TransactionBuilder.fromXdr>;
   try {
-    parsed = TransactionBuilder.fromXDR(envelopeXdr, deps.networkPassphrase);
+    parsed = TransactionBuilder.fromXdr(envelopeXdr, deps.networkPassphrase);
   } catch {
     return fail(
       "invalid_candidate",
       "the creation transaction envelope could not be decoded"
     );
   }
-  if (parsed.hash().toString("hex") !== txHash) {
+  if (xdr.encodeBytes(parsed.hash(), "hex") !== txHash) {
     return fail(
       "transaction_hash_mismatch",
       "the transaction envelope does not match the claimed transaction hash"
@@ -268,11 +268,11 @@ export async function verifyWalletBirth(
   for (const operation of transaction.operations) {
     if (
       operation.type !== "invokeHostFunction" ||
-      operation.func.switch().name !== "hostFunctionTypeCreateContractV2"
+      operation.func.type !== "hostFunctionTypeCreateContractV2"
     ) {
       continue;
     }
-    const create = operation.func.createContractV2();
+    const create = operation.func.createContractV2;
     let createdId: string | undefined;
     try {
       createdId = contractIdFromCreateV2(deps.networkPassphrase, create);
@@ -297,15 +297,15 @@ export async function verifyWalletBirth(
   }
 
   const create = matches[0]!;
-  const preimage = create.contractIdPreimage();
-  if (preimage.switch().name !== "contractIdPreimageFromAddress") {
+  const preimage = create.contractIdPreimage;
+  if (preimage.type !== "contractIdPreimageFromAddress") {
     return fail("contract_not_created", "the wallet did not use an address preimage");
   }
   if (deps.expectedDeployer) {
     let actualDeployer: string;
     try {
       actualDeployer = Address.fromScAddress(
-        preimage.fromAddress().address()
+        preimage.fromAddress.address
       ).toString();
     } catch {
       return fail(
@@ -319,16 +319,16 @@ export async function verifyWalletBirth(
   }
   if (
     deps.expectedSalt &&
-    !bytesEqual(preimage.fromAddress().salt(), deps.expectedSalt)
+    !bytesEqual(preimage.fromAddress.salt.toBytes(), deps.expectedSalt)
   ) {
     return fail("salt_mismatch", "the wallet used an unexpected address salt");
   }
 
-  const executable = create.executable();
-  if (executable.switch().name !== "contractExecutableWasm") {
+  const executable = create.executable;
+  if (executable.type !== "contractExecutableWasm") {
     return fail("contract_not_created", "the wallet birth did not use WASM code");
   }
-  const actualWasm = Buffer.from(executable.wasmHash()).toString("hex");
+  const actualWasm = xdr.encodeBytes(executable.wasmHash.toBytes(), "hex");
   if (actualWasm !== claimedWasm) {
     return fail(
       "wasm_mismatch",
