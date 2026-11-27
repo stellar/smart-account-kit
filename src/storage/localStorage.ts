@@ -47,11 +47,24 @@ export class LocalStorageAdapter implements StorageAdapter {
   private sessionStorageKey: string;
 
   constructor(storageKey: string = STORAGE_KEY) {
+    if (!storageKey) {
+      throw new Error("storageKey must be a non-empty string");
+    }
+    if (
+      storageKey === SESSION_KEY ||
+      storageKey.startsWith(`${SESSION_KEY}:`)
+    ) {
+      throw new Error(
+        `storageKey "${storageKey}" is reserved for session storage`
+      );
+    }
     this.storageKey = storageKey;
     // Keep the legacy key for the default adapter so existing sessions remain
-    // available after upgrading. Custom adapters get their own session key.
+    // available after upgrading. Custom adapters namespace sessions under
+    // `${SESSION_KEY}:${storageKey}` so they cannot collide with the default
+    // session key or with another adapter's credential key.
     this.sessionStorageKey =
-      storageKey === STORAGE_KEY ? SESSION_KEY : `${storageKey}:session`;
+      storageKey === STORAGE_KEY ? SESSION_KEY : `${SESSION_KEY}:${storageKey}`;
   }
 
   private getStorage(): Map<string, StoredCredential> {
@@ -138,6 +151,9 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async clear(): Promise<void> {
+    if (typeof localStorage === "undefined") {
+      return;
+    }
     localStorage.removeItem(this.storageKey);
     localStorage.removeItem(this.sessionStorageKey);
   }
