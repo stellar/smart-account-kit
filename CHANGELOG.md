@@ -2,13 +2,16 @@
 
 All reviews in this changelog are internal engineering reviews unless a linked report states otherwise.
 
-## Unreleased
+## 0.11.0 — 2026-11-27
+
+This release ships alongside `smart-account-kit-bindings@0.6.0`. Redeploy the relayer proxy to get
+its changes; the proxy does not ship in the npm package.
 
 ### Breaking changes
 
 - Migrated `smart-account-kit`, `smart-account-kit-bindings`, `relayer-proxy`, `demo`, and `indexer/demo` to `@stellar/stellar-sdk` `^17.4.0` (#34). All XDR values now use `@stellar/js-xdr` v5 discriminated unions (`.type`, readonly property accessors, `toXdr`/`fromXdr`) and `Uint8Array` byte returns. Kept `@stellar/stellar-sdk` in `dependencies` (not `peerDependencies`) so SDK 17 apps share a single copy cleanly while preserving the base64 XDR auth-entry boundary from #31.
 - Raised `engines.node` to `>=22.12.0` to match `@stellar/stellar-sdk` 17.
-- Regenerated `smart-account-kit-bindings` (`0.6.0`) with `@stellar/stellar-sdk`'s `stellar-contract-bindings-typescript` generator (native `Uint8Array` types, `peerDependencies: { "@stellar/stellar-sdk": "^17.4.0" }`, `Option<u32>` as `number | null`, void methods returning `AssembledTransaction<void>`). Publish `smart-account-kit-bindings@0.6.0` before publishing the next `smart-account-kit` release.
+- Regenerated `smart-account-kit-bindings` (`0.6.0`) with `@stellar/stellar-sdk`'s `stellar-contract-bindings-typescript` generator (native `Uint8Array` types, `peerDependencies: { "@stellar/stellar-sdk": "^17.4.0" }`, `Option<u32>` as `number | null`, void methods returning `AssembledTransaction<void>`).
 - `computeEntryAuthDigest` and `buildSignaturePayload` no longer mutate the caller's `xdr.SorobanAuthorizationEntry` in place (XDR v5 credentials are immutable).
 - Updated `@openzeppelin/relayer-plugin-channels` to `^0.21.1` in `relayer-proxy` and tightened `@creit-tech/stellar-wallets-kit` optional peer range to `>=2.6.0 <3.0.0` (using `2.6.0` in dev/demo).
 
