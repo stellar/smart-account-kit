@@ -1,5 +1,5 @@
 import type { AuthenticationResponseJSON, PublicKeyCredentialRequestOptionsJSON, RegistrationResponseJSON, AuthenticatorTransportFuture } from "@simplewebauthn/browser";
-import { Keypair, hash, xdr } from "@stellar/stellar-sdk";
+import { Keypair, StrKey, hash, xdr } from "@stellar/stellar-sdk";
 import type { Horizon } from "@stellar/stellar-sdk";
 import base64url from "../base64url.js";
 import type {
@@ -25,6 +25,7 @@ import {
   readInstanceWasmHash,
 } from "../utils.js";
 import {
+  SmartAccountErrorCode,
   ValidationError,
   WalletAmbiguousError,
   WalletCodeNotAcceptedError,
@@ -324,6 +325,10 @@ export async function connectWithCredentials(
     lookupWalletCandidates?: (
       credentialId: string
     ) => Promise<WalletCandidateLookup | null>;
+    locateWallet?: (
+      credentialId: string,
+      assertion?: AuthenticationResponseJSON
+    ) => Promise<string | undefined>;
     readContextRule?: (
       contractId: string,
       contextRuleId: number
@@ -345,7 +350,7 @@ export async function connectWithCredentials(
   requireFreshProof = false
 ): Promise<ConnectWalletResult> {
   let credential: StoredCredential | null = null;
-  let usedDerivedCandidate = false;
+  let inferredAddress = false;
   if (credentialId) {
     credential = await deps.storage.get(credentialId);
     if (!contractId && credential?.contractId) {
@@ -354,13 +359,24 @@ export async function connectWithCredentials(
   }
 
   if (!contractId && credentialId) {
-    const credentialIdBuffer = base64url.toBuffer(credentialId);
-    contractId = deriveContractAddress(
-      credentialIdBuffer,
-      deps.deployerKeypair.publicKey(),
-      deps.networkPassphrase
-    );
-    usedDerivedCandidate = true;
+    if (deps.locateWallet) {
+      contractId = await deps.locateWallet(credentialId, proof?.response);
+      if (contractId !== undefined && !StrKey.isValidContract(contractId)) {
+        throw new ValidationError(
+          "locateWallet did not return a contract address",
+          SmartAccountErrorCode.INVALID_ADDRESS,
+          { contractId }
+        );
+      }
+    } else {
+      const credentialIdBuffer = base64url.toBuffer(credentialId);
+      contractId = deriveContractAddress(
+        credentialIdBuffer,
+        deps.deployerKeypair.publicKey(),
+        deps.networkPassphrase
+      );
+    }
+    inferredAddress = true;
   }
 
   if (!contractId) {
@@ -419,7 +435,7 @@ export async function connectWithCredentials(
           `the network was at ledger ${ledgerAtLookupStart} before lookup.`
       );
     }
-    if (usedDerivedCandidate) {
+    if (inferredAddress) {
       const contractIds = [
         ...new Set(lookup.candidates.map((candidate) => candidate.contractId)),
       ];

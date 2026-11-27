@@ -280,6 +280,7 @@ export class SmartAccountKit {
 
   // Session configuration
   private readonly sessionExpiryMs: number;
+  private readonly walletProvenance?: SmartAccountConfig["walletProvenance"];
 
   // State
   private _credentialId?: string;
@@ -505,6 +506,7 @@ export class SmartAccountKit {
 
     // Session configuration
     this.sessionExpiryMs = config.sessionExpiryMs ?? DEFAULT_SESSION_EXPIRY_MS;
+    this.walletProvenance = config.walletProvenance;
 
     // Indexer client for contract discovery
     // - If indexerUrl is explicitly set to false, disable indexer
@@ -1106,8 +1108,12 @@ export class SmartAccountKit {
         allowedOrigins: this.allowedOrigins,
         history: this.history,
         expectedPolicies: this.defaultPolicies,
-        lookupWalletCandidates: (nextCredentialId) =>
-          lookupWalletCandidates(this.indexer, nextCredentialId),
+        locateWallet: this.walletProvenance?.locateWallet,
+        lookupWalletCandidates:
+          this.walletProvenance?.lookupWalletCandidates ??
+          ((nextCredentialId) =>
+            lookupWalletCandidates(this.indexer, nextCredentialId)),
+        verifyBirth: this.walletProvenance?.verifyBirth,
         readContextRule: (nextContractId, contextRuleId) => {
           const wallet = new SmartAccountClient({
             contractId: nextContractId,

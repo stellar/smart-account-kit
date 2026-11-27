@@ -155,6 +155,7 @@ const kit = new SmartAccountKit({
 | `rpName` | `string` | No | WebAuthn relying party name (default: `"Smart Account"`) |
 | `webAuthn` | `object` | No | Custom WebAuthn implementation, primarily for testing |
 | `sessionExpiryMs` | `number` | No | Stored-session lifetime (default: 7 days) |
+| `walletProvenance` | `{ locateWallet?, lookupWalletCandidates?, verifyBirth? }` | No | Custom wallet address, birth lookup and birth verification, for wallets a factory contract deployed |
 | `externalWallet` | `ExternalWalletAdapter` | No | Wallet adapter for delegated/multi-signer flows |
 | `indexerUrl` | `string \| false` | No | Custom indexer base URL, or `false` to disable indexing |
 | `indexerAuthToken` | `string` | No | Provider token sent as `Authorization: Bearer <token>` (not needed for Mercury's public reads) |
@@ -1133,6 +1134,7 @@ if (kit.indexer) {
 Treat every discovery row as an unverified candidate.
 Do not auto-select one result or display it as a deposit address.
 `connectWallet` checks immutable birth, current code, one exact live signer, rule expiration, indexer freshness, and fresh passkey ownership.
+A `walletProvenance.verifyBirth` hook replaces the birth check with the app's own, which then owns the birth code, signer and constructor checks.
 
 Schema 2 uses closed reason sets for incomplete candidates and incomplete responses.
 The SDK rejects unknown reasons and invalid reason placement.

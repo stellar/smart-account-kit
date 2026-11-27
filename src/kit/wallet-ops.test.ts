@@ -61,6 +61,67 @@ function createDeployTxMock() {
 const DERIVED_CONTRACT_ID =
   "CDETERMINISTICCONTRACTADDRESS12345678901234567890123456";
 const ACCEPTED_WASM_HASH = "ab".repeat(32);
+const LOCATED_CONTRACT_ID = Address.contract(
+  hash(Buffer.from("located-wallet"))
+).toString();
+const RP_ID = "app.example";
+
+function derFromCompact(compact: Uint8Array): Buffer {
+  const integer = (bytes: Uint8Array) => {
+    let start = 0;
+    while (start < bytes.length - 1 && bytes[start] === 0) start++;
+    let body = Buffer.from(bytes.subarray(start));
+    if (body[0]! & 0x80) body = Buffer.concat([Buffer.from([0]), body]);
+    return Buffer.concat([Buffer.from([0x02, body.length]), body]);
+  };
+  const r = integer(compact.subarray(0, 32));
+  const s = integer(compact.subarray(32));
+  return Buffer.concat([Buffer.from([0x30, r.length + s.length]), r, s]);
+}
+
+/** A passkey and one assertion it signs over `challenge`. */
+async function passkeyAssertion(credentialId: string, challenge: string) {
+  const pair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"]
+  );
+  const publicKey = new Uint8Array(
+    await crypto.subtle.exportKey("raw", pair.publicKey)
+  );
+  const clientDataJSON = Buffer.from(
+    JSON.stringify({
+      type: "webauthn.get",
+      challenge,
+      origin: `https://${RP_ID}`,
+      crossOrigin: false,
+    })
+  );
+  const authenticatorData = Buffer.concat([
+    hash(Buffer.from(RP_ID)),
+    Buffer.from([0x05]),
+    Buffer.alloc(4),
+  ]);
+  const compact = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      pair.privateKey,
+      Buffer.concat([authenticatorData, hash(clientDataJSON)])
+    )
+  );
+  const response: AuthenticationResponseJSON = {
+    id: credentialId,
+    rawId: credentialId,
+    type: "public-key",
+    clientExtensionResults: {},
+    response: {
+      authenticatorData: authenticatorData.toString("base64url"),
+      clientDataJSON: clientDataJSON.toString("base64url"),
+      signature: derFromCompact(compact).toString("base64url"),
+    },
+  };
+  return { publicKey, response };
+}
 
 /** An instance ledger entry carrying a WASM executable hash. */
 function instanceWithWasm(hashHex: string) {
@@ -735,6 +796,359 @@ describe("wallet-ops", () => {
       );
 
       expect(deps.setConnectedState).not.toHaveBeenCalled();
+    });
+
+    it("connects at the wallet the app locates", async () => {
+      const storage = new MemoryStorage();
+      const credentialId = "cred";
+      const located = LOCATED_CONTRACT_ID;
+      const publicKey = new Uint8Array(65).fill(9);
+      publicKey[0] = 0x04;
+      const signer = {
+        tag: "External" as const,
+        values: [
+          "CVERIFIER",
+          Buffer.concat([
+            Buffer.from(publicKey),
+            Buffer.from(credentialId, "base64url"),
+          ]),
+        ] as [string, Buffer],
+      };
+      // Approved in this browser, with no address stored for it.
+      await storage.save({
+        credentialId,
+        publicKey,
+        contractId: "",
+        createdAt: 1,
+        isPrimary: true,
+        birthConstructorArgsHash: "34".repeat(32),
+      });
+      const candidate = {
+        contractId: located,
+        birthWasmHash: ACCEPTED_WASM_HASH,
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 90,
+        currentWasmHash: ACCEPTED_WASM_HASH,
+        derivedAddress: false,
+        collision: false,
+      };
+      const getContractData = vi
+        .fn()
+        .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH));
+      const deps = {
+        ...makeDeps(
+          {
+            getContractData,
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 100 }),
+          },
+          storage
+        ),
+        locateWallet: vi.fn().mockResolvedValue(located),
+        lookupWalletCandidates: vi.fn().mockResolvedValue({
+          schema: 2,
+          complete: true,
+          indexedThroughLedger: 100,
+          candidates: [candidate],
+        }),
+        readContextRule: vi.fn().mockResolvedValue({ signers: [signer] }),
+        verifyBirth: vi.fn().mockResolvedValue({
+          ok: true,
+          birth: {
+            ...candidate,
+            constructorArgsHash: "34".repeat(32),
+            birthSigner: signer,
+          },
+        }),
+      };
+
+      const result = await connectWithCredentials(deps, credentialId);
+
+      expect(result.contractId).toBe(located);
+      expect(getContractData.mock.calls[0]![0]).toBe(located);
+      expect(deps.verifyBirth.mock.calls[0]![1]).toMatchObject({
+        contractId: located,
+      });
+      // No fresh assertion is taken for an approved credential, so the stored
+      // constructor hash is what binds it to the wallet.
+      expect(deps.verifyBirth.mock.calls[0]![0]).toMatchObject({
+        expectedConstructorArgsHash: "34".repeat(32),
+      });
+      expect(deps.verifyBirth.mock.calls[0]![0].expectedDeployer).toBeUndefined();
+      expect(deps.setConnectedState).toHaveBeenCalledWith(located, credentialId);
+    });
+
+    it("refuses a located wallet when the lookup knows more than one for the credential", async () => {
+      const candidate = (contractId: string) => ({
+        contractId,
+        birthWasmHash: ACCEPTED_WASM_HASH,
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 90,
+        currentWasmHash: ACCEPTED_WASM_HASH,
+        derivedAddress: false,
+        collision: false,
+      });
+      const deps = {
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 100 }),
+          },
+          new MemoryStorage()
+        ),
+        locateWallet: vi.fn().mockResolvedValue(LOCATED_CONTRACT_ID),
+        lookupWalletCandidates: vi.fn().mockResolvedValue({
+          schema: 2,
+          complete: true,
+          indexedThroughLedger: 100,
+          candidates: [candidate(LOCATED_CONTRACT_ID), candidate("Cother")],
+        }),
+      };
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /explicit contract selection/i
+      );
+      expect(deps.setConnectedState).not.toHaveBeenCalled();
+    });
+
+    describe("a first login at a located wallet", () => {
+      const credentialId = Buffer.from("first-login").toString("base64url");
+      const challenge = Buffer.from("fresh-challenge").toString("base64url");
+
+      async function firstLogin(birthKey?: Uint8Array) {
+        const passkey = await passkeyAssertion(credentialId, challenge);
+        const signer = {
+          tag: "External" as const,
+          values: [
+            "CVERIFIER",
+            Buffer.concat([
+              Buffer.from(birthKey ?? passkey.publicKey),
+              Buffer.from(credentialId, "base64url"),
+            ]),
+          ] as [string, Buffer],
+        };
+        const candidate = {
+          contractId: LOCATED_CONTRACT_ID,
+          birthWasmHash: ACCEPTED_WASM_HASH,
+          creationTransactionHash: "12".repeat(32),
+          creationLedger: 90,
+          currentWasmHash: ACCEPTED_WASM_HASH,
+          derivedAddress: false,
+          collision: false,
+        };
+        const storage = new MemoryStorage();
+        const deps = {
+          ...makeDeps(
+            {
+              getContractData: vi
+                .fn()
+                .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+              getLatestLedger: vi.fn().mockResolvedValue({ sequence: 100 }),
+            },
+            storage
+          ),
+          rpId: RP_ID,
+          allowedOrigins: [`https://${RP_ID}`],
+          locateWallet: vi.fn().mockResolvedValue(LOCATED_CONTRACT_ID),
+          lookupWalletCandidates: vi.fn().mockResolvedValue({
+            schema: 2,
+            complete: true,
+            indexedThroughLedger: 100,
+            candidates: [candidate],
+          }),
+          readContextRule: vi.fn().mockResolvedValue({ signers: [signer] }),
+          verifyBirth: vi.fn().mockResolvedValue({
+            ok: true,
+            birth: {
+              ...candidate,
+              constructorArgsHash: "34".repeat(32),
+              birthSigner: signer,
+            },
+          }),
+        };
+        const proof = { response: passkey.response, challenge };
+        return { deps, storage, proof, passkey };
+      }
+
+      it("connects with the key of the verified birth and the login assertion", async () => {
+        const { deps, storage, proof, passkey } = await firstLogin();
+
+        const result = await connectWithCredentials(
+          deps,
+          credentialId,
+          undefined,
+          proof
+        );
+
+        expect(result.contractId).toBe(LOCATED_CONTRACT_ID);
+        expect(deps.locateWallet).toHaveBeenCalledWith(
+          credentialId,
+          proof.response
+        );
+        expect(await storage.get(credentialId)).toMatchObject({
+          contractId: LOCATED_CONTRACT_ID,
+          publicKey: passkey.publicKey,
+          birthConstructorArgsHash: "34".repeat(32),
+        });
+      });
+
+      it("refuses an assertion another key signed", async () => {
+        const other = await passkeyAssertion(credentialId, challenge);
+        const { deps, proof } = await firstLogin(other.publicKey);
+
+        await expect(
+          connectWithCredentials(deps, credentialId, undefined, proof)
+        ).rejects.toThrow(/fresh webauthn ownership verification failed/i);
+        expect(deps.setConnectedState).not.toHaveBeenCalled();
+      });
+
+      it("refuses a wallet whose birth the app does not verify", async () => {
+        const { deps, proof } = await firstLogin();
+        deps.verifyBirth.mockResolvedValue({
+          ok: false,
+          reason: "contract_not_created",
+          detail: "not a factory wallet",
+        });
+
+        await expect(
+          connectWithCredentials(deps, credentialId, undefined, proof)
+        ).rejects.toThrow(WalletProvenanceError);
+        expect(deps.setConnectedState).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("a lookup for a located wallet", () => {
+      const candidate = (overrides: Record<string, unknown> = {}) => ({
+        contractId: LOCATED_CONTRACT_ID,
+        birthWasmHash: ACCEPTED_WASM_HASH,
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 90,
+        currentWasmHash: ACCEPTED_WASM_HASH,
+        derivedAddress: false,
+        collision: false,
+        ...overrides,
+      });
+      const depsWith = (lookup: unknown) => ({
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 100 }),
+          },
+          new MemoryStorage()
+        ),
+        locateWallet: vi.fn().mockResolvedValue(LOCATED_CONTRACT_ID),
+        lookupWalletCandidates: vi.fn().mockResolvedValue(lookup),
+        verifyBirth: vi.fn(),
+      });
+
+      it("is refused when it marks a collision", async () => {
+        const deps = depsWith({
+          schema: 2,
+          complete: true,
+          indexedThroughLedger: 100,
+          candidates: [candidate({ collision: true })],
+        });
+
+        await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+          /explicit contract selection/i
+        );
+        expect(deps.verifyBirth).not.toHaveBeenCalled();
+      });
+
+      it("is refused when it is behind the network", async () => {
+        const deps = depsWith({
+          schema: 2,
+          complete: true,
+          indexedThroughLedger: 99,
+          candidates: [candidate()],
+        });
+
+        await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+          /indexer is stale/i
+        );
+        expect(deps.verifyBirth).not.toHaveBeenCalled();
+      });
+    });
+
+    it("refuses a located address that is no contract address", async () => {
+      const getContractData = vi.fn();
+      const deps = {
+        ...makeDeps({ getContractData }, new MemoryStorage()),
+        locateWallet: vi.fn().mockResolvedValue("not-an-address"),
+      };
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /did not return a contract address/i
+      );
+      expect(getContractData).not.toHaveBeenCalled();
+    });
+
+    it("hands the app the assertion of the connection to locate the wallet", async () => {
+      const proof = { response: { id: "cred" } as never, challenge: "c" };
+      const deps = {
+        ...makeDeps({}, new MemoryStorage()),
+        locateWallet: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await expect(
+        connectWithCredentials(deps, "cred", undefined, proof)
+      ).rejects.toThrow(/could not determine contract id/i);
+
+      expect(deps.locateWallet).toHaveBeenCalledWith("cred", proof.response);
+    });
+
+    it("does not fall back to the derived address when the app locates no wallet", async () => {
+      const getContractData = vi.fn();
+      const deps = {
+        ...makeDeps({ getContractData }, new MemoryStorage()),
+        locateWallet: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /could not determine contract id/i
+      );
+      expect(getContractData).not.toHaveBeenCalled();
+    });
+
+    it("does not ask the app to locate a wallet whose address is known", async () => {
+      const storage = new MemoryStorage();
+      await storage.save({
+        credentialId: "cred",
+        publicKey: new Uint8Array(65).fill(9),
+        contractId: "Cstoredcontract",
+        isPrimary: true,
+      } as never);
+      const getContractData = vi.fn().mockRejectedValue(new Error("missing"));
+      const deps = {
+        ...makeDeps({ getContractData }, storage),
+        locateWallet: vi.fn(),
+      };
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /not found on-chain/i
+      );
+      await expect(
+        connectWithCredentials(deps, "cred", "Cexplicitcontract")
+      ).rejects.toThrow(/not found on-chain/i);
+
+      expect(deps.locateWallet).not.toHaveBeenCalled();
+      expect(getContractData.mock.calls.map((call) => call[0])).toEqual([
+        "Cstoredcontract",
+        "Cexplicitcontract",
+      ]);
+    });
+
+    it("derives the address when the app sets no locateWallet", async () => {
+      const getContractData = vi.fn().mockRejectedValue(new Error("missing"));
+      const deps = makeDeps({ getContractData }, new MemoryStorage());
+
+      await expect(connectWithCredentials(deps, "cred")).rejects.toThrow(
+        /not found on-chain/i
+      );
+      expect(getContractData.mock.calls[0]![0]).toBe(DERIVED_CONTRACT_ID);
     });
 
     it("rejects a complete indexer response that is behind the network", async () => {
