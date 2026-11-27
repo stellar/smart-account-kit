@@ -1060,14 +1060,23 @@ export class SmartAccountKit {
           credentialId,
           contractId,
           proof,
-          allowAuthentication
+          allowAuthentication,
+          requireFreshProof
         ) =>
-          this.connectWithCredentials(
-            credentialId,
-            contractId,
-            proof,
-            allowAuthentication
-          ),
+          requireFreshProof
+            ? this.connectWithCredentials(
+                credentialId,
+                contractId,
+                proof,
+                allowAuthentication,
+                requireFreshProof
+              )
+            : this.connectWithCredentials(
+                credentialId,
+                contractId,
+                proof,
+                allowAuthentication
+              ),
       },
       options
     );
@@ -1080,7 +1089,8 @@ export class SmartAccountKit {
     credentialId?: string,
     contractId?: string,
     proof?: import("./kit/wallet-ops.js").FreshOwnershipProof,
-    allowAuthentication = true
+    allowAuthentication = true,
+    requireFreshProof = false
   ): Promise<ConnectWalletResult> {
     return connectWithCredentials(
       {
@@ -1117,6 +1127,7 @@ export class SmartAccountKit {
             optionsJSON: {
               challenge,
               rpId: this.rpId,
+              allowCredentials: [{ id: expectedCredentialId, type: "public-key" }],
               userVerification: "required",
               timeout: 60_000,
             },
@@ -1135,7 +1146,8 @@ export class SmartAccountKit {
       credentialId,
       contractId,
       proof,
-      allowAuthentication
+      allowAuthentication,
+      requireFreshProof
     );
   }
 

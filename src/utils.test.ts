@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import base64url from "base64url";
-import { deriveContractAddress, extractPublicKeyFromAttestation } from "./utils";
+import {
+  compactSignature,
+  deriveContractAddress,
+  extractPublicKeyFromAttestation,
+} from "./utils";
 
 const TESTNET = "Test SDF Network ; September 2015";
 const MAINNET = "Public Global Stellar Network ; September 2015";
@@ -94,5 +98,49 @@ describe("utils.extractPublicKeyFromAttestation", () => {
         publicKey: base64url.encode(invalidPoint),
       })
     ).rejects.toThrow("valid P-256 curve point");
+  });
+});
+
+describe("utils.compactSignature", () => {
+  function encodeDer(r: Buffer, s: Buffer): Buffer {
+    return Buffer.concat([
+      Buffer.from([0x30, 2 + r.length + 2 + s.length, 0x02, r.length]),
+      r,
+      Buffer.from([0x02, s.length]),
+      s,
+    ]);
+  }
+
+  it("accepts minimal positive DER integers including high-bit 0x00 prefix", () => {
+    const r = Buffer.concat([Buffer.from([0x00, 0x81]), Buffer.alloc(31, 0x11)]);
+    const s = Buffer.concat([Buffer.from([0x12]), Buffer.alloc(31, 0x22)]);
+    const compact = compactSignature(encodeDer(r, s));
+    expect(compact).toHaveLength(64);
+    expect(compact[0]).toBe(0x81);
+    expect(compact[32]).toBe(0x12);
+  });
+
+  it("rejects negative ASN.1 DER integers missing the leading 0x00 byte", () => {
+    const negativeR = Buffer.concat([Buffer.from([0x80]), Buffer.alloc(31, 0x11)]);
+    const validS = Buffer.alloc(32, 0x22);
+    expect(() => compactSignature(encodeDer(negativeR, validS))).toThrow(/r is negative/i);
+
+    const validR = Buffer.alloc(32, 0x11);
+    const negativeS = Buffer.concat([Buffer.from([0x80]), Buffer.alloc(31, 0x22)]);
+    expect(() => compactSignature(encodeDer(validR, negativeS))).toThrow(/s is negative/i);
+  });
+
+  it("rejects non-minimal leading zero padding in DER integers", () => {
+    const paddedR = Buffer.concat([Buffer.from([0x00, 0x7f]), Buffer.alloc(31, 0x11)]);
+    const validS = Buffer.alloc(32, 0x22);
+    expect(() => compactSignature(encodeDer(paddedR, validS))).toThrow(
+      /non-minimal leading zero/i
+    );
+
+    const validR = Buffer.alloc(32, 0x11);
+    const paddedS = Buffer.concat([Buffer.from([0x00, 0x01]), Buffer.alloc(31, 0x22)]);
+    expect(() => compactSignature(encodeDer(validR, paddedS))).toThrow(
+      /non-minimal leading zero/i
+    );
   });
 });

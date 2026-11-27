@@ -205,7 +205,8 @@ export async function connectWallet(
       credentialId?: string,
       contractId?: string,
       proof?: FreshOwnershipProof,
-      allowAuthentication?: boolean
+      allowAuthentication?: boolean,
+      requireFreshProof?: boolean
     ) => Promise<ConnectWalletResult>;
   },
   options?: {
@@ -220,7 +221,9 @@ export async function connectWallet(
   let rawResponse: AuthenticationResponseJSON | undefined;
 
   if (credentialId || contractId) {
-    return deps.connectWithCredentials(credentialId, contractId, undefined, true);
+    return options?.fresh
+      ? deps.connectWithCredentials(credentialId, contractId, undefined, true, true)
+      : deps.connectWithCredentials(credentialId, contractId, undefined, true);
   }
 
   if (!options?.fresh) {
@@ -338,7 +341,8 @@ export async function connectWithCredentials(
   credentialId?: string,
   contractId?: string,
   proof?: FreshOwnershipProof,
-  allowAuthentication = true
+  allowAuthentication = true,
+  requireFreshProof = false
 ): Promise<ConnectWalletResult> {
   let credential: StoredCredential | null = null;
   let usedDerivedCandidate = false;
@@ -548,7 +552,7 @@ export async function connectWithCredentials(
     );
   }
 
-  if (!locallyApproved) {
+  if (!locallyApproved || requireFreshProof) {
     const ownershipProof =
       proof ??
       (allowAuthentication
@@ -566,6 +570,7 @@ export async function connectWithCredentials(
       rpId: deps.rpId,
       publicKey,
       allowedOrigins: deps.allowedOrigins,
+      requireUserVerification: true,
     });
     if (!assertion.ok) {
       throw new WalletOwnershipError(

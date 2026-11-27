@@ -226,6 +226,32 @@ describe("SmartAccountKit top-level surface", () => {
     });
   });
 
+  it("connectWallet forwards fresh: true when explicit credentials are supplied", async () => {
+    const connectWithCredentials = vi.fn(async () => ({
+      credentialId: "cred-789",
+      contractId: "CABC",
+    }));
+
+    await SmartAccountKit.prototype.connectWallet.call(
+      {
+        storage: {},
+        events: {},
+        rpId: "example.com",
+        webAuthn: { startAuthentication: vi.fn() },
+        connectWithCredentials,
+      } as unknown as SmartAccountKit,
+      { credentialId: "cred-789", fresh: true },
+    );
+
+    expect(connectWithCredentials).toHaveBeenCalledWith(
+      "cred-789",
+      undefined,
+      undefined,
+      true,
+      true
+    );
+  });
+
   it("disconnect clears session and emits walletDisconnected", async () => {
     const storage = {
       clearSession: vi.fn(async () => undefined),

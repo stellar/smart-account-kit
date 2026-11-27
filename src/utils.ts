@@ -316,6 +316,17 @@ export function compactSignature(derSignature: Buffer): Uint8Array {
   }
   const s = derSignature.subarray(sTagOffset + 2);
 
+  const assertMinimalPositiveDerInt = (bytes: Buffer, label: string): void => {
+    if (bytes[0]! & 0x80) {
+      throw malformed(`${label} is negative`);
+    }
+    if (bytes.length > 1 && bytes[0] === 0x00 && (bytes[1]! & 0x80) === 0) {
+      throw malformed(`${label} has non-minimal leading zero padding`);
+    }
+  };
+  assertMinimalPositiveDerInt(r, "r");
+  assertMinimalPositiveDerInt(s, "s");
+
   // Convert to BigInt for low-S calculation
   const rBigInt = BigInt("0x" + r.toString("hex"));
   let sBigInt = BigInt("0x" + s.toString("hex"));

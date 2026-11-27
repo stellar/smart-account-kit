@@ -1026,6 +1026,160 @@ describe("wallet-ops", () => {
       expect(deps.setConnectedState).not.toHaveBeenCalled();
       expect(await storage.getSession()).toBeNull();
     });
+
+    it("passes requireFreshProof when connectWallet receives explicit credentials with fresh: true", async () => {
+      const storage = createStorageMock();
+      const events = createEventMock();
+      const connectWithCredentialsMock = vi.fn().mockResolvedValue({
+        credentialId: "cred",
+        contractId: "Ccontract",
+      });
+
+      await connectWallet(
+        {
+          storage: storage as never,
+          events: events as never,
+          webAuthn: { startAuthentication: vi.fn() },
+          connectWithCredentials: connectWithCredentialsMock,
+        },
+        { credentialId: "cred", contractId: "Ccontract", fresh: true }
+      );
+
+      expect(connectWithCredentialsMock).toHaveBeenCalledWith(
+        "cred",
+        "Ccontract",
+        undefined,
+        true,
+        true
+      );
+    });
+
+    it("requires a fresh UV-verified assertion even for locally approved credentials when requireFreshProof is true", async () => {
+      const storage = new MemoryStorage();
+      const pair = await crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["sign", "verify"]
+      );
+      const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+      const credentialId = Buffer.from("cred-fresh-uv").toString("base64url");
+      const signer = {
+        tag: "External" as const,
+        values: [
+          "CVERIFIER",
+          Buffer.concat([Buffer.from(publicKey), Buffer.from(credentialId, "base64url")]),
+        ] as [string, Buffer],
+      };
+      await storage.save({
+        credentialId,
+        publicKey,
+        contractId: DERIVED_CONTRACT_ID,
+        createdAt: 1,
+        isPrimary: true,
+        deploymentStatus: "deployed",
+        birthWasmHash: ACCEPTED_WASM_HASH,
+        creationTransactionHash: "12".repeat(32),
+        creationLedger: 123,
+        birthConstructorArgsHash: "34".repeat(32),
+      });
+
+      const makeAssertion = async (flagsByte: number) => {
+        const challenge = Buffer.from("fresh-challenge").toString("base64url");
+        const clientDataJSON = Buffer.from(
+          JSON.stringify({
+            type: "webauthn.get",
+            challenge,
+            origin: "https://example.com",
+          })
+        );
+        const authenticatorData = Buffer.concat([
+          hash(Buffer.from("example.com")),
+          Buffer.from([flagsByte]),
+          Buffer.alloc(4),
+        ]);
+        const signed = Buffer.concat([authenticatorData, hash(clientDataJSON)]);
+        const compact = new Uint8Array(
+          await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, signed)
+        );
+        const derInt = (bytes: Uint8Array) => {
+          let start = 0;
+          while (start < bytes.length - 1 && bytes[start] === 0) start++;
+          let body = Buffer.from(bytes.subarray(start));
+          if (body[0]! & 0x80) body = Buffer.concat([Buffer.from([0]), body]);
+          return Buffer.concat([Buffer.from([0x02, body.length]), body]);
+        };
+        const r = derInt(compact.subarray(0, 32));
+        const s = derInt(compact.subarray(32));
+        const der = Buffer.concat([Buffer.from([0x30, r.length + s.length]), r, s]);
+        return {
+          challenge,
+          response: {
+            id: credentialId,
+            rawId: credentialId,
+            type: "public-key",
+            clientExtensionResults: {},
+            response: {
+              authenticatorData: authenticatorData.toString("base64url"),
+              clientDataJSON: clientDataJSON.toString("base64url"),
+              signature: der.toString("base64url"),
+            },
+          } as unknown as AuthenticationResponseJSON,
+        };
+      };
+
+      const baseDeps = {
+        ...makeDeps(
+          {
+            getContractData: vi
+              .fn()
+              .mockResolvedValue(instanceWithWasm(ACCEPTED_WASM_HASH)),
+            getLatestLedger: vi.fn().mockResolvedValue({ sequence: 500 }),
+          },
+          storage
+        ),
+        rpId: "example.com",
+        allowedOrigins: ["https://example.com"],
+        readContextRule: vi.fn().mockResolvedValue({ signers: [signer] }),
+        verifyBirth: vi.fn().mockResolvedValue({
+          ok: true,
+          birth: {
+            contractId: DERIVED_CONTRACT_ID,
+            birthWasmHash: ACCEPTED_WASM_HASH,
+            creationTransactionHash: "12".repeat(32),
+            creationLedger: 123,
+            constructorArgsHash: "34".repeat(32),
+            birthSigner: signer,
+          },
+        }),
+      };
+
+      // Reject when UV flag is clear (0x01 = UP only, no UV)
+      const authenticateWithoutUv = vi.fn().mockResolvedValue(await makeAssertion(0x01));
+      await expect(
+        connectWithCredentials(
+          { ...baseDeps, authenticateCredential: authenticateWithoutUv },
+          credentialId,
+          DERIVED_CONTRACT_ID,
+          undefined,
+          true,
+          true
+        )
+      ).rejects.toThrow(/User Verified flag is not set/i);
+      expect(authenticateWithoutUv).toHaveBeenCalledWith(credentialId);
+
+      // Accept when UP + UV flags are set (0x05)
+      const authenticateWithUv = vi.fn().mockResolvedValue(await makeAssertion(0x05));
+      const result = await connectWithCredentials(
+        { ...baseDeps, authenticateCredential: authenticateWithUv },
+        credentialId,
+        DERIVED_CONTRACT_ID,
+        undefined,
+        true,
+        true
+      );
+      expect(authenticateWithUv).toHaveBeenCalledWith(credentialId);
+      expect(result.contractId).toBe(DERIVED_CONTRACT_ID);
+    });
   });
 
   it("disconnects and emits a walletDisconnected event", async () => {
